@@ -29,12 +29,20 @@ export async function withPmScope<T>(
     // does NOT by itself authorize sending — isReauthFresh, the 2-business-
     // day deadline check, and the fallback_events ceiling trigger are the
     // actual gates on the send action; this only controls SELECT visibility.
-    const pmRow = await client.query<{ is_fallback_decision_maker: boolean }>(
-      "SELECT is_fallback_decision_maker FROM pm_users WHERE id = $1",
+    const pmRow = await client.query<{ is_fallback_decision_maker: boolean; role: string }>(
+      "SELECT is_fallback_decision_maker, role FROM pm_users WHERE id = $1",
       [pmUserId]
     );
     await client.query("SELECT set_config('app.is_fallback_decision_maker', $1, true)", [
       String(pmRow.rows[0]?.is_fallback_decision_maker === true),
+    ]);
+
+    // admin_assistant (Belinda/Vien) is the new portfolio-wide, door-
+    // unrestricted read role added alongside contact_attempts — see
+    // migrations 0026/0027. Same server-side-lookup-only rule as above:
+    // the role is never taken from anything client-supplied.
+    await client.query("SELECT set_config('app.pm_role', $1, true)", [
+      pmRow.rows[0]?.role ?? "pm",
     ]);
 
     const result = await fn(client);

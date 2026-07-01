@@ -1,5 +1,6 @@
-// Office hours: Mon-Fri 9am-5pm EST, closed federal holidays. Used by:
-//   - the daily job's scheduled run time (10:00 EST, next business day if
+// Office hours: Mon-Fri 9am-5pm, America/New_York (Hampton Roads, VA),
+// closed federal holidays. Used by:
+//   - the daily job's scheduled run time (10:00 local, next business day if
 //     the calendar day is a weekend/holiday)
 //   - the PM-reminder / 2-business-day fallback escalation clock
 //   - the "alert Jason immediately" failure path, which still needs to know
@@ -8,11 +9,31 @@
 // Federal holidays are listed by fixed date or computed rule per year.
 // This list covers the ones that matter for scheduling; if a new federal
 // holiday is added by Congress, update FEDERAL_HOLIDAYS_FIXED below.
-const EST_OFFSET_HOURS = -5; // EST, not EDT — matches the plan's "EST" wording literally.
-// NOTE: the plan says "EST" specifically rather than "America/New_York" with
-// DST. If Jason actually means the office's local wall-clock time across DST
-// (which shifts to EDT in summer), this fixed -5 offset will be an hour off
-// March-November. Flagged as an open item to verify — see build summary.
+
+// Jason confirmed: the daily job must run at 10am actual Virginia local
+// time year-round, not 10am fixed-EST (which silently becomes 9am local
+// during EDT, roughly March-November). Resolved via Node's built-in Intl
+// API (no new dependency — package.json has no date library) rather than a
+// fixed offset: for a given instant, ask what UTC offset America/New_York
+// is actually observing right then, DST included.
+export function getEasternUtcOffsetHours(instant: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    timeZoneName: "shortOffset",
+  }).formatToParts(instant);
+  const offsetPart = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT-5";
+  // e.g. "GMT-5" or "GMT-4" -> -5 / -4
+  const match = /GMT([+-]\d+)/.exec(offsetPart);
+  if (!match) {
+    throw new Error(`Could not parse America/New_York UTC offset from "${offsetPart}"`);
+  }
+  return Number(match[1]);
+}
+
+// Retained for any external caller still importing the old fixed constant;
+// scheduler.ts and this file itself no longer use it for computing run
+// times — see getEasternUtcOffsetHours above.
+const EST_OFFSET_HOURS = -5;
 
 function nthWeekdayOfMonth(year: number, month: number, weekday: number, n: number): Date {
   const first = new Date(Date.UTC(year, month, 1));

@@ -210,7 +210,10 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
       pm_name: lease.assigned_pm_name,
     };
 
-    const subject = renderTemplate(template.subject_line, mergeFields);
+    // Subject is a plain-text email header, not HTML — must not be escaped
+    // (see renderTemplate's escapeForHtml doc comment), while the body
+    // becomes bodyHtml and needs the default HTML-escaping.
+    const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
     const bodyHtml = renderTemplate(template.body_markdown, mergeFields).replace(/\n/g, "<br>");
 
     const result = await sendGraphMail({

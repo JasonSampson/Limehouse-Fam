@@ -5,7 +5,10 @@ import type { Trace } from "./trace.js";
 // append-only audit log entry with these fields. sequence_num/prev_hash/
 // entry_hash are computed by the DB trigger (migration 0015) — this writer
 // never sets them itself.
-export type ActorType = "system" | "pm" | "fallback_decision_maker";
+//
+// admin_assistant added alongside the audit_log.actor_type CHECK constraint
+// widening in migration 0028 — keep these two in sync.
+export type ActorType = "system" | "pm" | "fallback_decision_maker" | "admin_assistant";
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
 export interface AuditLogEntry {

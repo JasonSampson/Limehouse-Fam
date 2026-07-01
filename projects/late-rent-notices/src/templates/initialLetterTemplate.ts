@@ -1,68 +1,118 @@
-// Version 1 of the 14-day pay-or-quit notice. Per the binding plan:
-//   - Delivery is email-only (Jason's informed override of Mason's
-//     ATTORNEY REQUIRED verdict, citing Lease Section 46). The
-//     certification clause below says "emailed" — never "mailed" — because
-//     "was mailed" is false regardless of the delivery-method decision.
-//   - The ONLY two valid cure methods, stated explicitly: (a) credit card
-//     via the Buildium tenant portal, or (b) certified funds dropped off
-//     in person at the office. The old "Rental Office / no personal
-//     checks" language is replaced entirely.
-//   - Merge fields: {{tenant_name}}, {{unit_label}}, {{amount_due}},
-//     {{days_late}}, {{due_date}}, {{property_address}}.
+// Version 2 of the 14-day notice of default. This text is built from
+// Limehouse's own attorney-drafted "NOTICE OF DEFAULT - FAILURE TO PAY RENT"
+// form (provided by Jason), not assembled from scratch — every substantive
+// clause below (itemized charges, the Sec. 55.1-1251 damages-for-breach /
+// attorney-turnover language, the credit-bureau notice, the Legal Aid
+// Society contact line, the redemption-right/partial-payment paragraph, and
+// the "accepted with reservation" certification line) is carried over from
+// that source document.
 //
-// IMPORTANT: this is a starting draft assembled from the plan's binding
-// scope decisions, NOT a substitute for Mason's sign-off on final wording.
-// Per GOVERNANCE.md, Mason must review this exact text (Fair Housing
-// language + VRLTA compliance) before letter_templates version 1 is
-// flipped to is_active = true in any environment that could send a real
-// notice. It is safe to load in shadow mode, where Send is a no-op.
+// Two, and only two, deviations from the attorney's verbatim text were
+// approved by Jason:
+//   1. Delivery method: the certification paragraph says "emailed... to the
+//      address on file... pursuant to Lease Section 46" instead of "mailed
+//      ... in accordance with Section 55.1-1202." Lease Section 46 ("...
+//      electronic delivery of this Lease, addenda, or any notice/document
+//      provided by landlord thereto through email or similar electronic
+//      means shall constitute sufficient delivery...") is what Jason is
+//      relying on to satisfy Virginia's electronic-notice requirement.
+//   2. Payment method: the attorney's original restriction is kept in full
+//      ("made directly to the Rental Office... Personal checks will not be
+//      accepted"), with the Buildium tenant portal added as an ADDITIONAL
+//      convenience alongside it — not a replacement, and no new exclusions
+//      beyond the attorney's own (personal checks only) were added.
+//
+// Merge fields used: {{tenant_name}}, {{property_address}}, {{unit_label}},
+// {{notice_date}}, {{due_date}}, {{days_late}}, {{amount_due}}, {{pm_name}}.
+// These are the only fields defined on MergeFields (renderTemplate.ts) and
+// populated by sendNotice.ts today. The source document's itemized
+// rent/late-fee/misc-charge breakdown and its Court Costs / Attorney's-Fees
+// line items have NO backing data source yet (notices/late_cycles only
+// store an aggregate amount_due_at_draft/at_send — see migration 0023's own
+// comment, which explicitly deferred a notice_line_items breakdown table).
+// Rather than invent new required merge fields this task isn't scoped to
+// wire up, those lines are rendered as fixed placeholder text — see the
+// judgment-call note in the PR/report for this change.
+//
+// IMPORTANT: Mason has reviewed this exact source text and confirmed it
+// resolves the Fair Housing / VRLTA concerns that existed with the prior
+// (version 1) AI-drafted text. That legal sign-off is NOT the same thing as
+// "ready to send real notices." Per GOVERNANCE.md, letter_templates.is_active
+// must still stay false until the full deployment-readiness gate — TARS
+// testing this rendered output end-to-end, then Judge's review — has passed.
+// It is safe to load in shadow mode, where Send is a no-op.
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
-export const INITIAL_TEMPLATE_VERSION = 1;
+export const INITIAL_TEMPLATE_VERSION = 2;
 
 export const INITIAL_SUBJECT_LINE =
-  "NOTICE OF DEFAULT — 14-Day Notice to Pay Rent or Vacate — {{unit_label}}";
+  "NOTICE OF DEFAULT — FAILURE TO PAY RENT — {{unit_label}}";
 
 export const INITIAL_BODY_MARKDOWN = `
-**NOTICE OF DEFAULT — 14-DAY NOTICE TO PAY RENT OR VACATE**
+**NOTICE OF DEFAULT – FAILURE TO PAY RENT**
 
-To: {{tenant_name}}
+TO: {{tenant_name}} / FROM: Limehouse Property Management, 6056 Providence Rd, Suite 200, Virginia Beach, VA 23464
+
 Property: {{property_address}}, {{unit_label}}
 Date of Notice: {{notice_date}}
 
-You are hereby notified that, as of {{notice_date}}, you are in default
-under the terms of your lease for failure to pay rent when due. Your
-account reflects an outstanding balance of **{{amount_due}}**, which became
-due on {{due_date}} and is now **{{days_late}} days past due**.
+In accordance with 55.1-1245, Code of Virginia, you are hereby notified that
+you are in default in the payment of rent, late charges and miscellaneous
+charges as itemized below:
 
-Pursuant to Virginia Code §55.1-1245 and the terms of your lease, you are
-hereby given fourteen (14) days from the date of this notice to pay the
-full amount owed or vacate the premises. If the amount owed is not paid in
-full within this 14-day period, the landlord may proceed to terminate your
-tenancy and pursue all remedies available under Virginia law, including an
-action for possession of the premises.
+**ITEMIZED CHARGES:**
 
-**How to cure this default.** Once a tenant's account is in default, there
-are only two ways to pay the amount owed:
+Rent for the Month(s) of {{due_date}}: {{amount_due}}
+Late Charges for Month(s) of {{due_date}}: included in total below
+Miscellaneous Charges: N/A — none assessed as of this notice
+TOTAL DUE LANDLORD AS OF {{notice_date}} ({{days_late}} days past due): {{amount_due}}
 
-1. **Credit card payment through the Buildium tenant portal.**
-2. **Certified funds (cashier's check or money order) dropped off in
-   person at the property management office.**
+If you fail to pay the total amount due within 14 days of this written
+notice from the Landlord, the Landlord may terminate the rental agreement
+and proceed to obtain possession of the premises as provided in 55.1-1251.
+If your lease is terminated and you are evicted, Virginia Law (Section
+55.1-1251) gives the Landlord a claim for damages for breach of the lease.
+This claim may include rent for the entire balance of your lease term.
+Additionally, your account will be turned over to our attorney for
+immediate legal proceedings. In accordance with Section 55.1-1245 of the
+Code of Virginia, you may then be liable for the following additional
+court costs and attorney's fees:
 
-No other payment method will be accepted to cure a default once a notice
-of default has been issued. Personal checks, cash, and electronic transfers
-outside the Buildium tenant portal are not accepted for curing a default.
+Court Costs: N/A — assessed upon referral to attorney
+Attorney's / Filing Fees: N/A — assessed upon referral to attorney
+TOTAL Fees & Costs: N/A — assessed upon referral to attorney
 
-**Certification of delivery.** This notice was emailed to the tenant(s) of
-record on {{notice_date}} to the email address(es) on file with the
-property manager, pursuant to Lease Section 46, which provides for
-electronic delivery of notices under this lease.
+**YOU MAY AVOID PAYING ATTORNEY'S FEES AND COURT COSTS IF THE LANDLORD
+RECEIVES THE TOTAL AMOUNT DUE WITHIN FOURTEEN (14) DAYS OF THIS NOTICE.
+POSTMARKS WILL NOT BE CONSIDERED. ALL PAYMENTS SHOULD BE MADE DIRECTLY TO
+THE RENTAL OFFICE. PERSONAL CHECKS WILL NOT BE ACCEPTED.** As a convenience,
+payment may also be made online through the Buildium tenant portal.
 
-This notice does not waive any rights or remedies available to the
-landlord, including the right to recover rent owed, late fees, and any
-other charges due under the lease.
+Any partial payment of rent made before or after a judgment of possession
+is ordered will not prevent your Landlord from taking action to evict you.
+However, full payment of all amounts you owe the Landlord, including all
+rent as contracted for in the rental agreement that is owed to the
+Landlord as of the date payment is made, as well as any damages, money
+judgment, award of attorney's fees, and court costs made at least 48 hours
+before the scheduled eviction will cause the eviction to be canceled,
+unless there are basis for the entry of an order of possession other than
+nonpayment of rent stated in the unlawful detainer action filed by the
+Landlord per 55.1-1250.
 
-Sincerely,
-{{pm_name}}
-Property Manager
+Judgements are immediately reported to the credit bureau. Act now to
+protect your credit. Please direct your questions to the Rental Office.
+You may also contact your local Legal Aid Society with any questions at
+757-627-5423.
+
+It is hereby certified that a true copy of the written Notice of Default
+was emailed to the Tenant(s) named therein, addressed to said Tenant(s) at
+the email address on file for the dwelling named therein, pursuant to
+Lease Section 46, which provides that electronic delivery of any notice
+constitutes sufficient delivery, all on {{notice_date}}.
+
+**RESIDENT IS HEREBY NOTIFIED THAT ANY RENTAL PAYMENT RECEIVED IS WITH THE
+UNDERSTANDING THAT PAYMENT WILL BE ACCEPTED RESERVING THE RIGHT TO SEEK
+POSSESSION OF THE PREMISES IN GENERAL DISTRICT COURT.**
+
+BY: {{pm_name}} (Authorized Agent)
 Limehouse Property Management
 `.trim();

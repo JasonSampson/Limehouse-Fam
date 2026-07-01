@@ -5,6 +5,7 @@ import { authRoutes } from "./routes/authRoutes.js";
 import { noticeRoutes } from "./routes/noticeRoutes.js";
 import { exclusionRoutes } from "./routes/exclusionRoutes.js";
 import { leaseRoutes } from "./routes/leaseRoutes.js";
+import { contactAttemptRoutes } from "./routes/contactAttemptRoutes.js";
 import { logInfo } from "./lib/appLogger.js";
 
 const env = loadEnv();
@@ -21,6 +22,7 @@ app.use(authRoutes);
 app.use(noticeRoutes);
 app.use(exclusionRoutes);
 app.use(leaseRoutes);
+app.use(contactAttemptRoutes);
 
 app.listen(env.PORT, () => {
   logInfo(`late-rent-notices server listening`, { port: env.PORT, shadowMode: env.SHADOW_MODE });

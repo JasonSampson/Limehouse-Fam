@@ -1,0 +1,36 @@
+{
+  "name": "late-rent-notices",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated 14-day late rent notice tool for Limehouse Property Management. Drafts notices from Buildium ledger data; a human PM (or, under strict limits, Jason as fallback decision-maker) reviews and sends.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "migrate": "node-pg-migrate",
+    "migrate:up": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "job:daily": "tsx src/jobs/runDailyLatenessCheck.ts",
+    "job:escalation": "tsx src/jobs/runEscalationCheck.ts",
+    "job:reminder": "tsx src/jobs/runPmReminderCheck.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8",
+    "jose": "^5.9.0",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/pg": "^8.11.0",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/node": "^22.0.0",
+    "node-pg-migrate": "^7.6.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

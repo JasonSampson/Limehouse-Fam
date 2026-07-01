@@ -1,0 +1,47 @@
+import type { Pool, PoolClient } from "pg";
+
+// Reads the currently-active versioned config value (Rule 5: criteria must
+// be versioned, never hardcoded). Returns both the value and the row id so
+// callers can record which config version gated a given decision.
+export async function getActiveConfig(
+  db: Pool | PoolClient,
+  configKey: string
+): Promise<{ id: number; value: unknown }> {
+  const result = await db.query<{ id: number; value: unknown }>(
+    "SELECT id, value FROM config_values WHERE config_key = $1 AND is_active = true",
+    [configKey]
+  );
+  if (result.rows.length === 0) {
+    throw new Error(`No active config value found for key "${configKey}" — has it been seeded?`);
+  }
+  return result.rows[0];
+}
+
+export async function getDeMinimisThreshold(
+  db: Pool | PoolClient
+): Promise<{ id: number; amount: number }> {
+  const { id, value } = await getActiveConfig(db, "de_minimis_threshold_usd");
+  const amount = typeof value === "string" ? parseFloat(value) : Number(value);
+  if (!Number.isFinite(amount)) {
+    throw new Error(`de_minimis_threshold_usd config value is not a valid number: ${JSON.stringify(value)}`);
+  }
+  return { id, amount };
+}
+
+// IMPORTANT: grace period is NOT one company-wide number. Jason: leases
+// inherited from a prior management company often carry a different
+// late-fee policy than Limehouse's own standard. Buildium's API has no
+// grace-period field at all (confirmed against the real OpenAPI spec and
+// live calls), so the actual per-lease value lives on leases.grace_period_
+// days, manually overridable via PATCH /api/leases/:id/grace-period. This
+// function provides only the DEFAULT applied when a lease is first synced
+// (src/buildium/sync.ts) — never re-applied afterward, so a manual override
+// is never clobbered by a later sync.
+export async function getDefaultGracePeriodDays(db: Pool | PoolClient): Promise<{ id: number; days: number }> {
+  const { id, value } = await getActiveConfig(db, "default_grace_period_days");
+  const days = typeof value === "string" ? parseInt(value, 10) : Number(value);
+  if (!Number.isInteger(days) || days < 0) {
+    throw new Error(`default_grace_period_days config value is not a valid non-negative integer: ${JSON.stringify(value)}`);
+  }
+  return { id, days };
+}

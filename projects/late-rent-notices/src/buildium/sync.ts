@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { fetchActiveLeases, fetchProperties } from "./client.js";
-import { getDefaultGracePeriodDays } from "../lib/config.js";
+import { getDefaultGracePeriodDays, getInheritedLeaseGracePeriodDays } from "../lib/config.js";
 import { logInfo } from "../lib/appLogger.js";
 
 // Pulls the current state of properties/leases/tenants/PM-assignment from
@@ -12,18 +12,25 @@ import { logInfo } from "../lib/appLogger.js";
 // RentalManager comes back EMBEDDED on every /v1/rentals row, so PM
 // assignment needs no separate API call — the earlier version of this file
 // called a staff-assignments endpoint that doesn't exist. There is also no
-// grace-period field anywhere in Buildium's API; grace period is a config
-// value Jason sets directly (see src/lib/config.ts getGracePeriodDays),
+// grace-period field anywhere in Buildium's API, AND no field identifying a
+// lease as "inherited" from a prior management company either. Grace period
+// is driven by two config values Jason sets directly (see
+// src/lib/config.ts getDefaultGracePeriodDays / getInheritedLeaseGracePeriodDays),
 // not something synced from Buildium.
 export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynced: number; leasesSynced: number }> {
   const now = new Date();
-  // Default applied ONLY to a lease's first sync (see ON CONFLICT below,
-  // which deliberately never touches grace_period_days on update). Jason:
-  // grace period is NOT one company-wide number — leases inherited from a
-  // prior management company often carry a different late-fee policy. This
-  // default just gives a new lease a starting value; override it per-lease
-  // via PATCH /api/leases/:id/grace-period for anything non-standard.
-  const { days: defaultGracePeriodDays } = await getDefaultGracePeriodDays(jobPool);
+  // Defaults applied ONLY to a lease's first sync, or (for the inherited
+  // value) the moment fee_terms_source is first observed as inherited_lease
+  // with no sign of a prior manual override — see the ON CONFLICT handling
+  // below. Jason: grace period is NOT one company-wide number — leases
+  // inherited from a prior management company carry a different late-fee
+  // policy (14-Day Notice on day 6 instead of day 4). Buildium has no signal
+  // for "this lease is inherited" — the only signal this system has is
+  // leases.fee_terms_source (migration 0023), which is set by a human, not
+  // synced from Buildium. Either default can still be overridden per-lease
+  // via PATCH /api/leases/:id/grace-period.
+  const { days: standardGracePeriodDays } = await getDefaultGracePeriodDays(jobPool);
+  const { days: inheritedGracePeriodDays } = await getInheritedLeaseGracePeriodDays(jobPool);
 
   const properties = await fetchProperties();
   for (const p of properties) {
@@ -97,10 +104,23 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
     }
     const propertyId = propertyRow.rows[0].id;
 
-    // grace_period_days is set ONLY on INSERT (the default, above) — the
-    // ON CONFLICT clause deliberately does NOT include it, so a PM's manual
-    // per-lease override (e.g. for an inherited tenant with a different
-    // late-fee policy) is never clobbered by the next daily sync.
+    // grace_period_days on INSERT: a brand-new lease has no fee_terms_source
+    // yet (Buildium supplies none), so the column default of
+    // 'limehouse_standard' (migration 0023) applies and the standard grace
+    // period is used. If a human has already flagged fee_terms_source as
+    // inherited_lease by the time this row is (re-)synced — see the
+    // ON CONFLICT branch below — the inherited default is applied instead,
+    // without a second, separate manual grace-period entry.
+    //
+    // On UPDATE (existing lease), grace_period_days is auto-corrected ONLY
+    // when: (a) fee_terms_source on the existing row is inherited_lease, AND
+    // (b) grace_period_days still equals the standard default, i.e. nothing
+    // suggests a PM has already manually corrected it. This is the same
+    // never-clobber-a-manual-override guarantee the prior code had (which
+    // never touched grace_period_days on UPDATE at all) — it just also
+    // closes the gap where fee_terms_source was set to inherited_lease but
+    // grace_period_days was left at the standard number because no one
+    // remembered the second manual step.
     const leaseUpsert = await jobPool.query<{ id: number }>(
       `INSERT INTO leases (
          buildium_lease_id, source, property_id, unit_buildium_id, unit_label,
@@ -112,7 +132,13 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
          unit_label = EXCLUDED.unit_label,
          rent_due_day = EXCLUDED.rent_due_day,
          lease_status = EXCLUDED.lease_status,
-         synced_at = EXCLUDED.synced_at
+         synced_at = EXCLUDED.synced_at,
+         grace_period_days = CASE
+           WHEN leases.fee_terms_source = 'inherited_lease'
+                AND leases.grace_period_days = $9
+           THEN $10
+           ELSE leases.grace_period_days
+         END
        RETURNING id`,
       [
         String(lease.Id),
@@ -120,9 +146,11 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
         String(lease.UnitId),
         lease.UnitNumber ?? String(lease.UnitId),
         lease.PaymentDueDay,
-        defaultGracePeriodDays,
+        standardGracePeriodDays,
         lease.LeaseStatus,
         now,
+        standardGracePeriodDays,
+        inheritedGracePeriodDays,
       ]
     );
     const leaseId = leaseUpsert.rows[0].id;

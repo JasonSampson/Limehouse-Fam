@@ -45,3 +45,18 @@ export async function getDefaultGracePeriodDays(db: Pool | PoolClient): Promise<
   }
   return { id, days };
 }
+
+// Companion to getDefaultGracePeriodDays, for leases where
+// leases.fee_terms_source = 'inherited_lease' (migration 0023) — a lease
+// Limehouse took over managing with a sitting tenant whose terms differ
+// from Limehouse's own standard. Buildium has no field for this; the human
+// classification on fee_terms_source is the only signal (see
+// src/buildium/sync.ts for how the two config values are picked between).
+export async function getInheritedLeaseGracePeriodDays(db: Pool | PoolClient): Promise<{ id: number; days: number }> {
+  const { id, value } = await getActiveConfig(db, "inherited_lease_grace_period_days");
+  const days = typeof value === "string" ? parseInt(value, 10) : Number(value);
+  if (!Number.isInteger(days) || days < 0) {
+    throw new Error(`inherited_lease_grace_period_days config value is not a valid non-negative integer: ${JSON.stringify(value)}`);
+  }
+  return { id, days };
+}

@@ -37,10 +37,13 @@ export async function withPmScope<T>(
       String(pmRow.rows[0]?.is_fallback_decision_maker === true),
     ]);
 
-    // admin_assistant (Belinda/Vien) is the new portfolio-wide, door-
-    // unrestricted read role added alongside contact_attempts — see
-    // migrations 0026/0027. Same server-side-lookup-only rule as above:
-    // the role is never taken from anything client-supplied.
+    // admin_assistant (Belinda/Vien) and bookkeeping (migrations 0026/0027,
+    // 0032/0033) are portfolio-wide, door-unrestricted roles distinct from a
+    // plain 'pm' — the RLS policies keyed off app.pm_role decide what each
+    // one can see/write from there (bookkeeping: read-only everywhere, no
+    // exceptions). Same server-side-lookup-only rule as above: the role is
+    // never taken from anything client-supplied, this generic pass-through
+    // requires no change per new role value added to pm_users.role.
     await client.query("SELECT set_config('app.pm_role', $1, true)", [
       pmRow.rows[0]?.role ?? "pm",
     ]);

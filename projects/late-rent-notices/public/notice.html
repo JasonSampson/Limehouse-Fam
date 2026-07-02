@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Notice Detail — Limehouse PM</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div id="app-header"></div>
+
+  <script src="/js/api.js"></script>
+  <script>
+    (async function () {
+      const me = await initLayout("dashboard");
+      if (!me) return;
+
+      const content = document.getElementById("app-content");
+      const params = new URLSearchParams(window.location.search);
+      const noticeId = Number(params.get("id"));
+
+      if (!noticeId) {
+        content.innerHTML = `<div class="alert alert-error">No notice specified.</div>`;
+        return;
+      }
+
+      content.innerHTML = `<div class="loading">Loading notice…</div>`;
+
+      const canReviewAndSend = me.role === "pm";
+      const canFallbackSend = me.isFallbackDecisionMaker;
+      const readOnly = me.role === "bookkeeping";
+
+      const bucketLabels = {
+        rent: "Rent",
+        late_fee: "Late fee",
+        other: "Other charge",
+      };
+
+      try {
+        const { notice } = await LimehouseAPI.get(`/api/notices/${noticeId}`);
+        renderNotice(notice);
+      } catch (err) {
+        content.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+      }
+
+      function statusBadge(n) {
+        if (n.status === "draft") return `<span class="badge badge-draft">Draft — not sent</span>`;
+        if (n.status === "voided") return `<span class="badge badge-voided">Voided</span>`;
+        if (n.status === "sent" && n.deliveryStatus === "bounced") return `<span class="badge badge-bounced">Sent — bounced</span>`;
+        if (n.status === "sent") return `<span class="badge badge-sent">Sent</span>`;
+        return `<span class="badge badge-voided">${n.status}</span>`;
+      }
+
+      function renderLedgerRows(notice) {
+        const items = notice.lineItems && notice.lineItems.items ? notice.lineItems.items : [];
+        if (!items.length) {
+          return `
+            <div class="alert alert-info" style="margin-top:10px;">
+              No itemized breakdown yet for this notice — just the total amount due below. Line-item detail
+              (rent vs. late fees vs. other charges) is being built and will show up here automatically once it's
+              populated for this notice. The actual live balance is re-checked automatically the moment someone
+              clicks Send, before anything happens, regardless of whether the breakdown is itemized yet.
+            </div>
+          `;
+        }
+        const rows = items
+          .map(
+            (li) => `
+              <tr>
+                <td>${escapeHtml(bucketLabels[li.bucket] || li.bucket)}</td>
+                <td>${escapeHtml(li.description || li.glAccountName || "—")}</td>
+                <td>${li.chargeDate ? fmtDate(li.chargeDate) : "—"}</td>
+                <td>${fmtMoney(li.amount)}</td>
+              </tr>
+            `
+          )
+          .join("");
+        return `
+          <table class="ledger-table">
+            <thead>
+              <tr><th>Type</th><th>Description</th><th>Charge date</th><th>Amount</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p class="field-hint">Itemized as of the ${notice.lineItems.snapshotStage === "send" ? "send" : "draft"} snapshot.</p>
+        `;
+      }
+
+      function renderLetterPreview(notice) {
+        if (!notice.recipients || !notice.recipients.length) {
+          return `<div class="alert alert-warn">No recipients found for this notice — there's nothing to preview.</div>`;
+        }
+        return notice.recipients
+          .map((r, idx) => {
+            const frameId = `letter-frame-${idx}`;
+            return `
+              <div class="card" style="margin-bottom: 12px;">
+                <p class="field-hint" style="margin-top:0;">To: ${escapeHtml(r.tenantName)} &lt;${escapeHtml(r.emailAddress)}&gt;</p>
+                <p style="font-weight:600; margin: 4px 0 10px;">${escapeHtml(r.subject)}</p>
+                <iframe
+                  id="${frameId}"
+                  title="Notice preview for ${escapeHtml(r.tenantName)}"
+                  sandbox=""
+                  referrerpolicy="no-referrer"
+                  style="width:100%; min-height:220px; border:1px solid var(--gray-border); border-radius: 6px; background:#fff;"
+                ></iframe>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      // The iframe's content is set via the frame's own document, not innerHTML
+      // or srcdoc string interpolation — this keeps the template's rendered
+      // HTML (which is only as trustworthy as the letter template + tenant
+      // merge fields) from ever being parsed into the parent page's DOM.
+      // sandbox="" (no attribute values) strips ALL iframe privileges: no
+      // script execution, no same-origin access, no form submission, no
+      // top-level navigation — it can only render as inert markup.
+      function paintLetterPreviews(notice) {
+        if (!notice.recipients) return;
+        notice.recipients.forEach((r, idx) => {
+          const frame = document.getElementById(`letter-frame-${idx}`);
+          if (!frame) return;
+          const doc = frame.contentDocument;
+          doc.open();
+          doc.write(
+            `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;margin:0;padding:4px;color:#1f2421;}</style></head><body>${r.bodyHtml}</body></html>`
+          );
+          doc.close();
+        });
+      }
+
+      function renderNotice(notice) {
+        content.innerHTML = `
+          <p><a href="/index.html">&larr; Back to dashboard</a></p>
+          <h1>${escapeHtml(notice.propertyName)} — Unit ${escapeHtml(notice.unitLabel)}</h1>
+          <p class="subtitle">Notice #${notice.id} &middot; ${statusBadge(notice)}</p>
+
+          <div class="card">
+            <h2 style="margin-top:0;">Amount &amp; timing</h2>
+            <table class="ledger-table">
+              <tr><td>Amount due (at draft time)</td><td>${fmtMoney(notice.amountDueAtDraft)}</td></tr>
+              <tr><td>Days late (at draft time)</td><td>${notice.daysLateAtDraft}</td></tr>
+              ${notice.amountDueAtSend != null ? `<tr><td>Amount due (at send time)</td><td>${fmtMoney(notice.amountDueAtSend)}</td></tr>` : ""}
+              <tr><td>Drafted</td><td>${fmtDateTime(notice.draftedAt)}</td></tr>
+              ${notice.sentAt ? `<tr><td>Sent</td><td>${fmtDateTime(notice.sentAt)}</td></tr>` : ""}
+              <tr><td>Ledger re-verified against Buildium?</td><td>${notice.ledgerVerified ? "Yes" : "Not yet"}</td></tr>
+            </table>
+            <h2 style="margin-bottom: 4px;">Itemized breakdown</h2>
+            ${renderLedgerRows(notice)}
+          </div>
+
+          <div class="card">
+            <h2 style="margin-top:0;">The notice letter</h2>
+            <p class="subtitle" style="margin-top:-6px;">
+              Exactly what would be emailed, rendered from the real template — read it before clicking Review &amp; Send.
+            </p>
+            ${renderLetterPreview(notice)}
+            ${notice.ccRecipients && notice.ccRecipients.length ? `<p class="field-hint">Also CC'd: ${notice.ccRecipients.map((c) => escapeHtml(c.emailAddress)).join(", ")}</p>` : ""}
+          </div>
+
+          <div id="action-area"></div>
+
+          <h2>Log a contact attempt</h2>
+          <p class="subtitle">Record a call, text, or email you made to this tenant about the balance.</p>
+          <div id="contact-log-link" class="card">
+            <a class="btn btn-primary" href="/contact-log.html?leaseId=${notice.leaseId}">Go to Contact Log for this lease</a>
+          </div>
+        `;
+
+        paintLetterPreviews(notice);
+        renderActionArea(notice);
+      }
+
+      function renderActionArea(notice) {
+        const area = document.getElementById("action-area");
+
+        if (notice.status !== "draft") {
+          area.innerHTML = "";
+          return;
+        }
+
+        if (readOnly) {
+          area.innerHTML = `<div class="alert alert-info">Your account has read-only access. No action is available here.</div>`;
+          return;
+        }
+
+        if (!canReviewAndSend && !canFallbackSend) {
+          area.innerHTML = `<div class="alert alert-info">This draft isn't assigned to your account, and your account isn't set up as a fallback decision-maker, so there's nothing to act on here.</div>`;
+          return;
+        }
+
+        // Voiding is only possible when this notice is assigned to YOU
+        // specifically (the API checks assigned_pm_id, not fallback status,
+        // and silently no-ops with a 204 either way) — so only offer the
+        // button when that's plausibly true, and re-check the outcome after.
+        const voidButtonHtml = canReviewAndSend
+          ? `<button id="void-btn" class="btn-danger">Void this draft</button>`
+          : "";
+
+        // Approximate only — the real deadline the server enforces is
+        // business-day-adjusted (weekends/holidays don't count), this is a
+        // calendar-day estimate just so a fallback decision-maker has a
+        // rough sense of timing before clicking. The server is the actual
+        // gate and will reject with a precise reason if it's too early.
+        const draftedAt = new Date(notice.draftedAt);
+        const fallbackDeadline = new Date(draftedAt.getTime() + 2 * 24 * 60 * 60 * 1000);
+        const fallbackNotice =
+          !canReviewAndSend && canFallbackSend
+            ? `<div class="alert alert-warn">You're acting as the fallback decision-maker, not the assigned PM. The assigned PM gets 2 full business days first — roughly until ${fmtDate(fallbackDeadline)}. If you try before that, the system will block it and tell you the exact deadline.</div>`
+            : "";
+
+        area.innerHTML = `
+          <div class="card">
+            <h2 style="margin-top:0;">Review &amp; Send</h2>
+            ${fallbackNotice}
+            <ul class="gate-list">
+              <li class="gate-ok">System will re-check the live Buildium balance right before sending</li>
+              <li class="gate-ok">If the tenant already paid down below the threshold, this will auto-void instead of sending</li>
+              <li class="${notice.ledgerVerified ? "gate-ok" : "gate-bad"}">Ledger verification ${notice.ledgerVerified ? "already confirmed" : "required from you below"}</li>
+            </ul>
+            <div class="checkbox-row">
+              <input type="checkbox" id="ledger-confirm" />
+              <label for="ledger-confirm">I read the notice letter above, checked this tenant's balance in Buildium, and it matches ${fmtMoney(notice.amountDueAtDraft)} (or I understand the system will re-check the live balance automatically).</label>
+            </div>
+            <div id="send-result"></div>
+            <div class="btn-row">
+              <button id="send-btn" class="btn-primary" disabled>Review &amp; Send</button>
+              ${voidButtonHtml}
+            </div>
+            <p class="field-hint" style="margin-top:10px;">
+              This system is in <strong>shadow mode</strong>. Clicking Send will run every real check (balance re-verification,
+              stale-draft protection, audit logging) but will <strong>not actually email the tenant</strong>. You'll see exactly
+              what shadow mode reports below.
+            </p>
+            ${!canReviewAndSend && canFallbackSend ? `<p class="field-hint">Voiding isn't available here for a fallback send — only the PM this draft is assigned to can void it.</p>` : ""}
+          </div>
+        `;
+
+        const checkbox = document.getElementById("ledger-confirm");
+        const sendBtn = document.getElementById("send-btn");
+        const voidBtn = document.getElementById("void-btn");
+        const resultBox = document.getElementById("send-result");
+
+        checkbox.addEventListener("change", () => {
+          sendBtn.disabled = !checkbox.checked;
+        });
+
+        sendBtn.addEventListener("click", async () => {
+          sendBtn.disabled = true;
+          sendBtn.textContent = "Sending…";
+          resultBox.innerHTML = "";
+          try {
+            const endpoint = canReviewAndSend
+              ? `/api/notices/${notice.id}/send`
+              : `/api/notices/${notice.id}/send-as-fallback`;
+            const result = await LimehouseAPI.post(endpoint, { ledgerVerified: true });
+
+            if (result.voided) {
+              resultBox.innerHTML = `<div class="alert alert-warn">Not sent — the tenant's balance had already dropped below the threshold, so this draft was voided automatically instead. No notice was needed.</div>`;
+            } else if (result.sent === false) {
+              resultBox.innerHTML = `<div class="alert alert-warn"><strong>Shadow mode:</strong> the system ran every check as if this were a real send, but no email was actually sent — this is expected while the system is in test mode. It's logged as what would have happened.</div>`;
+            } else {
+              resultBox.innerHTML = `<div class="alert alert-success">Sent.</div>`;
+            }
+            sendBtn.textContent = "Review & Send";
+            setTimeout(() => window.location.reload(), 2500);
+          } catch (err) {
+            resultBox.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+            sendBtn.disabled = false;
+            sendBtn.textContent = "Review & Send";
+          }
+        });
+
+        if (voidBtn) {
+          voidBtn.addEventListener("click", async () => {
+            const reason = window.prompt("Why are you voiding this draft? (required, 5+ characters)");
+            if (!reason || reason.trim().length < 5) {
+              if (reason !== null) {
+                resultBox.innerHTML = `<div class="alert alert-error">A reason of at least 5 characters is required to void a draft.</div>`;
+              }
+              return;
+            }
+            voidBtn.disabled = true;
+            try {
+              await LimehouseAPI.post(`/api/notices/${notice.id}/void`, { reason: reason.trim() });
+              // The API returns 204 whether or not a row actually matched
+              // (e.g. this draft isn't assigned to you) — re-fetch the
+              // detail to find out what really happened instead of
+              // assuming success.
+              const { notice: refreshed } = await LimehouseAPI.get(`/api/notices/${notice.id}`);
+              if (refreshed && refreshed.status === "voided") {
+                resultBox.innerHTML = `<div class="alert alert-success">Draft voided.</div>`;
+              } else {
+                resultBox.innerHTML = `<div class="alert alert-warn">Nothing changed — this draft isn't assigned to your account, so it couldn't be voided from here.</div>`;
+              }
+              setTimeout(() => window.location.reload(), 1500);
+            } catch (err) {
+              resultBox.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+              voidBtn.disabled = false;
+            }
+          });
+        }
+      }
+    })();
+  </script>
+</body>
+</html>

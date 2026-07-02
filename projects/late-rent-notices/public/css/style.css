@@ -1,0 +1,448 @@
+/* Limehouse PM — Late Rent & Tenant Communications
+   Mobile-first, plain CSS, no framework. Property managers check this from
+   their phones in the field, so the small-screen layout is the real layout,
+   not an afterthought. */
+
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --lime-green: #3a7d44;
+  --lime-green-dark: #2b5c33;
+  --red: #b3261e;
+  --red-bg: #fdecea;
+  --amber: #9a6700;
+  --amber-bg: #fff6e0;
+  --gray-bg: #f4f4f2;
+  --gray-border: #dcdcd6;
+  --text: #1f2421;
+  --text-muted: #5a5f5c;
+  --white: #ffffff;
+  --radius: 8px;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--gray-bg);
+  color: var(--text);
+  line-height: 1.45;
+}
+
+a {
+  color: var(--lime-green-dark);
+}
+
+header.topbar {
+  background: var(--white);
+  border-bottom: 1px solid var(--gray-border);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+header.topbar .brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+header.topbar .brand small {
+  display: block;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+header.topbar .who {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+header.topbar .who button {
+  margin-left: 8px;
+}
+
+.shadow-banner {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-bottom: 1px solid #f0dca0;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+h1 {
+  font-size: 1.3rem;
+  margin: 0 0 4px;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 24px 0 8px;
+}
+
+p.subtitle {
+  color: var(--text-muted);
+  margin: 0 0 16px;
+  font-size: 0.9rem;
+}
+
+.card {
+  background: var(--white);
+  border: 1px solid var(--gray-border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* --- Notice list: cards on mobile, table on wide screens --- */
+
+.notice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notice-row {
+  background: var(--white);
+  border: 1px solid var(--gray-border);
+  border-left: 4px solid var(--gray-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: block;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.notice-row:hover {
+  border-color: var(--lime-green);
+}
+
+.notice-row.status-draft {
+  border-left-color: var(--amber);
+}
+
+.notice-row.status-sent {
+  border-left-color: var(--lime-green);
+}
+
+.notice-row.status-voided {
+  border-left-color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.notice-row .row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notice-row .tenant-name {
+  font-weight: 600;
+}
+
+.notice-row .amount {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.notice-row .row-meta {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-draft {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.badge-sent {
+  background: #e6f2e8;
+  color: var(--lime-green-dark);
+}
+
+.badge-voided {
+  background: #ececea;
+  color: var(--text-muted);
+}
+
+.badge-bounced {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.days-late {
+  font-size: 0.85rem;
+}
+
+.days-late.high {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.days-late.medium {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+/* --- Forms --- */
+
+label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin: 14px 0 4px;
+}
+
+input, select, textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-border);
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-family: inherit;
+  background: var(--white);
+  color: var(--text);
+}
+
+textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.field-hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 3px;
+}
+
+button, .btn {
+  display: inline-block;
+  padding: 11px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--gray-border);
+  background: var(--white);
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--lime-green);
+  border-color: var(--lime-green);
+  color: var(--white);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--lime-green-dark);
+}
+
+.btn-danger {
+  background: var(--white);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.btn-block {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+/* --- Alerts / states --- */
+
+.alert {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+
+.alert-error {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid #f2c6c2;
+}
+
+.alert-warn {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid #f0dca0;
+}
+
+.alert-success {
+  background: #e6f2e8;
+  color: var(--lime-green-dark);
+  border: 1px solid #bfe0c6;
+}
+
+.alert-info {
+  background: #eef3fb;
+  color: #2c4a7c;
+  border: 1px solid #cddbf0;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--text-muted);
+}
+
+.loading {
+  text-align: center;
+  padding: 30px 16px;
+  color: var(--text-muted);
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.tabs a {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--gray-border);
+  text-decoration: none;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: var(--white);
+}
+
+.tabs a.active {
+  background: var(--lime-green);
+  border-color: var(--lime-green);
+  color: var(--white);
+}
+
+.ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin: 10px 0;
+}
+
+.ledger-table th, .ledger-table td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--gray-border);
+}
+
+.ledger-table td:last-child, .ledger-table th:last-child {
+  text-align: right;
+}
+
+.letter-preview {
+  background: var(--gray-bg);
+  border: 1px solid var(--gray-border);
+  border-radius: var(--radius);
+  padding: 14px;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.gate-list {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+  font-size: 0.9rem;
+}
+
+.gate-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--gray-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gate-ok::before {
+  content: "\2713";
+  color: var(--lime-green-dark);
+  font-weight: 700;
+}
+
+.gate-bad::before {
+  content: "\2717";
+  color: var(--red);
+  font-weight: 700;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: auto;
+  margin-top: 3px;
+}
+
+.checkbox-row label {
+  margin: 0;
+  font-weight: 500;
+}
+
+footer.note {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  padding: 24px 16px 40px;
+}
+
+/* --- Wider screens: give the table a bit more breathing room --- */
+@media (min-width: 640px) {
+  main {
+    padding: 24px;
+  }
+
+  .notice-row .row-top {
+    flex-wrap: nowrap;
+  }
+}

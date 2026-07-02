@@ -7,6 +7,13 @@ export interface MergeFields {
   notice_date: string;
   property_address: string;
   pm_name: string;
+  // Itemized breakdown (migration 0038 / notice_line_items), computed from
+  // real classified Buildium charge lines at send time — see sendNotice.ts.
+  // Each is a pre-formatted currency string via formatCurrency, same as
+  // amount_due, ready to drop straight into the template text.
+  rent_amount_due: string;
+  late_fee_amount_due: string;
+  misc_amount_due: string;
 }
 
 // Sentinel finding: merge field values (e.g. a tenant's full_name pulled

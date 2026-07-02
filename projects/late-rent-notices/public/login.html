@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In — Limehouse PM Late Rent Notices</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <main style="max-width: 420px; margin-top: 60px;">
+    <div class="card" style="text-align: center;">
+      <h1>Limehouse PM</h1>
+      <p class="subtitle">Late Rent &amp; Tenant Communications</p>
+      <div id="reason-banner"></div>
+      <p>Sign in with your Limehouse Microsoft 365 account.</p>
+      <a class="btn btn-primary btn-block" href="/auth/login">Sign in with Microsoft</a>
+    </div>
+    <footer class="note">If you can't sign in, contact Jason. Your account has to be added to this system first.</footer>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("reason") === "expired") {
+      document.getElementById("reason-banner").innerHTML =
+        '<div class="alert alert-warn">Your session expired. Please sign in again.</div>';
+    }
+  </script>
+</body>
+</html>

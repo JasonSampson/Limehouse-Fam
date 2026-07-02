@@ -8,6 +8,7 @@ import { isReauthFresh } from "../auth/requireFreshReauth.js";
 import { addBusinessDays } from "../lib/businessCalendar.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
+import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
 
 export const noticeRoutes = Router();
 noticeRoutes.use(requireSession);
@@ -32,6 +33,211 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
     return result.rows;
   });
   res.json({ notices });
+});
+
+// Detail/preview for one notice. Same withPmScope + RLS pattern as the list
+// route above — no extra WHERE pm_id clause here either, RLS on `notices`
+// (migrations 0016/0019) is what actually restricts a plain PM to notices
+// assigned to them, while admin_assistant/bookkeeping/a flagged fallback
+// decision-maker get the broader visibility already defined there.
+//
+// This exists so a PM can actually read what a notice says BEFORE clicking
+// Review & Send — the list endpoint above only ever returned totals, never
+// the tenant name, the itemized breakdown, or the letter text itself. That
+// gap defeated the human-review gate this whole module is built around.
+//
+// Renders the subject/body with the exact same renderTemplate() calls
+// sendNotice.ts uses (same escapeForHtml split for subject vs. body too) —
+// deliberately NOT a re-implementation, so what a PM previews here is
+// guaranteed identical to what would actually be sent. This route is
+// strictly read-only: it never writes to notices, never calls Buildium, and
+// has no send capability of its own.
+//
+// Amounts and days-late shown are the FROZEN draft-time snapshot
+// (amount_due_at_draft / days_late_at_draft, or amount_due_at_send /
+// days_late_at_send once sent) — not a live Buildium re-check. The live
+// balance is only re-verified at the moment of send (sendNotice.ts's
+// stale-draft protection); a preview showing a different, "more current"
+// number than what Send will actually re-verify against would be more
+// confusing than useful here.
+noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
+  const session = req.session!;
+  const noticeId = Number(req.params.id);
+  if (!Number.isInteger(noticeId) || noticeId <= 0) {
+    res.status(400).json({ error: "Invalid notice id." });
+    return;
+  }
+
+  const detail = await withPmScope(session.pmUserId, async (client) => {
+    const noticeResult = await client.query<{
+      id: number;
+      lease_id: number;
+      status: string;
+      amount_due_at_draft: string;
+      days_late_at_draft: number;
+      amount_due_at_send: string | null;
+      days_late_at_send: number | null;
+      letter_template_id: number;
+      assigned_pm_id: number;
+      drafted_at: Date;
+      sent_at: Date | null;
+      delivery_status: string;
+      ledger_verified: boolean;
+      unit_label: string;
+      property_name: string;
+      property_address: string;
+      assigned_pm_name: string;
+    }>(
+      `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
+              n.amount_due_at_send, n.days_late_at_send, n.letter_template_id,
+              n.assigned_pm_id, n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
+              l.unit_label,
+              p.name AS property_name,
+              (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+              pm.display_name AS assigned_pm_name
+       FROM notices n
+       JOIN leases l ON l.id = n.lease_id
+       JOIN properties p ON p.id = l.property_id
+       JOIN pm_users pm ON pm.id = n.assigned_pm_id
+       WHERE n.id = $1`,
+      [noticeId]
+    );
+    if (noticeResult.rows.length === 0) {
+      return null;
+    }
+    const notice = noticeResult.rows[0];
+
+    const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
+      "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
+      [notice.letter_template_id]
+    );
+    const template = templateResult.rows[0];
+
+    const recipientsResult = await client.query<{
+      recipient_type: string;
+      email_address: string;
+      full_name: string | null;
+      delivery_status: string;
+    }>(
+      `SELECT nr.recipient_type, nr.email_address, lt.full_name, nr.delivery_status
+       FROM notice_recipients nr
+       LEFT JOIN lease_tenants lt ON lt.id = nr.lease_tenant_id
+       WHERE nr.notice_id = $1
+       ORDER BY nr.recipient_type, lt.full_name`,
+      [noticeId]
+    );
+    const toRecipients = recipientsResult.rows.filter((r) => r.recipient_type === "to");
+    const ccRecipients = recipientsResult.rows.filter((r) => r.recipient_type === "cc");
+
+    // Itemized rent/late-fee/other breakdown, if the classifier has ever
+    // populated it for this notice (see migration 0038/0039 — nothing writes
+    // to this table yet as of this endpoint, so an empty array here is
+    // expected today, not a bug). 'send' snapshot wins over 'draft' once it
+    // exists, mirroring amount_due_at_draft/_at_send.
+    const lineItemsResult = await client.query<{
+      snapshot_stage: string;
+      bucket: string;
+      gl_account_name: string;
+      description: string | null;
+      amount: string;
+      charge_date: string | null;
+    }>(
+      `SELECT snapshot_stage, bucket, gl_account_name, description, amount, charge_date
+       FROM notice_line_items
+       WHERE notice_id = $1
+       ORDER BY snapshot_stage DESC, bucket, charge_date`,
+      [noticeId]
+    );
+    const lineItemStage = lineItemsResult.rows.some((r) => r.snapshot_stage === "send") ? "send" : "draft";
+    const lineItems = lineItemsResult.rows.filter((r) => r.snapshot_stage === lineItemStage);
+
+    // Amount/days-late used for the preview: the "send" snapshot if this
+    // notice has already been sent, otherwise the "draft" snapshot — same
+    // precedence sendNotice.ts's own columns follow.
+    const amountDue = notice.amount_due_at_send ?? notice.amount_due_at_draft;
+    const daysLate = notice.days_late_at_send ?? notice.days_late_at_draft;
+    const dueDateSource = notice.sent_at ?? notice.drafted_at;
+
+    // Bucket sums for the itemized merge fields — same buckets
+    // glClassification.ts writes to notice_line_items with ('rent' |
+    // 'late_fee' | 'other'), summed over whichever snapshot stage we're
+    // previewing (see lineItemStage above). Empty today until a notice has
+    // actually gone through the classifier; formatCurrency(0) renders as
+    // "$0.00", which is the correct "not yet classified" preview state,
+    // not a false claim about what's owed.
+    const sumBucket = (bucket: string) =>
+      lineItems
+        .filter((li) => li.bucket === bucket)
+        .reduce((sum, li) => sum + Number(li.amount), 0);
+
+    // Rendered once per "to" recipient, same as sendNotice.ts — roommates
+    // each see their own name in the body, even though CC'd staff don't get
+    // their own copy of the merge fields.
+    const renderedRecipients = toRecipients.map((toRecipient) => {
+      const mergeFields: MergeFields = {
+        tenant_name: toRecipient.full_name ?? "Tenant",
+        unit_label: notice.unit_label,
+        amount_due: formatCurrency(Number(amountDue)),
+        days_late: String(daysLate),
+        due_date: dueDateSource.toISOString().slice(0, 10),
+        notice_date: (notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
+        property_address: notice.property_address,
+        pm_name: notice.assigned_pm_name,
+        rent_amount_due: formatCurrency(sumBucket("rent")),
+        late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
+        misc_amount_due: formatCurrency(sumBucket("other")),
+      };
+
+      return {
+        tenantName: mergeFields.tenant_name,
+        emailAddress: toRecipient.email_address,
+        deliveryStatus: toRecipient.delivery_status,
+        // escapeForHtml split matches sendNotice.ts exactly: subject is a
+        // plain-text header, body becomes bodyHtml.
+        subject: renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false }),
+        bodyHtml: renderTemplate(template.body_markdown, mergeFields).replace(/\n/g, "<br>"),
+      };
+    });
+
+    return {
+      id: notice.id,
+      leaseId: notice.lease_id,
+      status: notice.status,
+      propertyName: notice.property_name,
+      propertyAddress: notice.property_address,
+      unitLabel: notice.unit_label,
+      assignedPmName: notice.assigned_pm_name,
+      amountDueAtDraft: notice.amount_due_at_draft,
+      daysLateAtDraft: notice.days_late_at_draft,
+      amountDueAtSend: notice.amount_due_at_send,
+      daysLateAtSend: notice.days_late_at_send,
+      draftedAt: notice.drafted_at,
+      sentAt: notice.sent_at,
+      deliveryStatus: notice.delivery_status,
+      ledgerVerified: notice.ledger_verified,
+      lineItems: {
+        snapshotStage: lineItemStage,
+        items: lineItems.map((li) => ({
+          bucket: li.bucket,
+          glAccountName: li.gl_account_name,
+          description: li.description,
+          amount: li.amount,
+          chargeDate: li.charge_date,
+        })),
+      },
+      ccRecipients: ccRecipients.map((r) => ({ emailAddress: r.email_address, deliveryStatus: r.delivery_status })),
+      // One rendered subject/body per "to" recipient (usually one, more if
+      // there are roommates) — this IS what sendNotice.ts would send, not
+      // an approximation of it.
+      recipients: renderedRecipients,
+    };
+  });
+
+  if (!detail) {
+    res.status(404).json({ error: "Notice not found or not visible to you." });
+    return;
+  }
+  res.json({ notice: detail });
 });
 
 const sendBodySchema = z.object({

@@ -4,6 +4,7 @@ import { syncBuildiumData } from "../buildium/sync.js";
 import { fetchOutstandingBalances } from "../buildium/client.js";
 import { calculateLateness } from "../lib/lateness.js";
 import { getDeMinimisThreshold } from "../lib/config.js";
+import { fetchAndClassifyLeaseCharges, insertNoticeLineItems } from "../lib/noticeLineItems.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace, childSpan } from "../lib/trace.js";
 import { logInfo, logError } from "../lib/appLogger.js";
@@ -192,6 +193,21 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
 
       const noticeId = draftResult.rows[0].id;
       noticesDrafted += 1;
+
+      // Itemized charge breakdown, snapshotted at draft time (migration
+      // 0038). If any charge line can't be safely classified into
+      // rent/late_fee/other, fetchAndClassifyLeaseCharges throws
+      // UnclassifiedChargeBlockedError — caught by this lease's try/catch
+      // below like any other per-lease failure, landing in `errors` for a
+      // human to review. The notice row itself is intentionally left in
+      // place without line items rather than rolled back, matching this
+      // job's existing no-transaction, best-effort-per-lease pattern; a
+      // notice missing its itemization is visibly incomplete (Judge/TARS
+      // can check for notices with zero notice_line_items rows), which is
+      // safer than either silently guessing a bucket or aborting the whole
+      // day's run over one lease's chart-of-accounts problem.
+      const classifiedLines = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
+      await insertNoticeLineItems(jobPool, noticeId, "draft", classifiedLines);
 
       // Recipients: every listed tenant on the lease gets a "to" entry
       // (roommates/co-signers all receive the notice, not just one), plus

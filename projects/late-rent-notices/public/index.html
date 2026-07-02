@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Delinquency Dashboard — Limehouse PM</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div id="app-header"></div>
+
+  <script src="/js/api.js"></script>
+  <script>
+    (async function () {
+      const me = await initLayout("dashboard");
+      if (!me) return;
+
+      const content = document.getElementById("app-content");
+      content.innerHTML = `
+        <h1>Delinquency Dashboard</h1>
+        <p class="subtitle">One row per late-rent notice on file. This is what the system has drafted or sent — it is not a full list of every late tenant (see note below).</p>
+        <div id="gap-note" class="alert alert-info">
+          <strong>Heads up:</strong> this dashboard currently shows tenants who already have a drafted or sent notice.
+          There's no page yet for "late but no notice drafted" — that would need a small backend addition. Ask Tron/Q if you want that added.
+        </div>
+        <div id="list-area" class="loading">Loading notices…</div>
+      `;
+
+      const listArea = document.getElementById("list-area");
+
+      function daysLateClass(days) {
+        if (days >= 14) return "high";
+        if (days >= 7) return "medium";
+        return "";
+      }
+
+      function statusBadge(status, deliveryStatus) {
+        if (status === "draft") return `<span class="badge badge-draft">Draft — not sent</span>`;
+        if (status === "voided") return `<span class="badge badge-voided">Voided</span>`;
+        if (status === "sent" && deliveryStatus === "bounced") return `<span class="badge badge-bounced">Sent — bounced</span>`;
+        if (status === "sent") return `<span class="badge badge-sent">Sent</span>`;
+        return `<span class="badge badge-voided">${status}</span>`;
+      }
+
+      try {
+        const { notices } = await LimehouseAPI.get("/api/notices");
+
+        if (!notices.length) {
+          listArea.innerHTML = `<div class="empty-state">No notices on file yet. Nothing to review.</div>`;
+          return;
+        }
+
+        // Draft notices needing attention first, then most recent.
+        notices.sort((a, b) => {
+          if (a.status === "draft" && b.status !== "draft") return -1;
+          if (b.status === "draft" && a.status !== "draft") return 1;
+          return new Date(b.drafted_at) - new Date(a.drafted_at);
+        });
+
+        listArea.innerHTML = `<div class="notice-list">${notices
+          .map((n) => `
+            <a class="notice-row status-${n.status}" href="/notice.html?id=${n.id}">
+              <div class="row-top">
+                <span class="tenant-name">${escapeHtml(n.property_name)} — Unit ${escapeHtml(n.unit_label)}</span>
+                <span class="amount">${fmtMoney(n.amount_due_at_draft)}</span>
+              </div>
+              <div class="row-meta">
+                <span class="days-late ${daysLateClass(n.days_late_at_draft)}">${n.days_late_at_draft} days late (at draft)</span>
+                &middot; Drafted ${fmtDate(n.drafted_at)}
+                &middot; ${statusBadge(n.status, n.delivery_status)}
+              </div>
+            </a>
+          `)
+          .join("")}</div>`;
+      } catch (err) {
+        listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+      }
+    })();
+  </script>
+</body>
+</html>

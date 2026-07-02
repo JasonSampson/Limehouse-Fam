@@ -3,6 +3,12 @@ import { loadEnv } from "../config/env.js";
 import { fetchLeaseOutstandingBalance } from "../buildium/client.js";
 import { getDeMinimisThreshold } from "./config.js";
 import { calculateLateness } from "./lateness.js";
+import {
+  fetchAndClassifyLeaseCharges,
+  insertNoticeLineItems,
+  sumByBucket,
+  UnclassifiedChargeBlockedError,
+} from "./noticeLineItems.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
 import { sendGraphMail } from "../email/graphMailer.js";
 import { writeAuditLog } from "./auditLog.js";
@@ -44,6 +50,12 @@ interface NoticeRow {
 //      tenant has paid down below threshold since the draft was made, void
 //      the draft and block the send. Never send a notice demanding money
 //      that's no longer owed.
+//   1b. Re-fetch and re-classify the LIVE itemized charge breakdown (same
+//      stale-draft principle as the balance check, applied per-line — see
+//      migration 0038/glClassification.ts). If any charge line can't be
+//      safely classified, block the send outright (SendBlockedError) rather
+//      than send a legal notice with a dollar amount that silently
+//      disappeared or got guessed into the wrong bucket.
 //   2. Require the ledger-verification step to have actually happened.
 //   3. In shadow mode, stop here: log what WOULD have been sent, but do
 //      not actually call Graph sendMail. This is the default and required
@@ -129,6 +141,28 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     return { sent: false, voided: true };
   }
 
+  // Step 1b: live itemized charge breakdown, re-fetched and re-classified
+  // at send time (same "never trust the draft-time snapshot" principle as
+  // the balance recheck above). An unclassifiable charge line blocks the
+  // send the same way ledger-verification-missing or a not-found notice
+  // does — never let a dollar amount silently disappear from, or get
+  // guessed into the wrong bucket of, a legal notice.
+  let classifiedLines;
+  try {
+    classifiedLines = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
+  } catch (err) {
+    if (err instanceof UnclassifiedChargeBlockedError) {
+      throw new SendBlockedError(
+        `Cannot send notice ${params.noticeId}: ${err.message}`,
+        "unclassified_charge_line"
+      );
+    }
+    throw err;
+  }
+  const bucketSums = sumByBucket(classifiedLines);
+
+  await insertNoticeLineItems(client, params.noticeId, "send", classifiedLines);
+
   if (env.SHADOW_MODE) {
     // Shadow mode: the daily job and drafting run for real, but Send is a
     // no-op that logs what WOULD have been sent. This is the default,
@@ -208,6 +242,13 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
       notice_date: new Date().toISOString().slice(0, 10),
       property_address: lease.property_address,
       pm_name: lease.assigned_pm_name,
+      // Real computed itemized amounts (migration 0038 / notice_line_items),
+      // classified fresh above at send time — same bucketSums object for
+      // every recipient's email, since the itemization doesn't vary by
+      // tenant/co-signer, only tenant_name does.
+      rent_amount_due: formatCurrency(bucketSums.rent),
+      late_fee_amount_due: formatCurrency(bucketSums.late_fee),
+      misc_amount_due: formatCurrency(bucketSums.other),
     };
 
     // Subject is a plain-text email header, not HTML — must not be escaped

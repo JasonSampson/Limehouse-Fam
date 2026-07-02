@@ -23,16 +23,18 @@
 //      beyond the attorney's own (personal checks only) were added.
 //
 // Merge fields used: {{tenant_name}}, {{property_address}}, {{unit_label}},
-// {{notice_date}}, {{due_date}}, {{days_late}}, {{amount_due}}, {{pm_name}}.
-// These are the only fields defined on MergeFields (renderTemplate.ts) and
-// populated by sendNotice.ts today. The source document's itemized
-// rent/late-fee/misc-charge breakdown and its Court Costs / Attorney's-Fees
-// line items have NO backing data source yet (notices/late_cycles only
-// store an aggregate amount_due_at_draft/at_send — see migration 0023's own
-// comment, which explicitly deferred a notice_line_items breakdown table).
-// Rather than invent new required merge fields this task isn't scoped to
-// wire up, those lines are rendered as fixed placeholder text — see the
-// judgment-call note in the PR/report for this change.
+// {{notice_date}}, {{due_date}}, {{days_late}}, {{amount_due}}, {{pm_name}},
+// {{rent_amount_due}}, {{late_fee_amount_due}}, {{misc_amount_due}}. All
+// fields are defined on MergeFields (renderTemplate.ts) and populated by
+// sendNotice.ts. The itemized rent/late-fee/misc-charge breakdown is backed
+// by real classified Buildium charge data (notice_line_items, migration
+// 0038; classifier in src/buildium/glClassification.ts) as of the change
+// that added those three merge fields — see that change's report for the
+// live-verification details (real GL account Type/SubType/Name values
+// observed against Limehouse's actual chart of accounts). Court Costs /
+// Attorney's-Fees line items remain OUT OF SCOPE for this table (day-18
+// attorney-referral stage only) and still render as fixed placeholder text
+// below, unchanged.
 //
 // IMPORTANT: Mason has reviewed this exact source text and confirmed it
 // resolves the Fair Housing / VRLTA concerns that existed with the prior
@@ -61,9 +63,9 @@ charges as itemized below:
 
 **ITEMIZED CHARGES:**
 
-Rent for the Month(s) of {{due_date}}: {{amount_due}}
-Late Charges for Month(s) of {{due_date}}: included in total below
-Miscellaneous Charges: N/A — none assessed as of this notice
+Rent for the Month(s) of {{due_date}}: {{rent_amount_due}}
+Late Charges for Month(s) of {{due_date}}: {{late_fee_amount_due}}
+Miscellaneous Charges: {{misc_amount_due}}
 TOTAL DUE LANDLORD AS OF {{notice_date}} ({{days_late}} days past due): {{amount_due}}
 
 If you fail to pay the total amount due within 14 days of this written

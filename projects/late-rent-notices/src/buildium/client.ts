@@ -155,3 +155,76 @@ export type BuildiumProperty = z.infer<typeof buildiumPropertySchema>;
 export async function fetchProperties(): Promise<BuildiumProperty[]> {
   return buildiumGet<BuildiumProperty[]>("/rentals?limit=1000", z.array(buildiumPropertySchema));
 }
+
+// CONFIRMED live against a real Buildium account (2026-07-02, read-only):
+// /leases/{id}/charges returns ONLY Id/Date/TotalAmount/Memo/BillId/Lines,
+// where each Lines entry is just { Amount, GLAccountId } — a bare numeric
+// account id, with NO embedded GLAccount.Name/Type/SubType. This is
+// different from /leases/{id}/transactions, which DOES embed the full
+// GLAccount object on each journal line. Neo's migration comment assumed
+// charge lines would carry GLAccount.Type/SubType/Name directly; they do
+// not. Classification requires a separate /glaccounts lookup (see
+// fetchGlAccountsById below) to resolve each GLAccountId first.
+//
+// Also confirmed live: charge amounts are always positive in practice (no
+// negative/zero-amount lines observed across a real lease's full charge
+// history), and every observed charge had exactly one Lines entry — but
+// neither is guaranteed by the schema, so both are still validated/handled
+// defensively by callers rather than assumed.
+const buildiumChargeLineSchema = z.object({
+  Amount: z.number(),
+  GLAccountId: z.number(),
+});
+
+const buildiumLeaseChargeSchema = z.object({
+  Id: z.number(),
+  Date: z.string(),
+  TotalAmount: z.number(),
+  Memo: z.string().nullable(),
+  BillId: z.number().nullable(),
+  Lines: z.array(buildiumChargeLineSchema),
+});
+
+export type BuildiumLeaseCharge = z.infer<typeof buildiumLeaseChargeSchema>;
+
+// Fetches every charge (not payments/credits — /leases/{id}/transactions
+// covers the full ledger, this endpoint is charges only) posted to a lease.
+// Used both at draft time and again at send time to snapshot the itemized
+// breakdown (see notice_line_items / migration 0038).
+export async function fetchLeaseCharges(buildiumLeaseId: string): Promise<BuildiumLeaseCharge[]> {
+  return buildiumGet<BuildiumLeaseCharge[]>(
+    `/leases/${encodeURIComponent(buildiumLeaseId)}/charges?limit=1000`,
+    z.array(buildiumLeaseChargeSchema)
+  );
+}
+
+// CONFIRMED live: /glaccounts?limit=1000 returns Limehouse's full real chart
+// of accounts (121 accounts observed). DefaultAccountName + IsDefaultGLAccount
+// is the field pair the classifier actually relies on (see
+// glClassification.ts for why SubType and Name are NOT safe classification
+// keys) — both are included here even though only those two plus Type/Name
+// drive today's classifier, so a future reviewer has the same context
+// Buildium gave us, not just the bucket decision.
+const buildiumGlAccountSchema = z.object({
+  Id: z.number(),
+  Name: z.string(),
+  Type: z.string(),
+  SubType: z.string(),
+  DefaultAccountName: z.string().nullable(),
+  IsDefaultGLAccount: z.boolean(),
+});
+
+export type BuildiumGlAccount = z.infer<typeof buildiumGlAccountSchema>;
+
+const buildiumGlAccountListSchema = z.array(buildiumGlAccountSchema);
+
+// Fetches the FULL chart of accounts, then returns a Map for O(1) lookup by
+// GLAccountId. There is no bulk "/glaccounts?ids=..." filter confirmed live,
+// and the chart of accounts is small (~121 rows for Limehouse) and changes
+// rarely, so one full fetch per call site is simple and cheap — no caching
+// layer added here; callers that need many lookups in one job run (the
+// classification flow) should call this once and reuse the returned Map.
+export async function fetchGlAccountsById(): Promise<Map<number, BuildiumGlAccount>> {
+  const rows = await buildiumGet<BuildiumGlAccount[]>("/glaccounts?limit=1000", buildiumGlAccountListSchema);
+  return new Map(rows.map((row) => [row.Id, row]));
+}

@@ -14,6 +14,16 @@ export interface MergeFields {
   rent_amount_due: string;
   late_fee_amount_due: string;
   misc_amount_due: string;
+  // Fixed, same-for-every-notice ESTIMATES (migrations 0040/0041,
+  // src/lib/config.ts getEstimatedCourtCosts/getEstimatedAttorneyFees) — NOT
+  // ledger-derived like the three fields above. These populate the "Court
+  // Costs:" / "Attorney's / Filing Fees:" / "TOTAL Fees & Costs:" lines on
+  // every notice (no longer day-18-only placeholder text). total_fees_
+  // and_costs_amount is a simple sum of the other two, computed by the
+  // caller — this module does no arithmetic of its own.
+  court_costs_amount: string;
+  attorney_fees_amount: string;
+  total_fees_and_costs_amount: string;
 }
 
 // Sentinel finding: merge field values (e.g. a tenant's full_name pulled

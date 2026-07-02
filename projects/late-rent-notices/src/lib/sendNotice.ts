@@ -1,7 +1,7 @@
 import type { PoolClient } from "pg";
 import { loadEnv } from "../config/env.js";
 import { fetchLeaseOutstandingBalance } from "../buildium/client.js";
-import { getDeMinimisThreshold } from "./config.js";
+import { getDeMinimisThreshold, getEstimatedCourtCosts, getEstimatedAttorneyFees } from "./config.js";
 import { calculateLateness } from "./lateness.js";
 import {
   fetchAndClassifyLeaseCharges,
@@ -231,6 +231,14 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     deMinimisThreshold,
   });
 
+  // Fixed, same-for-every-notice ESTIMATES (migrations 0040/0041) — read
+  // fresh at send time same as every other config value here, so a
+  // mid-cycle change to Jason's SOP figures (a new config version activated
+  // between draft and send) is reflected in what actually gets sent, not
+  // whatever was active back when the draft was made.
+  const { amount: courtCosts } = await getEstimatedCourtCosts(client);
+  const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
+
   let allSucceeded = true;
   for (const toRecipient of toRecipients) {
     const mergeFields: MergeFields = {
@@ -249,6 +257,12 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
       rent_amount_due: formatCurrency(bucketSums.rent),
       late_fee_amount_due: formatCurrency(bucketSums.late_fee),
       misc_amount_due: formatCurrency(bucketSums.other),
+      // Fixed estimates (migrations 0040/0041), same on every notice — NOT
+      // derived from bucketSums/notice_line_items. total is a plain sum,
+      // computed here, not stored/re-derived anywhere else.
+      court_costs_amount: formatCurrency(courtCosts),
+      attorney_fees_amount: formatCurrency(attorneyFees),
+      total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
     };
 
     // Subject is a plain-text email header, not HTML — must not be escaped

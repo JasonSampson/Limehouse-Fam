@@ -19,6 +19,9 @@ const baseFields: MergeFields = {
   rent_amount_due: "$1,350.00",
   late_fee_amount_due: "$150.00",
   misc_amount_due: "$0.00",
+  court_costs_amount: "$91.00",
+  attorney_fees_amount: "$600.00",
+  total_fees_and_costs_amount: "$691.00",
 };
 
 describe("renderTemplate — merge field substitution", () => {
@@ -108,10 +111,10 @@ describe("renderTemplate — subject-line-not-escaped behavior (escapeForHtml: f
   });
 });
 
-describe("renderTemplate — full initial notice letter (v2, actual attorney-sourced template)", () => {
+describe("renderTemplate — full initial notice letter (v3, actual attorney-sourced template)", () => {
   it("is the expected template key/version this test suite is pinned against", () => {
     expect(INITIAL_TEMPLATE_KEY).toBe("14_day_pay_or_quit");
-    expect(INITIAL_TEMPLATE_VERSION).toBe(2);
+    expect(INITIAL_TEMPLATE_VERSION).toBe(3);
   });
 
   it("renders the full body with realistic tenant data and contains every populated field's value", () => {
@@ -127,6 +130,9 @@ describe("renderTemplate — full initial notice letter (v2, actual attorney-sou
       rent_amount_due: formatCurrency(1700),
       late_fee_amount_due: formatCurrency(129.55),
       misc_amount_due: formatCurrency(45.95),
+      court_costs_amount: formatCurrency(91),
+      attorney_fees_amount: formatCurrency(600),
+      total_fees_and_costs_amount: formatCurrency(691),
     };
     const rendered = renderTemplate(INITIAL_BODY_MARKDOWN, fields);
 
@@ -140,6 +146,13 @@ describe("renderTemplate — full initial notice letter (v2, actual attorney-sou
     expect(rendered).toContain("$1,700.00");
     expect(rendered).toContain("$129.55");
     expect(rendered).toContain("$45.95");
+    // Court Costs / Attorney's Fees / TOTAL are no longer placeholder text
+    // (v3 change, migrations 0040/0041) — assert the real rendered amounts,
+    // not just that the fields exist.
+    expect(rendered).toContain("Court Costs: $91.00");
+    expect(rendered).toContain("Attorney's / Filing Fees: $600.00");
+    expect(rendered).toContain("TOTAL Fees & Costs: $691.00");
+    expect(rendered).not.toContain("N/A — assessed upon referral to attorney");
     // No leftover unrendered placeholders anywhere in the output.
     expect(rendered).not.toMatch(/\{\{\w+\}\}/);
   });

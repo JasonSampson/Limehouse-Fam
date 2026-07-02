@@ -60,3 +60,31 @@ export async function getInheritedLeaseGracePeriodDays(db: Pool | PoolClient): P
   }
   return { id, days };
 }
+
+// Fixed, same-for-every-notice ESTIMATE (not ledger-derived, unlike the
+// rent/late_fee/other itemization in notice_line_items) — Jason's standing
+// SOP figure for the "Court Costs:" line shown on every 14-day notice (see
+// migration 0040). Editable by seeding a new config version, same
+// deactivate-old/activate-new pattern as grace periods (migrations
+// 0021/0030/0031) — never edited in place, per config_values' immutability
+// trigger.
+export async function getEstimatedCourtCosts(db: Pool | PoolClient): Promise<{ id: number; amount: number }> {
+  const { id, value } = await getActiveConfig(db, "estimated_court_costs_usd");
+  const amount = typeof value === "string" ? parseFloat(value) : Number(value);
+  if (!Number.isFinite(amount)) {
+    throw new Error(`estimated_court_costs_usd config value is not a valid number: ${JSON.stringify(value)}`);
+  }
+  return { id, amount };
+}
+
+// Companion to getEstimatedCourtCosts — Jason's standing SOP figure for the
+// "Attorney's / Filing Fees:" line shown on every 14-day notice (migration
+// 0041).
+export async function getEstimatedAttorneyFees(db: Pool | PoolClient): Promise<{ id: number; amount: number }> {
+  const { id, value } = await getActiveConfig(db, "estimated_attorney_fees_usd");
+  const amount = typeof value === "string" ? parseFloat(value) : Number(value);
+  if (!Number.isFinite(amount)) {
+    throw new Error(`estimated_attorney_fees_usd config value is not a valid number: ${JSON.stringify(value)}`);
+  }
+  return { id, amount };
+}

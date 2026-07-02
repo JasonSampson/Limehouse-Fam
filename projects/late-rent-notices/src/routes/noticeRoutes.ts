@@ -9,6 +9,7 @@ import { addBusinessDays } from "../lib/businessCalendar.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
+import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../lib/config.js";
 
 export const noticeRoutes = Router();
 noticeRoutes.use(requireSession);
@@ -33,6 +34,50 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
     return result.rows;
   });
   res.json({ notices });
+});
+
+// "Late but no notice drafted yet" — leases the daily job (see
+// dailyLatenessCheck.ts) has already determined are past their grace period
+// for the CURRENT due date (an open late_cycles row exists), but which don't
+// have a notices row yet for that cycle. This is deliberately read straight
+// from late_cycles/notices, not a fresh live Buildium call: the daily job
+// already keeps late_cycles current every day, and dailyLatenessCheck.ts
+// itself creates BOTH the late_cycles row and the notices row together in
+// the same pass (see runDailyLatenessCheck, right after the
+// ON CONFLICT... RETURNING id insert) — so a late_cycles row without a
+// matching notices row means something stopped that lease short of drafting
+// (e.g. no active letter_templates row, no PM assigned to the property, or
+// fetchAndClassifyLeaseCharges threw UnclassifiedChargeBlockedError), not a
+// timing gap this endpoint needs to re-derive.
+//
+// "Currently past grace period" = late_cycles.closed_at IS NULL (still an
+// open cycle — closed_reason 'paid_in_full'/'paid_below_threshold'/'manual'
+// means it's resolved and shouldn't show here even if no notice was ever
+// drafted for it, e.g. a tenant who paid before the job got to drafting).
+//
+// Same withPmScope/RLS pattern as every other route: no WHERE pm_id clause
+// here, migration 0016's RLS policies on late_cycles/notices (scoped via
+// leases -> pm_property_assignments) are what actually restrict a plain PM
+// to their own doors, while admin_assistant/bookkeeping see portfolio-wide
+// per their own RLS policies (migrations 0027/0033).
+noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
+  const session = req.session!;
+  const lateNoNotice = await withPmScope(session.pmUserId, async (client) => {
+    const result = await client.query(
+      `SELECT lc.id AS late_cycle_id, lc.lease_id, lc.due_date, lc.opened_at,
+              l.unit_label, p.name AS property_name
+       FROM late_cycles lc
+       JOIN leases l ON l.id = lc.lease_id
+       JOIN properties p ON p.id = l.property_id
+       WHERE lc.closed_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM notices n WHERE n.late_cycle_id = lc.id
+         )
+       ORDER BY lc.opened_at ASC`
+    );
+    return result.rows;
+  });
+  res.json({ lateNoNotice });
 });
 
 // Detail/preview for one notice. Same withPmScope + RLS pattern as the list
@@ -170,6 +215,15 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
         .filter((li) => li.bucket === bucket)
         .reduce((sum, li) => sum + Number(li.amount), 0);
 
+    // Fixed, same-for-every-notice ESTIMATES (migrations 0040/0041) — read
+    // once per preview render, not per recipient, since they don't vary by
+    // tenant. Same currently-active config version sendNotice.ts itself
+    // would read if this notice were sent right now, so the preview matches
+    // what Send will actually produce (same principle as the rest of this
+    // route's doc comment above).
+    const { amount: courtCosts } = await getEstimatedCourtCosts(client);
+    const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
+
     // Rendered once per "to" recipient, same as sendNotice.ts — roommates
     // each see their own name in the body, even though CC'd staff don't get
     // their own copy of the merge fields.
@@ -186,6 +240,9 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
         rent_amount_due: formatCurrency(sumBucket("rent")),
         late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
         misc_amount_due: formatCurrency(sumBucket("other")),
+        court_costs_amount: formatCurrency(courtCosts),
+        attorney_fees_amount: formatCurrency(attorneyFees),
+        total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
       };
 
       return {

@@ -198,14 +198,23 @@ export async function fetchLeaseCharges(buildiumLeaseId: string): Promise<Buildi
   );
 }
 
-// CONFIRMED live: /glaccounts?limit=1000 returns Limehouse's full real chart
-// of accounts (121 accounts observed). DefaultAccountName + IsDefaultGLAccount
-// is the field pair the classifier actually relies on (see
-// glClassification.ts for why SubType and Name are NOT safe classification
-// keys) — both are included here even though only those two plus Type/Name
-// drive today's classifier, so a future reviewer has the same context
-// Buildium gave us, not just the bucket decision.
-const buildiumGlAccountSchema = z.object({
+// CONFIRMED live (2026-07-02): /glaccounts?limit=1000 returns 121 TOP-LEVEL
+// rows, not the full chart of accounts — real sub-accounts (Buildium's
+// "sub-GL-account" feature, e.g. "Lease Change Fee" nested under "Mgmnt Fee
+// Income - LH Plan") are embedded on their parent's SubAccounts array, NOT
+// returned as their own flat row. Confirmed live that Limehouse tenants are
+// actually charged directly to sub-account GL ids (e.g. GL 857392 "Lease
+// Change Fee" appeared on a real lease's charge history) — so a lookup that
+// only indexes the 121 top-level rows silently fails to resolve those
+// charges (GLAccountId not in the map), which upstream
+// fetchAndClassifyLeaseCharges treats as "unknown account" and blocks the
+// whole notice. fetchGlAccountsById flattens one level of SubAccounts so
+// every real charge-line GLAccountId — parent or sub-account — resolves.
+// True total observed: 144 accounts (121 top-level + 23 nested one level
+// deep; Buildium's response does not nest deeper than one level, confirmed
+// live — no sub-account in the real response carried its own non-empty
+// SubAccounts, so this schema deliberately does not model further nesting).
+const buildiumGlAccountFlatSchema = z.object({
   Id: z.number(),
   Name: z.string(),
   Type: z.string(),
@@ -214,17 +223,37 @@ const buildiumGlAccountSchema = z.object({
   IsDefaultGLAccount: z.boolean(),
 });
 
-export type BuildiumGlAccount = z.infer<typeof buildiumGlAccountSchema>;
+export type BuildiumGlAccount = z.infer<typeof buildiumGlAccountFlatSchema>;
+
+// Top-level rows additionally carry a SubAccounts array (one level deep,
+// same flat shape) that fetchGlAccountsById below flattens into the same
+// Map as their parent.
+const buildiumGlAccountSchema = buildiumGlAccountFlatSchema.extend({
+  SubAccounts: z.array(buildiumGlAccountFlatSchema).nullable(),
+});
 
 const buildiumGlAccountListSchema = z.array(buildiumGlAccountSchema);
 
-// Fetches the FULL chart of accounts, then returns a Map for O(1) lookup by
+// Fetches the FULL chart of accounts — top-level accounts plus one level of
+// nested sub-accounts, flattened — then returns a Map for O(1) lookup by
 // GLAccountId. There is no bulk "/glaccounts?ids=..." filter confirmed live,
-// and the chart of accounts is small (~121 rows for Limehouse) and changes
-// rarely, so one full fetch per call site is simple and cheap — no caching
-// layer added here; callers that need many lookups in one job run (the
-// classification flow) should call this once and reuse the returned Map.
+// and the chart of accounts is small (144 rows for Limehouse, including
+// sub-accounts) and changes rarely, so one full fetch per call site is
+// simple and cheap — no caching layer added here; callers that need many
+// lookups in one job run (the classification flow) should call this once
+// and reuse the returned Map.
 export async function fetchGlAccountsById(): Promise<Map<number, BuildiumGlAccount>> {
-  const rows = await buildiumGet<BuildiumGlAccount[]>("/glaccounts?limit=1000", buildiumGlAccountListSchema);
-  return new Map(rows.map((row) => [row.Id, row]));
+  const rows = await buildiumGet<z.infer<typeof buildiumGlAccountSchema>[]>(
+    "/glaccounts?limit=1000",
+    buildiumGlAccountListSchema
+  );
+  const byId = new Map<number, BuildiumGlAccount>();
+  for (const row of rows) {
+    const { SubAccounts, ...flat } = row;
+    byId.set(flat.Id, flat);
+    for (const sub of SubAccounts ?? []) {
+      byId.set(sub.Id, sub);
+    }
+  }
+  return byId;
 }

@@ -3,6 +3,7 @@ import { fetchLeaseCharges, fetchGlAccountsById, type BuildiumGlAccount } from "
 import {
   classifyGlAccount,
   UnclassifiableChargeError,
+  EXCLUDED_NOT_A_CHARGE,
   type GlAccountForClassification,
   type NoticeLineItemBucket,
 } from "../buildium/glClassification.js";
@@ -94,6 +95,16 @@ export async function fetchAndClassifyLeaseCharges(buildiumLeaseId: string): Pro
 
       try {
         const bucket = classifyGlAccount(toClassificationInput(glAccount));
+        if (bucket === EXCLUDED_NOT_A_CHARGE) {
+          // Not a tenant charge at all (e.g. Security Deposit Liability,
+          // Prepayments — see glClassification.ts's EXCLUDED_GL_ACCOUNTS
+          // comment) — silently left out of the itemization entirely: not
+          // summed into any bucket, not inserted as a notice_line_items row,
+          // and NOT added to `unclassifiable` below. This is different from
+          // the amount<=0 / unknown-account / UnclassifiableChargeError
+          // cases, which all still block the notice for human review.
+          continue;
+        }
         classified.push({
           bucket,
           buildiumGlAccountId: String(glAccount.Id),

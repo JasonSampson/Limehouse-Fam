@@ -18,15 +18,47 @@
       const content = document.getElementById("app-content");
       content.innerHTML = `
         <h1>Delinquency Dashboard</h1>
-        <p class="subtitle">One row per late-rent notice on file. This is what the system has drafted or sent — it is not a full list of every late tenant (see note below).</p>
-        <div id="gap-note" class="alert alert-info">
-          <strong>Heads up:</strong> this dashboard currently shows tenants who already have a drafted or sent notice.
-          There's no page yet for "late but no notice drafted" — that would need a small backend addition. Ask Tron/Q if you want that added.
-        </div>
+        <p class="subtitle" id="page-subtitle">One row per late-rent notice on file. This is what the system has drafted or sent — it is not a full list of every late tenant (see note below).</p>
+        <nav class="tabs" id="subtabs">
+          <a href="#" id="subtab-notices" class="active" data-tab="notices">Notices</a>
+          <a href="#" id="subtab-no-notice" data-tab="no-notice">Late, No Notice Yet</a>
+        </nav>
         <div id="list-area" class="loading">Loading notices…</div>
       `;
 
       const listArea = document.getElementById("list-area");
+      const subtitle = document.getElementById("page-subtitle");
+      const subtabNotices = document.getElementById("subtab-notices");
+      const subtabNoNotice = document.getElementById("subtab-no-notice");
+
+      const subtitles = {
+        notices: "One row per late-rent notice on file. This is what the system has drafted or sent — it is not a full list of every late tenant.",
+        "no-notice": "Leases that are past their grace period but don't have a notice drafted yet for the current cycle. Something is blocking the draft.",
+      };
+
+      let activeSubtab = "notices";
+
+      subtabNotices.addEventListener("click", (e) => {
+        e.preventDefault();
+        switchSubtab("notices");
+      });
+      subtabNoNotice.addEventListener("click", (e) => {
+        e.preventDefault();
+        switchSubtab("no-notice");
+      });
+
+      function switchSubtab(tab) {
+        if (tab === activeSubtab) return;
+        activeSubtab = tab;
+        subtabNotices.classList.toggle("active", tab === "notices");
+        subtabNoNotice.classList.toggle("active", tab === "no-notice");
+        subtitle.textContent = subtitles[tab];
+        if (tab === "notices") {
+          loadNotices();
+        } else {
+          loadNoNotice();
+        }
+      }
 
       function daysLateClass(days) {
         if (days >= 14) return "high";
@@ -42,39 +74,110 @@
         return `<span class="badge badge-voided">${status}</span>`;
       }
 
-      try {
-        const { notices } = await LimehouseAPI.get("/api/notices");
-
-        if (!notices.length) {
-          listArea.innerHTML = `<div class="empty-state">No notices on file yet. Nothing to review.</div>`;
-          return;
-        }
-
-        // Draft notices needing attention first, then most recent.
-        notices.sort((a, b) => {
-          if (a.status === "draft" && b.status !== "draft") return -1;
-          if (b.status === "draft" && a.status !== "draft") return 1;
-          return new Date(b.drafted_at) - new Date(a.drafted_at);
-        });
-
-        listArea.innerHTML = `<div class="notice-list">${notices
-          .map((n) => `
-            <a class="notice-row status-${n.status}" href="/notice.html?id=${n.id}">
-              <div class="row-top">
-                <span class="tenant-name">${escapeHtml(n.property_name)} — Unit ${escapeHtml(n.unit_label)}</span>
-                <span class="amount">${fmtMoney(n.amount_due_at_draft)}</span>
-              </div>
-              <div class="row-meta">
-                <span class="days-late ${daysLateClass(n.days_late_at_draft)}">${n.days_late_at_draft} days late (at draft)</span>
-                &middot; Drafted ${fmtDate(n.drafted_at)}
-                &middot; ${statusBadge(n.status, n.delivery_status)}
-              </div>
-            </a>
-          `)
-          .join("")}</div>`;
-      } catch (err) {
-        listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+      // How long an open-but-undrafted cycle has been sitting, in plain
+      // English — this is the whole point of the view, so it needs to read
+      // clearly at a glance ("3 days", "since yesterday", etc.).
+      function openDuration(openedAt) {
+        const opened = new Date(openedAt);
+        if (Number.isNaN(opened.getTime())) return "unknown";
+        const ms = Date.now() - opened.getTime();
+        const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+        if (days <= 0) return "since today";
+        if (days === 1) return "1 day";
+        return `${days} days`;
       }
+
+      function openDurationClass(openedAt) {
+        const opened = new Date(openedAt);
+        if (Number.isNaN(opened.getTime())) return "";
+        const days = Math.floor((Date.now() - opened.getTime()) / (1000 * 60 * 60 * 24));
+        if (days >= 3) return "high";
+        if (days >= 1) return "medium";
+        return "";
+      }
+
+      async function loadNotices() {
+        listArea.className = "loading";
+        listArea.innerHTML = "Loading notices…";
+        try {
+          const { notices } = await LimehouseAPI.get("/api/notices");
+
+          if (!notices.length) {
+            listArea.className = "";
+            listArea.innerHTML = `<div class="empty-state">No notices on file yet. Nothing to review.</div>`;
+            return;
+          }
+
+          // Draft notices needing attention first, then most recent.
+          notices.sort((a, b) => {
+            if (a.status === "draft" && b.status !== "draft") return -1;
+            if (b.status === "draft" && a.status !== "draft") return 1;
+            return new Date(b.drafted_at) - new Date(a.drafted_at);
+          });
+
+          listArea.className = "";
+          listArea.innerHTML = `<div class="notice-list">${notices
+            .map((n) => `
+              <a class="notice-row status-${n.status}" href="/notice.html?id=${n.id}">
+                <div class="row-top">
+                  <span class="tenant-name">${escapeHtml(n.property_name)} — Unit ${escapeHtml(n.unit_label)}</span>
+                  <span class="amount">${fmtMoney(n.amount_due_at_draft)}</span>
+                </div>
+                <div class="row-meta">
+                  <span class="days-late ${daysLateClass(n.days_late_at_draft)}">${n.days_late_at_draft} days late (at draft)</span>
+                  &middot; Drafted ${fmtDate(n.drafted_at)}
+                  &middot; ${statusBadge(n.status, n.delivery_status)}
+                </div>
+              </a>
+            `)
+            .join("")}</div>`;
+        } catch (err) {
+          listArea.className = "";
+          listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+        }
+      }
+
+      async function loadNoNotice() {
+        listArea.className = "loading";
+        listArea.innerHTML = "Loading…";
+        try {
+          const { lateNoNotice } = await LimehouseAPI.get("/api/late-no-notice");
+
+          if (!lateNoNotice.length) {
+            listArea.className = "";
+            listArea.innerHTML = `<div class="empty-state">Nothing stuck right now. Every late lease past its grace period has a notice drafted.</div>`;
+            return;
+          }
+
+          listArea.className = "";
+          listArea.innerHTML = `
+            <div class="alert alert-warn">
+              <strong>These need attention:</strong> each of these leases is past its grace period, but no notice has been drafted for the current cycle.
+              Something is blocking it — an unclassifiable charge on the ledger, no PM assigned to the property, or no active letter template.
+              A human needs to look into why before a notice can go out. Nothing to click here — this list is informational only.
+            </div>
+            <div class="notice-list">${lateNoNotice
+              .map((c) => `
+                <div class="notice-row status-draft">
+                  <div class="row-top">
+                    <span class="tenant-name">${escapeHtml(c.property_name)} — Unit ${escapeHtml(c.unit_label)}</span>
+                    <span class="days-late ${openDurationClass(c.opened_at)}">Stuck ${openDuration(c.opened_at)}</span>
+                  </div>
+                  <div class="row-meta">
+                    Due ${fmtDate(c.due_date)}
+                    &middot; Past grace period since ${fmtDate(c.opened_at)}
+                  </div>
+                </div>
+              `)
+              .join("")}</div>
+          `;
+        } catch (err) {
+          listArea.className = "";
+          listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+        }
+      }
+
+      loadNotices();
     })();
   </script>
 </body>

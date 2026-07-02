@@ -1,4 +1,4 @@
-// Version 2 of the 14-day notice of default. This text is built from
+// Version 3 of the 14-day notice of default. This text is built from
 // Limehouse's own attorney-drafted "NOTICE OF DEFAULT - FAILURE TO PAY RENT"
 // form (provided by Jason), not assembled from scratch — every substantive
 // clause below (itemized charges, the Sec. 55.1-1251 damages-for-breach /
@@ -6,6 +6,15 @@
 // Society contact line, the redemption-right/partial-payment paragraph, and
 // the "accepted with reservation" certification line) is carried over from
 // that source document.
+//
+// v3 change from v2: the Court Costs / Attorney's / Filing Fees / TOTAL Fees
+// & Costs lines went from fixed placeholder text ("N/A — assessed upon
+// referral to attorney") to real merge-field values (see below). This is a
+// VALUE change, not a wording change — the blank-field wording itself was
+// already part of the attorney's original approved document; letter_templates
+// rows are immutable (migration 0008's trigger), so populating those blanks
+// with real numbers requires a new version row, same as any other body_
+// markdown edit, even though no legal text changed.
 //
 // Two, and only two, deviations from the attorney's verbatim text were
 // approved by Jason:
@@ -24,17 +33,29 @@
 //
 // Merge fields used: {{tenant_name}}, {{property_address}}, {{unit_label}},
 // {{notice_date}}, {{due_date}}, {{days_late}}, {{amount_due}}, {{pm_name}},
-// {{rent_amount_due}}, {{late_fee_amount_due}}, {{misc_amount_due}}. All
-// fields are defined on MergeFields (renderTemplate.ts) and populated by
-// sendNotice.ts. The itemized rent/late-fee/misc-charge breakdown is backed
-// by real classified Buildium charge data (notice_line_items, migration
-// 0038; classifier in src/buildium/glClassification.ts) as of the change
-// that added those three merge fields — see that change's report for the
+// {{rent_amount_due}}, {{late_fee_amount_due}}, {{misc_amount_due}},
+// {{court_costs_amount}}, {{attorney_fees_amount}},
+// {{total_fees_and_costs_amount}}. All fields are defined on MergeFields
+// (renderTemplate.ts) and populated by sendNotice.ts (and mirrored in
+// noticeRoutes.ts's preview endpoint). The itemized rent/late-fee/misc-charge
+// breakdown is backed by real classified Buildium charge data
+// (notice_line_items, migration 0038; classifier in
+// src/buildium/glClassification.ts) — see that change's report for the
 // live-verification details (real GL account Type/SubType/Name values
-// observed against Limehouse's actual chart of accounts). Court Costs /
-// Attorney's-Fees line items remain OUT OF SCOPE for this table (day-18
-// attorney-referral stage only) and still render as fixed placeholder text
-// below, unchanged.
+// observed against Limehouse's actual chart of accounts).
+//
+// Court Costs / Attorney's / Filing Fees / TOTAL Fees & Costs are NO LONGER
+// placeholder text. Per Jason's explicit instruction, these three lines now
+// always render fixed, same-for-every-notice ESTIMATES (not ledger-derived,
+// unlike the three fields above) — $91 court costs / $600 attorney's fees as
+// of migrations 0040/0041, editable going forward by seeding a new config
+// version (src/lib/config.ts getEstimatedCourtCosts/getEstimatedAttorneyFees).
+// This applies on every notice, not just after a day-18 attorney referral —
+// Jason confirmed this is the actual number his attorney-approved paper form
+// already puts on every notice. The template WORDING of these three lines
+// was already reviewed and approved as part of the attorney's original
+// source document; only the values behind the blanks changed here, so this
+// did not require a fresh Mason legal review.
 //
 // IMPORTANT: Mason has reviewed this exact source text and confirmed it
 // resolves the Fair Housing / VRLTA concerns that existed with the prior
@@ -44,7 +65,7 @@
 // testing this rendered output end-to-end, then Judge's review — has passed.
 // It is safe to load in shadow mode, where Send is a no-op.
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
-export const INITIAL_TEMPLATE_VERSION = 2;
+export const INITIAL_TEMPLATE_VERSION = 3;
 
 export const INITIAL_SUBJECT_LINE =
   "NOTICE OF DEFAULT — FAILURE TO PAY RENT — {{unit_label}}";
@@ -79,9 +100,9 @@ immediate legal proceedings. In accordance with Section 55.1-1245 of the
 Code of Virginia, you may then be liable for the following additional
 court costs and attorney's fees:
 
-Court Costs: N/A — assessed upon referral to attorney
-Attorney's / Filing Fees: N/A — assessed upon referral to attorney
-TOTAL Fees & Costs: N/A — assessed upon referral to attorney
+Court Costs: {{court_costs_amount}}
+Attorney's / Filing Fees: {{attorney_fees_amount}}
+TOTAL Fees & Costs: {{total_fees_and_costs_amount}}
 
 **YOU MAY AVOID PAYING ATTORNEY'S FEES AND COURT COSTS IF THE LANDLORD
 RECEIVES THE TOTAL AMOUNT DUE WITHIN FOURTEEN (14) DAYS OF THIS NOTICE.

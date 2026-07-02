@@ -42,6 +42,7 @@ authRoutes.get("/auth/callback", async (req, res) => {
     );
 
     if (pmResult.rows.length === 0 || !pmResult.rows[0].active) {
+      console.error("unauthorized login attempt", { entraObjectId: identity.entraObjectId, email: identity.email });
       res.status(403).send("Your account is not authorized to access this dashboard. Contact Jason.");
       return;
     }
@@ -77,7 +78,12 @@ authRoutes.get("/auth/callback", async (req, res) => {
 
     res.redirect("/");
   } catch (err) {
-    console.error("auth callback failed", err instanceof Error ? err.message : err);
+    const cause = err instanceof Error && err.cause ? err.cause : undefined;
+    console.error(
+      "auth callback failed",
+      err instanceof Error ? err.message : err,
+      cause ? { cause } : ""
+    );
     res.status(500).send("Login failed. Please try again or contact Jason.");
   }
 });

@@ -18,6 +18,15 @@ export interface AlertMessage {
 export async function sendAlert(alert: AlertMessage): Promise<void> {
   const env = loadEnv();
 
+  // Shadow mode: same no-op-and-log pattern as sendNotice.ts's Step 3 — log
+  // that this WOULD have been posted to Teams, but do not actually call the
+  // webhook. This is the default, required starting state — there is
+  // deliberately no flag to skip it from inside this function.
+  if (env.SHADOW_MODE) {
+    logInfo("shadow mode: Teams alert suppressed", { jobName: alert.subject });
+    return;
+  }
+
   // Teams "MessageCard" payload — the format the classic incoming-webhook
   // connector expects. themeColor red signals "this needs attention" at a
   // glance in the channel.

@@ -1,4 +1,5 @@
 import { loadEnv } from "../config/env.js";
+import { logInfo } from "../lib/appLogger.js";
 
 // Sends mail via Microsoft Graph's sendMail API using application
 // permissions (client-credentials flow) against a shared compliance
@@ -66,6 +67,21 @@ export async function sendPmNotificationEmail(
   subject: string,
   bodyText: string
 ): Promise<GraphSendResult> {
+  const env = loadEnv();
+
+  // Shadow mode: same no-op-and-log pattern as sendNotice.ts's Step 3 — log
+  // that this WOULD have been sent, but do not actually call Graph sendMail.
+  // This is the default, required starting state — there is deliberately no
+  // flag to skip it from inside this function.
+  if (env.SHADOW_MODE) {
+    logInfo("shadow mode: PM notification email suppressed", {
+      // toEmail/subject/bodyText are PII (email address, notice detail) and
+      // must not go through appLogger — see its PII guard. Only the
+      // trace-safe fact that a send was suppressed is logged here.
+    });
+    return { success: true };
+  }
+
   return sendGraphMail({
     subject,
     bodyHtml: bodyText.replace(/\n/g, "<br>"),

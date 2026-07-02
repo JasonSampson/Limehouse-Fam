@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { fetchLeaseCharges, fetchGlAccountsById, type BuildiumGlAccount } from "../buildium/client.js";
+import { fetchLeaseOutstandingBalance, fetchGlAccountsById, type BuildiumGlAccount } from "../buildium/client.js";
 import {
   classifyGlAccount,
   UnclassifiableChargeError,
@@ -32,7 +32,9 @@ interface ClassifiedLine {
   glAccountSubtype: string | null;
   description: string | null;
   amount: number;
-  chargeDate: string; // YYYY-MM-DD, from Buildium's charge Date field
+  chargeDate: string | null; // YYYY-MM-DD; null because a balance bucket is a
+  // point-in-time "currently owed" figure, not a single dated charge — see
+  // fetchAndClassifyLeaseCharges below.
 }
 
 function toClassificationInput(glAccount: BuildiumGlAccount): GlAccountForClassification {
@@ -46,103 +48,134 @@ function toClassificationInput(glAccount: BuildiumGlAccount): GlAccountForClassi
   };
 }
 
-// Fetches a lease's live charges from Buildium, resolves each line's GL
-// account, and classifies every line into a notice_line_items bucket. Never
-// returns a partial/best-guess result: if ANY charge line can't be cleanly
-// classified, the whole call throws UnclassifiedChargeBlockedError instead
-// of silently dropping that dollar amount from what becomes a legal notice.
-export async function fetchAndClassifyLeaseCharges(buildiumLeaseId: string): Promise<ClassifiedLine[]> {
-  const [charges, glAccountsById] = await Promise.all([
-    fetchLeaseCharges(buildiumLeaseId),
+// Every classified GL balance line, POSITIVE and NEGATIVE, plus which bucket
+// it nets into. `positiveLines` (amount > 0) is what actually gets displayed/
+// inserted as notice_line_items rows; `bucketTotals` is the fully-netted sum
+// per bucket (including negative/credit lines) — see the big comment on
+// fetchAndClassifyLeaseCharges below for why both are needed.
+export interface ClassifiedBalance {
+  positiveLines: ClassifiedLine[];
+  bucketTotals: Record<NoticeLineItemBucket, number>;
+}
+
+// Fetches a lease's CURRENT outstanding balance, broken down per GL account
+// (Buildium's own `Balances` array on /leases/outstandingbalances — already
+// netted against payments, NOT a sum of historical charges), resolves each
+// GL account, and classifies each balance into a notice_line_items bucket.
+// Never returns a partial/best-guess result: if any balance line can't be
+// cleanly classified, the whole call throws UnclassifiedChargeBlockedError
+// instead of silently dropping that dollar amount from what becomes a legal
+// notice.
+//
+// IMPORTANT — this deliberately does NOT use fetchLeaseCharges() /
+// /leases/{id}/charges. That endpoint returns every charge ever posted since
+// the lease began, with no way to tell paid from unpaid. Summing it produces
+// a number with no relationship to what's actually owed today — confirmed
+// live on real lease 2317038: summing 3 years of charges gave $110,044.67
+// against a real current balance of $3,115.95. The `Balances` array used
+// here is Buildium's own current-balance-by-GL-account breakdown; verified
+// live that sum(Balances[].TotalBalance) === TotalBalance for every one of
+// 57 real leases with a nonzero balance, so classifying and summing THIS
+// array is guaranteed to reconcile to the real total, by construction.
+//
+// NEGATIVE (credit) balance lines: a per-GL-account balance can be negative
+// even when the lease's overall TotalBalance is positive — confirmed live on
+// real leases 2490757 and 2687271, both carrying a -$25 credit on "Admin
+// Manual Payment Process Fee" (GL 812829) while still owing money overall.
+// That credit is a real, current offset against what's owed — dropping it
+// (treating it as "nothing to itemize") makes the bucket sums $25 too HIGH
+// vs. the true balance, reintroducing exactly the kind of mismatch this fix
+// exists to eliminate. So every balance line, positive or negative, is
+// classified and netted into bucketTotals. Only strictly-positive lines are
+// added to positiveLines (the notice_line_items detail rows a tenant
+// actually sees) — notice_line_items' ck_notice_line_items_amount_positive
+// constraint requires amount > 0, and a legal notice should never display a
+// negative "amount owed" line. The credit still reduces that bucket's total,
+// it just isn't rendered as its own line.
+export async function fetchAndClassifyLeaseCharges(buildiumLeaseId: string): Promise<ClassifiedBalance> {
+  const [leaseBalance, glAccountsById] = await Promise.all([
+    fetchLeaseOutstandingBalance(buildiumLeaseId),
     fetchGlAccountsById(),
   ]);
 
-  const classified: ClassifiedLine[] = [];
+  const positiveLines: ClassifiedLine[] = [];
+  const bucketTotals: Record<NoticeLineItemBucket, number> = { rent: 0, late_fee: 0, other: 0 };
   const unclassifiable: { chargeId: number; glAccountId: number; glAccountName: string; amount: number }[] = [];
 
-  for (const charge of charges) {
-    for (const line of charge.Lines) {
-      // A charge line at or below zero is a credit/refund/reversal, not a
-      // charge to itemize on a legal notice demanding payment (see
-      // notice_line_items' ck_notice_line_items_amount_positive constraint
-      // and migration 0039's design note) — flag rather than silently drop
-      // or insert an amount the DB constraint would reject anyway.
-      if (line.Amount <= 0) {
-        const glAccount = glAccountsById.get(line.GLAccountId);
-        unclassifiable.push({
-          chargeId: charge.Id,
-          glAccountId: line.GLAccountId,
-          glAccountName: glAccount?.Name ?? `<unknown GL account ${line.GLAccountId}>`,
-          amount: line.Amount,
-        });
+  for (const balanceLine of leaseBalance.balancesByGl) {
+    // A zero balance on a GL account means nothing currently outstanding on
+    // it — not worth resolving/classifying at all.
+    if (balanceLine.balance === 0) {
+      continue;
+    }
+
+    const glAccount = glAccountsById.get(balanceLine.glAccountId);
+    if (!glAccount) {
+      // Buildium returned a GLAccountId in the balance breakdown that isn't
+      // in the chart of accounts we just fetched — should not happen, but an
+      // account we cannot even identify is exactly the "don't guess" case,
+      // not a bucket to fall back to.
+      unclassifiable.push({
+        chargeId: balanceLine.glAccountId,
+        glAccountId: balanceLine.glAccountId,
+        glAccountName: `<unknown GL account ${balanceLine.glAccountId}>`,
+        amount: balanceLine.balance,
+      });
+      continue;
+    }
+
+    try {
+      const bucket = classifyGlAccount(toClassificationInput(glAccount));
+      if (bucket === EXCLUDED_NOT_A_CHARGE) {
+        // Not a tenant charge at all (e.g. Security Deposit Liability,
+        // Prepayments — see glClassification.ts's EXCLUDED_GL_ACCOUNTS
+        // comment) — silently left out of the itemization entirely: not
+        // summed into any bucket total, not inserted as a notice_line_items
+        // row, and NOT added to `unclassifiable` below. This is different
+        // from the unknown-account / UnclassifiableChargeError cases, which
+        // both still block the notice for human review.
         continue;
       }
-
-      const glAccount = glAccountsById.get(line.GLAccountId);
-      if (!glAccount) {
-        // Buildium returned a GLAccountId on this charge that isn't in the
-        // chart of accounts we just fetched — should not happen, but a
-        // charge we cannot even identify the account for is exactly the
-        // "don't guess" case, not a bucket to fall back to.
-        unclassifiable.push({
-          chargeId: charge.Id,
-          glAccountId: line.GLAccountId,
-          glAccountName: `<unknown GL account ${line.GLAccountId}>`,
-          amount: line.Amount,
-        });
-        continue;
-      }
-
-      try {
-        const bucket = classifyGlAccount(toClassificationInput(glAccount));
-        if (bucket === EXCLUDED_NOT_A_CHARGE) {
-          // Not a tenant charge at all (e.g. Security Deposit Liability,
-          // Prepayments — see glClassification.ts's EXCLUDED_GL_ACCOUNTS
-          // comment) — silently left out of the itemization entirely: not
-          // summed into any bucket, not inserted as a notice_line_items row,
-          // and NOT added to `unclassifiable` below. This is different from
-          // the amount<=0 / unknown-account / UnclassifiableChargeError
-          // cases, which all still block the notice for human review.
-          continue;
-        }
-        classified.push({
+      bucketTotals[bucket] += balanceLine.balance;
+      if (balanceLine.balance > 0) {
+        positiveLines.push({
           bucket,
           buildiumGlAccountId: String(glAccount.Id),
           glAccountName: glAccount.Name,
           glAccountType: glAccount.Type,
           glAccountSubtype: glAccount.SubType,
-          description: charge.Memo,
-          amount: line.Amount,
-          chargeDate: charge.Date,
+          description: null, // a balance bucket has no single charge memo
+          amount: balanceLine.balance,
+          chargeDate: null, // a balance bucket has no single charge date
         });
-      } catch (err) {
-        if (err instanceof UnclassifiableChargeError) {
-          unclassifiable.push({
-            chargeId: charge.Id,
-            glAccountId: glAccount.Id,
-            glAccountName: glAccount.Name,
-            amount: line.Amount,
-          });
-        } else {
-          throw err;
-        }
+      }
+    } catch (err) {
+      if (err instanceof UnclassifiableChargeError) {
+        unclassifiable.push({
+          chargeId: glAccount.Id,
+          glAccountId: glAccount.Id,
+          glAccountName: glAccount.Name,
+          amount: balanceLine.balance,
+        });
+      } else {
+        throw err;
       }
     }
   }
 
   if (unclassifiable.length > 0) {
     const summary = unclassifiable
-      .map((u) => `charge ${u.chargeId}: GL ${u.glAccountId} ("${u.glAccountName}") $${u.amount}`)
+      .map((u) => `GL ${u.glAccountId} ("${u.glAccountName}") $${u.amount}`)
       .join("; ");
     throw new UnclassifiedChargeBlockedError(
-      `Lease ${buildiumLeaseId} has ${unclassifiable.length} charge line(s) that could not be safely ` +
-        `classified into rent/late_fee/other: ${summary}. Refusing to drop these amounts from a legal notice.`,
+      `Lease ${buildiumLeaseId} has ${unclassifiable.length} outstanding-balance line(s) that could not be ` +
+        `safely classified into rent/late_fee/other: ${summary}. Refusing to drop these amounts from a legal notice.`,
       buildiumLeaseId,
       unclassifiable
     );
   }
 
-  return classified;
+  return { positiveLines, bucketTotals };
 }
 
 // Inserts one notice_line_items row per classified charge line, all at the
@@ -174,14 +207,4 @@ export async function insertNoticeLineItems(
       ]
     );
   }
-}
-
-// Sums classified lines by bucket — used to populate the new rent/late-fee/
-// misc merge fields at send time.
-export function sumByBucket(lines: ClassifiedLine[]): Record<NoticeLineItemBucket, number> {
-  const sums: Record<NoticeLineItemBucket, number> = { rent: 0, late_fee: 0, other: 0 };
-  for (const line of lines) {
-    sums[line.bucket] += line.amount;
-  }
-  return sums;
 }

@@ -206,8 +206,8 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
       // can check for notices with zero notice_line_items rows), which is
       // safer than either silently guessing a bucket or aborting the whole
       // day's run over one lease's chart-of-accounts problem.
-      const classifiedLines = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
-      await insertNoticeLineItems(jobPool, noticeId, "draft", classifiedLines);
+      const classifiedBalance = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
+      await insertNoticeLineItems(jobPool, noticeId, "draft", classifiedBalance.positiveLines);
 
       // Recipients: every listed tenant on the lease gets a "to" entry
       // (roommates/co-signers all receive the notice, not just one), plus

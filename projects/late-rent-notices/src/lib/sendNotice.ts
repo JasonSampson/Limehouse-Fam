@@ -6,7 +6,6 @@ import { calculateLateness } from "./lateness.js";
 import {
   fetchAndClassifyLeaseCharges,
   insertNoticeLineItems,
-  sumByBucket,
   UnclassifiedChargeBlockedError,
 } from "./noticeLineItems.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
@@ -147,9 +146,9 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   // send the same way ledger-verification-missing or a not-found notice
   // does — never let a dollar amount silently disappear from, or get
   // guessed into the wrong bucket of, a legal notice.
-  let classifiedLines;
+  let classifiedBalance;
   try {
-    classifiedLines = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
+    classifiedBalance = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
   } catch (err) {
     if (err instanceof UnclassifiedChargeBlockedError) {
       throw new SendBlockedError(
@@ -159,9 +158,15 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     }
     throw err;
   }
-  const bucketSums = sumByBucket(classifiedLines);
+  // bucketTotals is fully netted (includes any credit/negative GL balance —
+  // see noticeLineItems.ts's big comment) so rent+late_fee+other always
+  // equals the true live balance exactly, even in the rare case where one
+  // GL account carries a credit while the lease still owes overall.
+  // positiveLines is the (always amount > 0) detail stored for the audit
+  // trail / notice support detail.
+  const bucketSums = classifiedBalance.bucketTotals;
 
-  await insertNoticeLineItems(client, params.noticeId, "send", classifiedLines);
+  await insertNoticeLineItems(client, params.noticeId, "send", classifiedBalance.positiveLines);
 
   if (env.SHADOW_MODE) {
     // Shadow mode: the daily job and drafting run for real, but Send is a

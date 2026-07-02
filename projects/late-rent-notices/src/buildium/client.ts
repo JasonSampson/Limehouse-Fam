@@ -85,17 +85,41 @@ export async function fetchActiveLeases(): Promise<BuildiumLease[]> {
 // endpoint's own description: "Leases with a zero or credit balance will
 // not be returned" — a lease with nothing owed simply won't appear in the
 // results, which callers must treat as balance = 0, not an error.
+//
+// CONFIRMED LIVE 2026-07-02: each row also carries a `Balances` array —
+// TotalBalance broken down PER GL ACCOUNT (already netted against payments
+// by Buildium, not a raw charge sum). Verified against all 57 real active
+// leases with a nonzero balance: sum(Balances[].TotalBalance) === the row's
+// own TotalBalance in every single case (0 mismatches). This is the
+// authoritative "what's actually currently owed, by category" breakdown —
+// see noticeLineItems.ts, which classifies THIS array instead of summing
+// /leases/{id}/charges (that endpoint returns the full lifetime charge
+// ledger since lease inception, not what's currently outstanding, and
+// summing it produced itemized totals 30-40x the real balance on a real
+// lease — GL 2317038, $110,044.67 itemized vs $3,115.95 actually owed).
+const buildiumOutstandingBalanceByGlSchema = z.object({
+  GlAccountId: z.number(),
+  TotalBalance: z.number(),
+});
+
 const buildiumOutstandingBalanceSchema = z.object({
   LeaseId: z.number(),
   PropertyId: z.number(),
   TotalBalance: z.number(),
   EvictionPendingDate: z.string().nullable(),
+  Balances: z.array(buildiumOutstandingBalanceByGlSchema).nullable(),
 });
+
+export interface LeaseBalanceByGl {
+  glAccountId: number;
+  balance: number;
+}
 
 export interface LeaseBalance {
   leaseId: string;
   balance: number;
   evictionPendingDate: string | null;
+  balancesByGl: LeaseBalanceByGl[];
 }
 
 export async function fetchOutstandingBalances(): Promise<LeaseBalance[]> {
@@ -107,6 +131,7 @@ export async function fetchOutstandingBalances(): Promise<LeaseBalance[]> {
     leaseId: String(r.LeaseId),
     balance: r.TotalBalance,
     evictionPendingDate: r.EvictionPendingDate,
+    balancesByGl: (r.Balances ?? []).map((b) => ({ glAccountId: b.GlAccountId, balance: b.TotalBalance })),
   }));
 }
 
@@ -118,10 +143,15 @@ export async function fetchLeaseOutstandingBalance(buildiumLeaseId: string): Pro
     z.array(buildiumOutstandingBalanceSchema)
   );
   if (rows.length === 0) {
-    return { leaseId: buildiumLeaseId, balance: 0, evictionPendingDate: null };
+    return { leaseId: buildiumLeaseId, balance: 0, evictionPendingDate: null, balancesByGl: [] };
   }
   const r = rows[0];
-  return { leaseId: String(r.LeaseId), balance: r.TotalBalance, evictionPendingDate: r.EvictionPendingDate };
+  return {
+    leaseId: String(r.LeaseId),
+    balance: r.TotalBalance,
+    evictionPendingDate: r.EvictionPendingDate,
+    balancesByGl: (r.Balances ?? []).map((b) => ({ glAccountId: b.GlAccountId, balance: b.TotalBalance })),
+  };
 }
 
 // CONFIRMED via OpenAPI spec "RentalMessage": RentalManager is an object
@@ -187,10 +217,22 @@ const buildiumLeaseChargeSchema = z.object({
 
 export type BuildiumLeaseCharge = z.infer<typeof buildiumLeaseChargeSchema>;
 
-// Fetches every charge (not payments/credits — /leases/{id}/transactions
-// covers the full ledger, this endpoint is charges only) posted to a lease.
-// Used both at draft time and again at send time to snapshot the itemized
-// breakdown (see notice_line_items / migration 0038).
+// Fetches every charge ever posted to a lease (not payments/credits —
+// /leases/{id}/transactions covers the full ledger, this endpoint is charges
+// only) since lease inception.
+//
+// DO NOT use this to compute what a tenant currently owes: it is the FULL
+// HISTORICAL charge ledger with no date filter and no way to distinguish
+// paid from unpaid charges. Summing it produces a number with no
+// relationship to the real current balance — confirmed live on real lease
+// 2317038, where summing every charge since 2023 gave $110,044.67 against a
+// real outstanding balance of $3,115.95 (35x too high). notice_line_items'
+// itemized breakdown is now computed from fetchOutstandingBalances'/
+// fetchLeaseOutstandingBalance's `balancesByGl` field instead (see
+// noticeLineItems.ts), which Buildium itself already nets against payments
+// down to what's actually currently owed, broken down per GL account.
+// This function is kept for any future need to look at charge HISTORY
+// (e.g. an audit view), not for computing a currently-owed itemization.
 export async function fetchLeaseCharges(buildiumLeaseId: string): Promise<BuildiumLeaseCharge[]> {
   return buildiumGet<BuildiumLeaseCharge[]>(
     `/leases/${encodeURIComponent(buildiumLeaseId)}/charges?limit=1000`,

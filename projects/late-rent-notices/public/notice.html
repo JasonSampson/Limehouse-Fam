@@ -100,7 +100,7 @@
                 <iframe
                   id="${frameId}"
                   title="Notice preview for ${escapeHtml(r.tenantName)}"
-                  sandbox=""
+                  sandbox="allow-same-origin"
                   referrerpolicy="no-referrer"
                   style="width:100%; min-height:220px; border:1px solid var(--gray-border); border-radius: 6px; background:#fff;"
                 ></iframe>
@@ -114,9 +114,14 @@
       // or srcdoc string interpolation — this keeps the template's rendered
       // HTML (which is only as trustworthy as the letter template + tenant
       // merge fields) from ever being parsed into the parent page's DOM.
-      // sandbox="" (no attribute values) strips ALL iframe privileges: no
-      // script execution, no same-origin access, no form submission, no
-      // top-level navigation — it can only render as inert markup.
+      // sandbox="allow-same-origin" (and nothing else) blocks script
+      // execution, form submission, and top-level navigation from inside the
+      // frame — allow-scripts is deliberately never granted, so even if the
+      // letter content somehow contained a <script> tag, it could not run.
+      // allow-same-origin is required only so this function itself can reach
+      // frame.contentDocument to write the content in; a bare sandbox=""
+      // makes the frame a fully opaque cross-origin document and
+      // contentDocument returns null even to this same-page script.
       function paintLetterPreviews(notice) {
         if (!notice.recipients) return;
         notice.recipients.forEach((r, idx) => {

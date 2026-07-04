@@ -45,11 +45,22 @@ export interface GraphRecipient {
   email: string;
 }
 
+// Graph's fileAttachment shape: base64-encoded bytes, a display filename,
+// and the MIME content type. Optional on GraphSendMailRequest — only the
+// 14-Day Notice send path (sendNotice.ts) attaches anything today, so every
+// OTHER caller (sendPmNotificationEmail, etc.) is unaffected.
+export interface GraphAttachment {
+  name: string;
+  contentType: string;
+  contentBytes: Buffer;
+}
+
 export interface GraphSendMailRequest {
   subject: string;
   bodyHtml: string;
   toRecipients: GraphRecipient[];
   ccRecipients: GraphRecipient[];
+  attachments?: GraphAttachment[];
 }
 
 export interface GraphSendResult {
@@ -105,6 +116,15 @@ export async function sendGraphMail(req: GraphSendMailRequest): Promise<GraphSen
             body: { contentType: "HTML", content: req.bodyHtml },
             toRecipients: req.toRecipients.map((r) => ({ emailAddress: { address: r.email } })),
             ccRecipients: req.ccRecipients.map((r) => ({ emailAddress: { address: r.email } })),
+            // Graph's fileAttachment format: "@odata.type" tells Graph which
+            // attachment subtype this is; contentBytes must be base64, not
+            // raw binary, in the JSON body.
+            attachments: (req.attachments ?? []).map((a) => ({
+              "@odata.type": "#microsoft.graph.fileAttachment",
+              name: a.name,
+              contentType: a.contentType,
+              contentBytes: a.contentBytes.toString("base64"),
+            })),
           },
           saveToSentItems: true,
         }),

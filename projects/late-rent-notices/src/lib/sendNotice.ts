@@ -10,6 +10,7 @@ import {
 } from "./noticeLineItems.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
 import { sendGraphMail } from "../email/graphMailer.js";
+import { generateNoticePdf } from "./generateNoticePdf.js";
 import { writeAuditLog } from "./auditLog.js";
 import { startTrace } from "./trace.js";
 import { logInfo } from "./appLogger.js";
@@ -276,11 +277,25 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
     const bodyHtml = renderTemplate(template.body_markdown, mergeFields).replace(/\n/g, "<br>");
 
+    // Print-formatted PDF copy of the same notice, matching the attorney's
+    // original paper form layout, attached so the tenant (and Jason, if this
+    // ends up in court) has something that can be printed as a physical
+    // exhibit — see generateNoticePdf.ts. Built from the SAME mergeFields as
+    // the email body above; the wording is never re-typed, only reformatted.
+    const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
+
     const result = await sendGraphMail({
       subject,
       bodyHtml,
       toRecipients: [{ email: toRecipient.email_address }],
       ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
+      attachments: [
+        {
+          name: `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
+          contentType: "application/pdf",
+          contentBytes: noticePdf,
+        },
+      ],
     });
 
     await client.query(

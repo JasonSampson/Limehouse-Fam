@@ -10,6 +10,7 @@ import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
 import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../lib/config.js";
+import { generateNoticePdf, NoticeBodyParseError, ChromeNotFoundError } from "../lib/generateNoticePdf.js";
 
 export const noticeRoutes = Router();
 noticeRoutes.use(requireSession);
@@ -295,6 +296,154 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
     return;
   }
   res.json({ notice: detail });
+});
+
+// Print-formatted PDF preview/download for one notice — lets a PM see and
+// print the EXACT document that would be attached at send time (matching
+// the attorney's original paper form layout) before clicking Review & Send,
+// same "review before you send a legal document" principle the detail
+// route above documents. Deliberately re-queries the DB fresh (same pattern
+// as the send route below, not the detail route's closures) rather than
+// sharing state across routes.
+//
+// Same withPmScope/RLS visibility as every other route here — a PM can only
+// generate a PDF for a notice actually visible to them.
+//
+// A notice can have more than one "to" recipient (roommates/co-signers),
+// each seeing their own name in the body — ?recipient=<email> selects which
+// one to render; omitted defaults to the first "to" recipient, matching the
+// order the detail route's `recipients` array already returns.
+noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
+  const session = req.session!;
+  const noticeId = Number(req.params.id);
+  if (!Number.isInteger(noticeId) || noticeId <= 0) {
+    res.status(400).json({ error: "Invalid notice id." });
+    return;
+  }
+  const requestedRecipientEmail =
+    typeof req.query.recipient === "string" ? req.query.recipient : undefined;
+
+  try {
+    const built = await withPmScope(session.pmUserId, async (client) => {
+      const noticeResult = await client.query<{
+        id: number;
+        amount_due_at_draft: string;
+        days_late_at_draft: number;
+        amount_due_at_send: string | null;
+        days_late_at_send: number | null;
+        letter_template_id: number;
+        drafted_at: Date;
+        sent_at: Date | null;
+        unit_label: string;
+        property_address: string;
+        assigned_pm_name: string;
+      }>(
+        `SELECT n.id, n.amount_due_at_draft, n.days_late_at_draft,
+                n.amount_due_at_send, n.days_late_at_send, n.letter_template_id,
+                n.drafted_at, n.sent_at,
+                l.unit_label,
+                (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+                pm.display_name AS assigned_pm_name
+         FROM notices n
+         JOIN leases l ON l.id = n.lease_id
+         JOIN properties p ON p.id = l.property_id
+         JOIN pm_users pm ON pm.id = n.assigned_pm_id
+         WHERE n.id = $1`,
+        [noticeId]
+      );
+      if (noticeResult.rows.length === 0) {
+        return null;
+      }
+      const notice = noticeResult.rows[0];
+
+      const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
+        "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
+        [notice.letter_template_id]
+      );
+      const template = templateResult.rows[0];
+
+      const recipientsResult = await client.query<{ email_address: string; full_name: string | null }>(
+        `SELECT nr.email_address, lt.full_name
+         FROM notice_recipients nr
+         LEFT JOIN lease_tenants lt ON lt.id = nr.lease_tenant_id
+         WHERE nr.notice_id = $1 AND nr.recipient_type = 'to'
+         ORDER BY lt.full_name`,
+        [noticeId]
+      );
+      if (recipientsResult.rows.length === 0) {
+        return { notFoundReason: "no_to_recipients" as const };
+      }
+      const toRecipient = requestedRecipientEmail
+        ? recipientsResult.rows.find((r) => r.email_address === requestedRecipientEmail)
+        : recipientsResult.rows[0];
+      if (!toRecipient) {
+        return { notFoundReason: "recipient_not_found" as const };
+      }
+
+      const lineItemsResult = await client.query<{ snapshot_stage: string; bucket: string; amount: string }>(
+        `SELECT snapshot_stage, bucket, amount FROM notice_line_items WHERE notice_id = $1`,
+        [noticeId]
+      );
+      const lineItemStage = lineItemsResult.rows.some((r) => r.snapshot_stage === "send") ? "send" : "draft";
+      const lineItems = lineItemsResult.rows.filter((r) => r.snapshot_stage === lineItemStage);
+      const sumBucket = (bucket: string) =>
+        lineItems.filter((li) => li.bucket === bucket).reduce((sum, li) => sum + Number(li.amount), 0);
+
+      const amountDue = notice.amount_due_at_send ?? notice.amount_due_at_draft;
+      const daysLate = notice.days_late_at_send ?? notice.days_late_at_draft;
+      const dueDateSource = notice.sent_at ?? notice.drafted_at;
+
+      const { amount: courtCosts } = await getEstimatedCourtCosts(client);
+      const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
+
+      const mergeFields: MergeFields = {
+        tenant_name: toRecipient.full_name ?? "Tenant",
+        unit_label: notice.unit_label,
+        amount_due: formatCurrency(Number(amountDue)),
+        days_late: String(daysLate),
+        due_date: dueDateSource.toISOString().slice(0, 10),
+        notice_date: (notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
+        property_address: notice.property_address,
+        pm_name: notice.assigned_pm_name,
+        rent_amount_due: formatCurrency(sumBucket("rent")),
+        late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
+        misc_amount_due: formatCurrency(sumBucket("other")),
+        court_costs_amount: formatCurrency(courtCosts),
+        attorney_fees_amount: formatCurrency(attorneyFees),
+        total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
+      };
+
+      return { mergeFields, subjectLine: template.subject_line, unitLabel: notice.unit_label };
+    });
+
+    if (!built) {
+      res.status(404).json({ error: "Notice not found or not visible to you." });
+      return;
+    }
+    if ("notFoundReason" in built) {
+      res.status(404).json({ error: "No matching recipient found for this notice." });
+      return;
+    }
+
+    const pdf = await generateNoticePdf(built.mergeFields, built.subjectLine);
+    const filename = `14-Day-Notice-${built.unitLabel.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.send(pdf);
+  } catch (err) {
+    if (err instanceof NoticeBodyParseError) {
+      console.error("notice PDF generation failed: body parse error", err.message);
+      res.status(500).json({ error: "Could not generate the PDF: the notice text didn't match the expected layout. Check with Jason before sending." });
+      return;
+    }
+    if (err instanceof ChromeNotFoundError) {
+      console.error("notice PDF generation failed: Chrome not found", err.message);
+      res.status(500).json({ error: "Could not generate the PDF: no Chrome browser is available on this server. Check with Scotty." });
+      return;
+    }
+    console.error("notice PDF generation failed", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "PDF generation failed unexpectedly." });
+  }
 });
 
 const sendBodySchema = z.object({

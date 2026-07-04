@@ -43,6 +43,16 @@ const envSchema = z.object({
 
   JASON_ALERT_EMAIL: z.string().email(),
 
+  // Optional. Path to a Chrome/Chromium executable used by
+  // generateNoticePdf.ts (puppeteer-core drives this browser to render the
+  // print HTML into a PDF — see that file's doc comment for why puppeteer-
+  // core, not full puppeteer, was chosen). If unset, generateNoticePdf.ts
+  // falls back to a short list of common install paths for the current OS.
+  // Only needs to be set explicitly if Chrome is installed somewhere
+  // non-standard (e.g. a locked-down server image) — Scotty should confirm
+  // this at deploy time.
+  CHROME_EXECUTABLE_PATH: z.string().optional(),
+
   // Job-failure alerts go to a Microsoft Teams channel via an incoming
   // webhook (Jason's choice — kept independent of the Graph mailbox used
   // for tenant notices, so a Graph outage can't also silence the alert

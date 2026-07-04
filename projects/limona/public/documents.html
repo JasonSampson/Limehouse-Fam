@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Limona — Document Library</title>
+  <link rel="icon" type="image/png" href="/images/limona-avatar.png" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="admin-shell">
+    <nav id="sidebar-root" class="sidebar"></nav>
+    <div class="admin-content">
+      <div id="error" class="error" style="display:none;"></div>
+
+      <h1>Document Library</h1>
+      <p class="muted">Every document currently in the knowledge base.</p>
+
+      <div class="card">
+        <label for="filter-category">Filter by category</label>
+        <select id="filter-category"></select>
+        <table id="documents-table">
+          <thead>
+            <tr><th>Filename</th><th>Category</th><th>Status</th><th>Version</th><th>Uploaded</th><th></th></tr>
+          </thead>
+          <tbody id="documents-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script src="/js/sidebar.js"></script>
+  <script src="/js/documents.js"></script>
+</body>
+</html>

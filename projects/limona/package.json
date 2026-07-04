@@ -1,0 +1,49 @@
+{
+  "name": "limona",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Limona v1 — staff-only internal knowledge base chatbot for Limehouse Property Management. Own standalone database, separate from late-rent-notices and limehouse-dashboard.",
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env NODE_OPTIONS=--use-system-ca tsx watch src/server.ts",
+    "start": "cross-env NODE_OPTIONS=--use-system-ca tsx src/server.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "migrate": "node-pg-migrate",
+    "migrate:up": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "bootstrap-admin": "cross-env NODE_OPTIONS=--use-system-ca tsx src/scripts/bootstrapAdmin.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "test:db": "vitest run --config vitest.config.db.ts",
+    "test:all": "npm run test && npm run test:db"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "mammoth": "^1.8.0",
+    "multer": "^2.2.0",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/express": "^4.17.21",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/pg": "^8.11.0",
+    "@types/supertest": "^7.2.0",
+    "cross-env": "^10.1.0",
+    "node-pg-migrate": "^7.6.1",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.9"
+  }
+}

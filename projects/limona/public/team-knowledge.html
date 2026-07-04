@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Limona — Team Knowledge</title>
+  <link rel="icon" type="image/png" href="/images/limona-avatar.png" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="admin-shell">
+    <nav id="sidebar-root" class="sidebar"></nav>
+    <div class="admin-content">
+      <div id="error" class="error" style="display:none;"></div>
+
+      <h1>Team Knowledge</h1>
+      <p class="muted">Quick-answer entries for questions staff commonly ask. When a staffer asks something that closely matches one of these, chat gives this exact answer instead of searching documents.</p>
+
+      <div class="card">
+        <h2>Add an entry</h2>
+        <label for="entry-question">Question</label>
+        <textarea id="entry-question" rows="2" placeholder="e.g. What's the after-hours maintenance number?"></textarea>
+        <label for="entry-answer">Answer</label>
+        <textarea id="entry-answer" rows="3" placeholder="e.g. Call Property Meld at ..."></textarea>
+        <button id="add-button">Add entry</button>
+        <div id="add-status" class="muted" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>Existing entries</h2>
+        <table id="entries-table">
+          <thead>
+            <tr><th>Question</th><th>Answer</th><th>Added</th><th></th></tr>
+          </thead>
+          <tbody id="entries-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script src="/js/sidebar.js"></script>
+  <script src="/js/team-knowledge.js"></script>
+</body>
+</html>

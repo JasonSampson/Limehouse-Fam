@@ -1,5 +1,4 @@
 import { Router } from "express";
-import multer from "multer";
 import fs from "node:fs";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
@@ -7,16 +6,10 @@ import { requireAdmin } from "../auth/middleware.js";
 import { ingestDocument, absoluteOriginalPath } from "../rag/ingest.js";
 import { extToSupportedExt } from "../rag/extractText.js";
 import { logError } from "../lib/logger.js";
+import { upload } from "../lib/uploadConfig.js";
 
 export const adminDocumentRoutes = Router();
 adminDocumentRoutes.use(requireAdmin);
-
-// Files are held in memory only briefly, then written to disk by
-// ingestDocument — 46 seed files at launch is a small enough batch that
-// disk-buffering uploads isn't necessary. 25MB/file cap is generous for
-// Word docs/PDFs of the kind Jason described (SOPs, leases, job
-// descriptions) while still bounding worst-case memory use per request.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 adminDocumentRoutes.get("/api/admin/documents", async (req, res) => {
   const categoryId = req.query.categoryId ? Number(req.query.categoryId) : undefined;

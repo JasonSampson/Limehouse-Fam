@@ -78,10 +78,27 @@ export async function generateAnswer(
   const json = (await response.json()) as { content: Array<{ type: string; text?: string }> };
   const answerText = json.content.find((block) => block.type === "text")?.text ?? "";
 
-  const citations = chunks.map((c) => ({
-    documentFilename: c.documentFilename,
-    pageOrSectionLabel: c.pageOrSectionLabel,
-  }));
+  const citations = dedupeCitations(chunks);
 
   return { answerText, citations };
+}
+
+// Multiple retrieved chunks often come from the same source document (e.g.
+// several sections of the same SOP), which previously made the citation list
+// shown to staff repeat the same filename several times. Collapse to one
+// entry per unique document, keeping the page/section label from that
+// document's first (closest-matching) chunk — chunks arrive pre-sorted by
+// relevance, so "first" is also "most relevant", which is a simple and
+// reasonable label to show without trying to merge multiple labels together.
+function dedupeCitations(
+  chunks: RetrievedChunk[]
+): Array<{ documentFilename: string; pageOrSectionLabel: string | null }> {
+  const seen = new Set<string>();
+  const citations: Array<{ documentFilename: string; pageOrSectionLabel: string | null }> = [];
+  for (const c of chunks) {
+    if (seen.has(c.documentId)) continue;
+    seen.add(c.documentId);
+    citations.push({ documentFilename: c.documentFilename, pageOrSectionLabel: c.pageOrSectionLabel });
+  }
+  return citations;
 }

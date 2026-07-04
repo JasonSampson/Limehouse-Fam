@@ -1,18 +1,14 @@
 import { Router } from "express";
-import multer from "multer";
 import fs from "node:fs";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
 import { requireAdmin } from "../auth/middleware.js";
 import { ingestAsset, absoluteAssetOriginalPath } from "../rag/assetIngest.js";
 import { logError } from "../lib/logger.js";
+import { upload } from "../lib/uploadConfig.js";
 
 export const adminAssetRoutes = Router();
 adminAssetRoutes.use(requireAdmin);
-
-// Same size cap and memory-buffering rationale as adminDocumentRoutes — a
-// small internal library of brand/reference files, not a bulk upload path.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 adminAssetRoutes.get("/api/admin/assets", async (_req, res) => {
   const result = await getPool().query(

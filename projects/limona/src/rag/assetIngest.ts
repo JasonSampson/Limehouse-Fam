@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { getPool } from "../db/pool.js";
 import { loadEnv } from "../config/env.js";
 import { logInfo } from "../lib/logger.js";
+import { sanitizeFilename } from "./sanitizeFilename.js";
 
 export interface AssetIngestParams {
   originalFilename: string;
@@ -19,15 +20,6 @@ export interface AssetIngestResult {
 
 function storageRootDir(): string {
   return path.resolve(loadEnv().STORAGE_DIR);
-}
-
-// Same sanitizer as src/rag/ingest.ts (see that file's comment for why
-// path.basename() alone isn't sufficient) — reused here rather than
-// reimplemented, since this is the exact path-traversal concern Judge
-// flagged before for document uploads and applies identically to assets.
-function sanitizeFilename(filename: string): string {
-  const base = filename.split(/[/\\]/).pop() || "";
-  return base === "." || base === ".." || base === "" ? "unnamed" : base;
 }
 
 function relativeOriginalPath(assetId: string, filename: string): string {

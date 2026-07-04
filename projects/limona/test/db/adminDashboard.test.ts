@@ -89,8 +89,32 @@ describe("GET /api/admin/dashboard-stats", () => {
       documentsCount: 1,
       knowledgeGapsCount: 1,
       questionsAskedCount: 3,
+      assetsCount: 0,
+      teamKnowledgeCount: 0,
       teamMembers: { admin: 1, member: 2, invited: 1 },
     });
+  });
+
+  it("counts assets and team_knowledge entries", async () => {
+    const agent = await loginAsAdmin(app);
+    const adminId = (await pool.query("SELECT id FROM users WHERE email = 'admin@limehousepm.com'")).rows[0].id;
+
+    await pool.query(
+      `INSERT INTO assets (filename, description, category, size_bytes, storage_path, uploaded_by)
+       VALUES ('logo.png', 'Brand logo', 'Branding', 100, 'assets/1/original/logo.png', $1),
+              ('flyer.pdf', 'Flyer template', 'Templates', 200, 'assets/2/original/flyer.pdf', $1)`,
+      [adminId]
+    );
+    await pool.query(
+      `INSERT INTO team_knowledge (question, answer, embedding, created_by)
+       VALUES ('Where is the thermostat?', 'In the hallway closet.', $2, $1)`,
+      [adminId, `[${Array(384).fill(0).join(",")}]`]
+    );
+
+    const res = await agent.get("/api/admin/dashboard-stats");
+    expect(res.status).toBe(200);
+    expect(res.body.assetsCount).toBe(2);
+    expect(res.body.teamKnowledgeCount).toBe(1);
   });
 
   it("does not conflate active member accounts into the admin count", async () => {

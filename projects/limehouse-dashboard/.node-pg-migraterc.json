@@ -1,7 +1,0 @@
-{
-  "migrations-dir": "migrations",
-  "migration-file-language": "ts",
-  "tsconfig": "tsconfig.json",
-  "schema": "public",
-  "check-order": true
-}

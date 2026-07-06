@@ -111,27 +111,30 @@ describe("moveInLeaseRows", () => {
 });
 
 describe("unitStatusRows / vacantUnitRows", () => {
-  it("marks a unit occupied only if it has a currently-Active lease, matching summarizeOccupancy's rule", () => {
-    const units = [unit({ Id: 10 }), unit({ Id: 20 })];
-    const activeLeases = [lease({ UnitId: 10 })];
-    const rows = unitStatusRows(units, activeLeases);
+  // CONFIRMED LIVE 2026-07-06: matches the vendor's real "Vacant — Not
+  // Rented" tile (22), which uses Buildium's own IsUnitOccupied flag
+  // directly — NOT the lease-based rule summarizeOccupancy uses for the
+  // Occupancy percentage (a real, confirmed inconsistency on the vendor's
+  // own site between these two tiles).
+  it("marks a unit occupied/vacant directly from IsUnitOccupied, not lease presence", () => {
+    const units = [unit({ Id: 10, IsUnitOccupied: true }), unit({ Id: 20, IsUnitOccupied: false })];
+    const rows = unitStatusRows(units);
     expect(rows.find((r) => r.unitId === "10")?.occupied).toBe(true);
     expect(rows.find((r) => r.unitId === "20")?.occupied).toBe(false);
-    expect(vacantUnitRows(units, activeLeases).map((r) => r.unitId)).toEqual(["20"]);
+    expect(vacantUnitRows(units).map((r) => r.unitId)).toEqual(["20"]);
   });
 });
 
 describe("vacantUnitDaysRows / averageDaysVacant", () => {
   it("computes days vacant from the most recent LeaseToDate, excluding units with no lease history", () => {
     const asOf = new Date("2026-07-01T00:00:00Z");
-    const units = [unit({ Id: 10 }), unit({ Id: 20 })];
-    const activeLeases: BuildiumLease[] = []; // both vacant
+    const units = [unit({ Id: 10, IsUnitOccupied: false }), unit({ Id: 20, IsUnitOccupied: false })];
     const allLeases = [
       lease({ Id: 1, UnitId: 10, LeaseToDate: "2026-06-01" }), // 30 days vacant
       lease({ Id: 2, UnitId: 10, LeaseToDate: "2026-05-01" }), // older — should NOT be picked (most recent wins)
       // unit 20 has no lease history at all
     ];
-    const rows = vacantUnitDaysRows(units, activeLeases, allLeases, asOf);
+    const rows = vacantUnitDaysRows(units, allLeases, asOf);
     const unit10 = rows.find((r) => r.unitId === "10");
     const unit20 = rows.find((r) => r.unitId === "20");
     expect(unit10?.daysVacant).toBe(30);

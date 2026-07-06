@@ -7,6 +7,8 @@ import {
   summarizeDaysOnMarket,
   summarizePropertyHealthFromReporting,
   summarizeMarketingActivityFromReporting,
+  summarizeShowingCompletionRate,
+  showingCompletionRateExplainRows,
   dedupeById,
   type RentEngineProspect,
   type RentEngineUnit,
@@ -364,6 +366,51 @@ describe("summarizeMarketingActivityFromReporting", () => {
     const rows = [leasingPerformance({ showings_scheduled: 0, showings_completed: 0 })];
     const result = summarizeMarketingActivityFromReporting(rows);
     expect(result.completionRate).toBeNull();
+  });
+});
+
+// CONFIRMED LIVE 2026-07-06 against the vendor's own drill-down (28/47 =
+// 59.6% for June 2026, available listings only). Deliberately narrower
+// than summarizeMarketingActivityFromReporting above -- this Portfolio
+// Assistant KPI excludes any unit whose own RentEngine `status` is
+// "Leased", using fetchUnits' status field (not property_health, which the
+// leasing-performance report returns instead and has no "Leased" value).
+describe("summarizeShowingCompletionRate", () => {
+  it("only counts showings for units whose status isn't Leased", () => {
+    const units = [unit({ id: 1, status: "Available" }), unit({ id: 2, status: "Leased" })];
+    const rows = [
+      leasingPerformance({ unit_id: 1, showings_scheduled: 4, showings_completed: 3 }),
+      leasingPerformance({ unit_id: 2, showings_scheduled: 10, showings_completed: 10 }), // Leased -- excluded
+    ];
+    const result = summarizeShowingCompletionRate(rows, units);
+    expect(result).toEqual({ showingsCompleted: 3, showingsScheduled: 4, ratePercent: 75 });
+  });
+
+  it("returns null (not zero) when no available unit has any scheduled showings", () => {
+    const units = [unit({ id: 1, status: "Available" })];
+    const rows = [leasingPerformance({ unit_id: 1, showings_scheduled: 0, showings_completed: 0 })];
+    const result = summarizeShowingCompletionRate(rows, units);
+    expect(result.ratePercent).toBeNull();
+  });
+
+  it("ignores a unit with no matching leasing-performance row", () => {
+    const units = [unit({ id: 1, status: "Available" }), unit({ id: 99, status: "Available" })];
+    const rows = [leasingPerformance({ unit_id: 1, showings_scheduled: 2, showings_completed: 2 })];
+    const result = summarizeShowingCompletionRate(rows, units);
+    expect(result).toEqual({ showingsCompleted: 2, showingsScheduled: 2, ratePercent: 100 });
+  });
+});
+
+describe("showingCompletionRateExplainRows", () => {
+  it("excludes Leased units and units with no showing activity", () => {
+    const units = [unit({ id: 1, status: "Available" }), unit({ id: 2, status: "Leased" }), unit({ id: 3, status: "Available" })];
+    const rows = [
+      leasingPerformance({ unit_id: 1, showings_scheduled: 4, showings_completed: 3 }),
+      leasingPerformance({ unit_id: 2, showings_scheduled: 10, showings_completed: 10 }),
+      leasingPerformance({ unit_id: 3, showings_scheduled: 0, showings_completed: 0 }),
+    ];
+    const rowsOut = showingCompletionRateExplainRows(rows, units);
+    expect(rowsOut).toEqual([{ unitId: 1, showingsScheduled: 4, showingsCompleted: 3 }]);
   });
 });
 

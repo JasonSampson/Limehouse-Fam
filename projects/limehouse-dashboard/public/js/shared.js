@@ -54,6 +54,17 @@ function formatCurrency(n) {
   return n < 0 ? `(${formatted})` : formatted;
 }
 
+// Same as formatCurrency but keeps cents — used where rounding to the
+// nearest dollar would hide real precision (delinquent balances, aging
+// bucket totals), unlike most other dollar tiles where whole dollars are
+// the right level of detail.
+function formatCurrencyPrecise(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  const abs = Math.abs(n);
+  const formatted = abs.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n < 0 ? `(${formatted})` : formatted;
+}
+
 function formatPercent(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return `${n.toFixed(1)}%`;

@@ -5,7 +5,7 @@ function process(overrides: Partial<LeadSimpleProcess>): LeadSimpleProcess {
   return {
     id: "1",
     name: "05 Applications Process for Test Address",
-    created_at: "2025-01-01T00:00:00Z",
+    created_at: "2026-06-01T00:00:00Z",
     updated_at: "2026-01-15T00:00:00Z",
     closed_at: null,
     tags: [],
@@ -47,9 +47,9 @@ describe("summarizeLeaseRenewalRate", () => {
     expect(result.renewedCount).toBe(1);
   });
 
-  it("excludes a decision outside the requested date range", () => {
+  it("excludes a process created outside the requested date range", () => {
     const result = summarizeLeaseRenewalRate(
-      [process({ stage: { id: "s1", name: "Lease Renewed", status: "completed" }, updated_at: "2024-01-01T00:00:00Z" })],
+      [process({ stage: { id: "s1", name: "Lease Renewed", status: "completed" }, created_at: "2024-01-01T00:00:00Z" })],
       "2026-01-01",
       "2026-12-31"
     );
@@ -63,6 +63,27 @@ describe("summarizeLeaseRenewalRate", () => {
     const result = summarizeLeaseRenewalRate(processes, "2026-01-01", "2026-12-31");
     expect(result.decidedCount).toBe(4);
     expect(result.renewedCount).toBe(0);
+  });
+
+  // CONFIRMED LIVE 2026-07-06: the window scopes by created_at (when the
+  // renewal process itself started), not updated_at — a process can be
+  // "still open" (no real closed_at) for a non-renewal outcome like
+  // Owner/Tenant Non-Renewal and still correctly count as decided, as long
+  // as it was CREATED inside the window. Reproduces the real vendor number
+  // exactly: 73 renewed / 118 decided = 61.9%.
+  it("counts a still-open Owner/Tenant Non-Renewal process as decided based on created_at, ignoring closed_at", () => {
+    const result = summarizeLeaseRenewalRate(
+      [
+        process({
+          stage: { id: "s1", name: "Owner/Tenant Non-Renewal", status: "backlog" },
+          created_at: "2026-03-01T00:00:00Z",
+          closed_at: null,
+        }),
+      ],
+      "2026-01-01",
+      "2026-12-31"
+    );
+    expect(result).toEqual({ renewedCount: 0, decidedCount: 1, ratePercent: 0 });
   });
 });
 

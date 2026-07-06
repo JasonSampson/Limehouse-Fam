@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "limehouse-dashboard-dev",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-dashboard\\projects\\limehouse-dashboard && npm run dev"],
+      "port": 3100
+    },
+    {
+      "name": "limehouse-dashboard-preview",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PORT=3102 && cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-dashboard\\projects\\limehouse-dashboard && npm run dev"],
+      "port": 3102
+    }
+  ]
+}

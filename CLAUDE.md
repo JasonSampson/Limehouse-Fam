@@ -17,9 +17,9 @@ the task genuinely doesn't match any specialist's domain.
 
 ## Who I Am
 
-My name is [YOUR NAME]. I am a property manager.
-My company is called [YOUR COMPANY NAME].
-I manage [NUMBER] units across [CITY/AREA].
+My name is Jason Sampson. I am a property manager.
+My company is called Limehouse Property Management.
+I manage 230 units across the Hampton Roads area of Virginia.
 
 I am NOT a software developer. I am a business operator using AI to automate
 repetitive tasks and run my business better. Keep everything as simple as possible.
@@ -151,8 +151,8 @@ Full specs for each specialist: `.claude/agents/`
 ## My Portfolio
 
 ```
-Portfolio size: [NUMBER] units
-Market(s): [CITY/AREA]
+Portfolio size: 230 units
+Market(s): Hampton Roads, Virginia
 ```
 
 **Do not list individual properties here.** Property data lives in my PM software
@@ -176,68 +176,68 @@ Prefer connecting to tools I already use over building something new.
 ### Property Management Software
 > Examples: AppFolio, Buildium, Yardi, Propertyware, Rent Manager, DoorLoop, TenantCloud
 ```
-I use: [YOUR PM SOFTWARE]
-I use it for: [leases, maintenance, payments, reporting]
-What I still do manually: [...]
+I use: Buildium
+I use it for: accounting, lease terms, minor document storage, rent collection (portal)
+What I still do manually: maintenance coordination and lead/workflow tracking happen in separate tools (Property Meld, LeadSimple)
 ```
 
 ### Process & Workflow Software
 > Examples: LeadSimple, Aptly, Process Street, Monday.com, Notion
 ```
-I use: [YOUR PROCESS TOOL or "none"]
-I use it for: [lead follow-up, move-in checklists, SOPs]
+I use: LeadSimple
+I use it for: new business lead follow-up and texting
 ```
 
 ### Email
 > Examples: Gmail (Google Workspace), Outlook (Microsoft 365)
 ```
-I use: [YOUR EMAIL SYSTEM]
-I send emails to: [tenants / owners / vendors / all three]
+I use: Outlook (Microsoft 365)
+I send emails to: tenants, owners, and vendors (all three)
 ```
 
 ### Internal Communication
 > Examples: Slack, Microsoft Teams, Google Chat
 ```
-I use: [YOUR TEAM CHAT or "just email/text"]
-My team size: [number of people]
+I use: Microsoft Teams (plus email and text)
+My team size: 7 (4 local staff, 3 staff in the Philippines)
 ```
 
 ### Phone System
 > Examples: RingCentral, Zoom Phone, Google Voice, OpenPhone
 ```
-I use: [YOUR PHONE SYSTEM or "my personal cell"]
-Does it support texting? [Yes / No]
+I use: Nimbus
+Does it support texting? No
 ```
 
 ### Tenant Communication & Texting
 > Examples: OpenPhone, Twilio, built into PM software, manual texting
 ```
-I use: [YOUR TEXTING TOOL]
-I text tenants about: [rent reminders, maintenance updates, renewals]
+I use: Rent Engine
+I text tenants about: lead follow-up via Rent Engine
 ```
 
 ### Lease & Document Signing
 > Examples: DocuSign, HelloSign, DotLoop, Adobe Sign
 ```
-I use: [YOUR SIGNING TOOL]
+I use: DocuSign
 ```
 
 ### Payments & Rent Collection
 ```
-I use: [YOUR PAYMENT SYSTEM]
-Tenants pay via: [online portal / check / Zelle / mix]
+I use: Buildium (tenant portal)
+Tenants pay via: online portal
 ```
 
 ### Accounting
 > Examples: QuickBooks, Wave, Xero
 ```
-I use: [YOUR ACCOUNTING TOOL]
+I use: Buildium
 ```
 
 ### Maintenance Coordination
 ```
-I use: [YOUR MAINTENANCE TOOL or "phone/email"]
-My vendor list lives in: [spreadsheet / contacts / PM software]
+I use: Property Meld
+My vendor list lives in: Property Meld and Buildium
 ```
 
 ---

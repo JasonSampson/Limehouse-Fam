@@ -653,6 +653,53 @@ export function completionRateExplainRows(rows: RentEngineLeasingPerformance[]):
     .map((r) => ({ unitId: r.unit_id, showingsScheduled: r.showings_scheduled, showingsCompleted: r.showings_completed }));
 }
 
+export interface ShowingCompletionRateSummary {
+  showingsCompleted: number;
+  showingsScheduled: number;
+  ratePercent: number | null;
+}
+
+// CONFIRMED LIVE 2026-07-06 against the vendor's own drill-down: this is a
+// DIFFERENT, narrower calculation than the Dashboard tab's blanket
+// Completion Rate tile (summarizeMarketingActivityFromReporting, which
+// sums across every tracked unit) — this Portfolio Assistant KPI scopes to
+// AVAILABLE listings only. "Available" here comes from the unit's own
+// `status` field (fetchUnits, /units) — NOT property_health, which the
+// leasing-performance report returns instead and has no "Leased" value of
+// its own. RentEngine doesn't distinguish accompanied vs self-guided
+// showings, so self-guided showings can't be excluded even though the
+// vendor's own note says that would be more accurate.
+export function summarizeShowingCompletionRate(
+  rows: RentEngineLeasingPerformance[],
+  units: RentEngineUnit[]
+): ShowingCompletionRateSummary {
+  const availableUnitIds = new Set(units.filter((u) => u.status !== "Leased").map((u) => u.id));
+  const availableRows = rows.filter((r) => availableUnitIds.has(r.unit_id));
+  const showingsScheduled = availableRows.reduce((sum, r) => sum + r.showings_scheduled, 0);
+  const showingsCompleted = availableRows.reduce((sum, r) => sum + r.showings_completed, 0);
+  return {
+    showingsCompleted,
+    showingsScheduled,
+    ratePercent: showingsScheduled > 0 ? Math.round((showingsCompleted / showingsScheduled) * 1000) / 10 : null,
+  };
+}
+
+export interface ShowingCompletionRateExplainRow {
+  unitId: number;
+  showingsScheduled: number;
+  showingsCompleted: number;
+}
+
+export function showingCompletionRateExplainRows(
+  rows: RentEngineLeasingPerformance[],
+  units: RentEngineUnit[]
+): ShowingCompletionRateExplainRow[] {
+  const availableUnitIds = new Set(units.filter((u) => u.status !== "Leased").map((u) => u.id));
+  return rows
+    .filter((r) => availableUnitIds.has(r.unit_id) && (r.showings_scheduled > 0 || r.showings_completed > 0))
+    .map((r) => ({ unitId: r.unit_id, showingsScheduled: r.showings_scheduled, showingsCompleted: r.showings_completed }));
+}
+
 // Property Health categories, confirmed real from the reporting API itself
 // — a superset of what src/kpi/propertyHealth.ts's Buildium-derived formula
 // could ever produce (that formula never had a real way to detect Waitlist

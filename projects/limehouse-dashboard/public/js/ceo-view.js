@@ -81,7 +81,14 @@ function renderFinancialCharts(incomeData) {
   const ytdMonths = months.filter((m) => m.month.startsWith(String(currentYear)));
   const grossIncomeYtd = ytdMonths.reduce((sum, m) => sum + m.grossIncome, 0);
   const netIncomeYtd = ytdMonths.reduce((sum, m) => sum + m.netIncome, 0);
-  const lastMonth = months.length > 0 ? months[months.length - 1] : null;
+  // FIXED 2026-07-06: this used to take months[months.length - 1] — the
+  // LAST entry in the array, which is always the current, still-in-progress
+  // month (e.g. just 6 days of July), not a real "last month" figure. "RPU
+  // — Last Month" means the last FULLY COMPLETED calendar month, same as
+  // every other "last month" tile in this app.
+  const currentMonthKey = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const completedMonths = months.filter((m) => m.month < currentMonthKey);
+  const lastMonth = completedMonths.length > 0 ? completedMonths[completedMonths.length - 1] : null;
 
   const coverageNote = incomeData.coverage && !incomeData.coverage.fullyCovered
     ? incomeData.coverage.earliestEntryDate

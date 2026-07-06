@@ -65,6 +65,7 @@ async function loadDashboard() {
     daysOnMarketResult,
     moveInsResult,
     avgDaysVacantResult,
+    appsSubmittedResult,
   ] = await Promise.allSettled([
     apiGet(`/api/dashboard/period-info?period=${period}`),
     apiGet("/api/dashboard/occupancy"),
@@ -86,6 +87,7 @@ async function loadDashboard() {
     apiGet("/api/rentengine/days-on-market"),
     apiGet(`/api/dashboard/move-ins?period=${period}`),
     apiGet("/api/dashboard/avg-days-vacant"),
+    apiGet("/api/dashboard/apps-submitted"),
   ]);
 
   const periodInfo = unwrap(periodInfoResult);
@@ -113,6 +115,7 @@ async function loadDashboard() {
   const daysOnMarket = unwrap(daysOnMarketResult);
   const moveIns = unwrap(moveInsResult);
   const avgDaysVacant = unwrap(avgDaysVacantResult);
+  const appsSubmitted = unwrap(appsSubmittedResult);
 
   contextLine.textContent = periodInfo
     ? `${PERIOD_LABELS[period].toUpperCase()} · ${formatDateRange(
@@ -124,7 +127,7 @@ async function loadDashboard() {
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
     ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection })}
     ${renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avgDaysVacant })}
-    ${renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns })}
+    ${renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, daysOnMarket })}
   `;
 
@@ -163,7 +166,7 @@ function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, 
             ? tileHtml({
                 id: "total-delinquent",
                 label: "Total Delinquent",
-                value: formatCurrency(delinquency.totalOutstandingBalance),
+                value: formatCurrencyPrecise(delinquency.totalOutstandingBalance),
                 sub: `${formatNumber(delinquency.delinquentLeaseCount)} leases`,
                 sourceTags: ["BD"],
                 live: true,
@@ -399,7 +402,7 @@ function renderDelinquencyAging(delinquencyAging) {
   const rows = delinquencyAging.map((bucket, i) => ({
     label: `${bucket.label} days`,
     value: bucket.totalBalance,
-    displayValue: `${formatCurrency(bucket.totalBalance)} (${formatNumber(bucket.leaseCount)})`,
+    displayValue: `${formatCurrencyPrecise(bucket.totalBalance)} (${formatNumber(bucket.leaseCount)})`,
     color: severityColors[Math.min(i, severityColors.length - 1)],
   }));
   return horizontalBarListHtml({ rows, className: "aging" });
@@ -443,7 +446,7 @@ function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avg
             ? tileHtml({
                 id: "vacant-not-rented",
                 label: "Vacant — Not Rented",
-                value: formatNumber(occupancy.vacantUnits),
+                value: formatNumber(occupancy.vacantUnitsByFlag),
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -604,7 +607,7 @@ function renderDoorsChart(doors) {
 // LEASING PIPELINE
 // ---------------------------------------------------------------------
 
-function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns }) {
+function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, appsSubmitted }) {
   return `
     <div class="section">
       <p class="section-title">Leasing Pipeline</p>
@@ -646,7 +649,18 @@ function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns }) {
               })
             : couldNotLoadTile({ id: "month-to-month", label: "Month-to-Month", sourceTags: ["BD"] })
         }
-        ${tileHtml({ id: "apps-submitted", label: "Apps Submitted", sourceTags: ["LS"], notConnected: true })}
+        ${
+          appsSubmitted
+            ? tileHtml({
+                id: "apps-submitted",
+                label: "Apps Submitted",
+                value: formatNumber(appsSubmitted.appsSubmitted),
+                sub: "Awaiting a decision",
+                sourceTags: ["BD"],
+                live: true,
+              })
+            : couldNotLoadTile({ id: "apps-submitted", label: "Apps Submitted", sourceTags: ["BD"] })
+        }
         ${
           moveIns
             ? tileHtml({
@@ -659,7 +673,17 @@ function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns }) {
               })
             : couldNotLoadTile({ id: "move-ins", label: "Move-Ins", sourceTags: ["BD"] })
         }
-        ${tileHtml({ id: "apps-per-move-in", label: "Apps Per Move-In", sourceTags: ["LS"], notConnected: true })}
+        ${
+          appsSubmitted && moveIns && moveIns.moveIns > 0
+            ? tileHtml({
+                id: "apps-per-move-in",
+                label: "Apps Per Move-In",
+                value: (appsSubmitted.appsSubmitted / moveIns.moveIns).toFixed(1),
+                sourceTags: ["BD"],
+                live: true,
+              })
+            : couldNotLoadTile({ id: "apps-per-move-in", label: "Apps Per Move-In", sourceTags: ["BD"] })
+        }
         ${
           leaseMix
             ? tileHtml({
@@ -965,11 +989,11 @@ async function handleTileClick(tileId) {
       openDrillDownModal({
         title: "Total Delinquent",
         columns: [
-          { label: "Property", key: "propertyId" },
-          { label: "Lease", key: "leaseId" },
+          { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+          { label: "Unit", key: "unitNumber" },
           {
             label: "Balance",
-            render: (r) => formatCurrency(r.balance),
+            render: (r) => formatCurrencyPrecise(r.balance),
           },
         ],
         rows,
@@ -1006,8 +1030,8 @@ async function handleTileClick(tileId) {
       title: "Renewals — Next 60 Days",
       url: "/api/dashboard/renewals?withinDays=60",
       columns: [
-        { label: "Property", key: "propertyId" },
-        { label: "Lease", key: "leaseId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Unit", key: "unitNumber" },
         { label: "Lease End", key: "leaseToDate" },
         { label: "Days Left", key: "daysUntilExpiration" },
       ],
@@ -1026,8 +1050,8 @@ async function handleTileClick(tileId) {
       title: "Renewal Rate — Trailing 12 Months",
       url: "/api/dashboard/renewal-rate/leases",
       columns: [
-        { label: "Property", key: "propertyId" },
-        { label: "Lease", key: "leaseId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Unit", key: "unitNumber" },
         { label: "Outcome", render: (r) => (r.outcome === "renewed" ? "Renewed" : "Moved Out") },
         { label: "Lease End", key: "leaseToDate" },
       ],
@@ -1044,7 +1068,7 @@ async function handleTileClick(tileId) {
       title: "Net Doors — Added (12mo) vs Lost (12mo, estimated)",
       url: "/api/dashboard/net-doors/properties",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Type", render: (r) => (r.type === "added" ? "Added" : "Lost (estimated)") },
         { label: "Date", key: "date" },
       ],
@@ -1059,7 +1083,7 @@ async function handleTileClick(tileId) {
       title: "Avg Rent/Lease",
       url: "/api/dashboard/financials/rent-and-deposit/leases",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
         { label: "Rent", render: (r) => formatCurrency(r.rent) },
@@ -1075,7 +1099,7 @@ async function handleTileClick(tileId) {
       title: "Total Units",
       url: "/api/dashboard/units",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Status", render: (r) => (r.occupied ? "Occupied" : "Vacant") },
       ],
@@ -1090,7 +1114,7 @@ async function handleTileClick(tileId) {
       title: "Vacant — Not Rented",
       url: "/api/dashboard/units/vacant",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
       ],
       emptyText: "No vacant units right now.",
@@ -1104,7 +1128,7 @@ async function handleTileClick(tileId) {
       title: "Avg Days Vacant",
       url: "/api/dashboard/avg-days-vacant/units",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Days Vacant", render: (r) => (r.daysVacant === null ? "Unknown (no lease history)" : r.daysVacant) },
       ],
@@ -1119,7 +1143,7 @@ async function handleTileClick(tileId) {
       title: "Fixed-Term Leases",
       url: "/api/dashboard/lease-mix/fixed-term",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
         { label: "Lease End", key: "leaseToDate" },
@@ -1135,7 +1159,7 @@ async function handleTileClick(tileId) {
       title: "Month-to-Month Leases",
       url: "/api/dashboard/lease-mix/month-to-month",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
         { label: "Since", key: "leaseFromDate" },
@@ -1151,7 +1175,7 @@ async function handleTileClick(tileId) {
       title: "Move-Ins",
       url: `/api/dashboard/move-ins/leases?period=${period}`,
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
       ],
@@ -1166,7 +1190,7 @@ async function handleTileClick(tileId) {
       title: "Evictions Pending",
       url: "/api/dashboard/evictions-pending",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
       ],
@@ -1181,7 +1205,7 @@ async function handleTileClick(tileId) {
       title: "Avg Tenancy",
       url: "/api/dashboard/avg-tenancy/leases",
       columns: [
-        { label: "Property", key: "propertyId" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
         { label: "Tenancy (mo)", key: "tenancyMonths" },

@@ -22,6 +22,21 @@ export interface LeasingPerformanceCacheResult {
   stale: boolean;
 }
 
+// FOUND LIVE 2026-07-06: the Dashboard tab fires ~20 API calls in parallel
+// on page load (see public/js/dashboard.js), and 3 of them
+// (property-health, days-on-market, marketing-activity) all depend on this
+// same shared fetch. With a cold or stale cache, all 3 request handlers
+// land here at nearly the same instant, all see "no fresh cache," and all
+// 3 independently kick off their own full ~61-unit RentEngine crawl —
+// tripling the real request volume RentEngine sees at once and pushing it
+// into much heavier 429 rate-limiting than a single crawl would hit,
+// confirmed live to leave requests hanging for minutes instead of the
+// normal ~50 seconds. inFlightFetches deduplicates concurrent callers for
+// the same cache key so only ONE real fetch ever runs at a time — the
+// other callers just await that same in-progress promise instead of
+// starting their own.
+const inFlightFetches = new Map<string, Promise<LeasingPerformanceCacheResult>>();
+
 export async function getOrFetchLeasingPerformanceForAllUnits(
   fromDate: string,
   toDate: string
@@ -47,15 +62,27 @@ export async function getOrFetchLeasingPerformanceForAllUnits(
     };
   }
 
-  const result = await fetchLeasingPerformanceForAllUnits(fromDate, toDate);
-  if (!result.connected) {
-    return { connected: false, rows: null, error: null, cached: false, cachedAt: null, stale: false };
-  }
-  if (result.error || !result.data) {
-    logWarn("Shared leasing-performance fetch failed", { error: result.error });
-    return { connected: true, rows: null, error: result.error, cached: false, cachedAt: null, stale: false };
-  }
+  const existing = inFlightFetches.get(cacheKey);
+  if (existing) return existing;
 
-  await upsertCachedMetric(cacheKey, "portfolio", "rent_engine", result.data);
-  return { connected: true, rows: result.data, error: null, cached: false, cachedAt: null, stale: false };
+  const fetchPromise = (async (): Promise<LeasingPerformanceCacheResult> => {
+    try {
+      const result = await fetchLeasingPerformanceForAllUnits(fromDate, toDate);
+      if (!result.connected) {
+        return { connected: false, rows: null, error: null, cached: false, cachedAt: null, stale: false };
+      }
+      if (result.error || !result.data) {
+        logWarn("Shared leasing-performance fetch failed", { error: result.error });
+        return { connected: true, rows: null, error: result.error, cached: false, cachedAt: null, stale: false };
+      }
+
+      await upsertCachedMetric(cacheKey, "portfolio", "rent_engine", result.data);
+      return { connected: true, rows: result.data, error: null, cached: false, cachedAt: null, stale: false };
+    } finally {
+      inFlightFetches.delete(cacheKey);
+    }
+  })();
+
+  inFlightFetches.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }

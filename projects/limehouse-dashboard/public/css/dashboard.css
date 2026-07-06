@@ -797,6 +797,20 @@ table.drill-table td {
   opacity: 0.75;
 }
 
+/* FIXED 2026-07-06: .active and .role-tab-disabled have equal CSS
+   specificity (one class each), so whichever rule appears later in this
+   file silently wins when a tab is BOTH the active one and an empty/
+   disabled role (e.g. Portfolio Assistant before its KPIs are seeded) —
+   the disabled greying was winning, making the selected tab look
+   identical to every other unselected tab. This combined-class selector
+   has higher specificity than either rule alone, so active styling always
+   wins regardless of source order. */
+.role-tabs button.active.role-tab-disabled {
+  color: #ffffff;
+  background: var(--navy);
+  opacity: 1;
+}
+
 .role-summary-line {
   font-size: 13.5px;
   color: var(--text-muted);

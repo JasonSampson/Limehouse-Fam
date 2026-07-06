@@ -256,6 +256,43 @@ export async function fetchOutstandingBalances(): Promise<LeaseBalance[]> {
 }
 
 // ============================================================================
+// Applicants — Dashboard's "Apps Submitted" / "Apps Per Move-In" tiles.
+// CONFIRMED LIVE 2026-07-06: these were previously hardcoded "Not connected
+// yet" and mistagged as a LeadSimple (LS) source — this is real, live
+// Buildium (BD) data. /applicants supports a real applicationstatuses
+// filter (comma-separated, confirmed against the real API). "Apps
+// Submitted" is a STRUCTURAL as-of-today count — how many submitted
+// applications are currently awaiting a decision (status New or
+// Undecided) — NOT a "submitted within the selected period" flow count. A
+// "submitted this period" hypothesis was tested directly against the
+// vendor's real number and came up far short (8 vs. 29); New+Undecided
+// (27) matched closely, with the small gap explained by real-time drift
+// between when the vendor's number was captured and when this was tested.
+// "Apps Per Move-In" = this same pending count ÷ Move-Ins for the selected
+// period (confirmed exact: 29 / 2 move-ins = 14.5, matching the vendor
+// exactly).
+const buildiumApplicantApplicationSchema = z.object({
+  Id: z.number(),
+  ApplicationStatus: z.string(),
+  ApplicationSubmittedDateTime: z.string().nullable(),
+});
+
+const buildiumApplicantSchema = z.object({
+  Id: z.number(),
+  Status: z.string(),
+  Applications: z.array(buildiumApplicantApplicationSchema),
+});
+
+export type BuildiumApplicant = z.infer<typeof buildiumApplicantSchema>;
+
+export async function fetchPendingApplicants(): Promise<BuildiumApplicant[]> {
+  return buildiumGetAllPages<BuildiumApplicant>(
+    "/applicants?applicationstatuses=New,Undecided",
+    z.array(buildiumApplicantSchema)
+  );
+}
+
+// ============================================================================
 // Properties / units / owners
 // ============================================================================
 

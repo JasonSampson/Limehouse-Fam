@@ -22,12 +22,14 @@ import {
   type ReconciliationAccuracyInput,
 } from "../kpi/bookkeeperMetrics.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
-import { daysOnMarketExplainRows } from "../rentengine/client.js";
+import { daysOnMarketExplainRows, showingCompletionRateExplainRows, fetchUnits } from "../rentengine/client.js";
 import {
   fetchApplicationProcesses,
   applicationProcessingTimeExplainRows,
   fetchApplicationsWithTasksForResponseTimeliness,
   applicantResponseTimelinessExplainRows,
+  fetchLeaseRenewalProcesses,
+  leaseRenewalRateExplainRows,
 } from "../leadsimple/client.js";
 
 export const teamPerformanceRoutes = Router();
@@ -69,6 +71,8 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   "Days on Market": "Average days on market across units RentEngine reports as \"Healthy\" (actively marketed, not At-risk/Waitlist/On Hold/Off-Market/Commercial). Source: RentEngine leasing-performance report, one row per unit.",
   "Application Processing Time": "Average hours from when an application came in to when it closed out, across every Applications Process that closed this period.",
   "Applicant Response Timeliness": "Of every Application that came in over the trailing 90 days, the share where the first task on it got completed within 24 hours. Applications with no completed task yet count against the rate. Note: this counts only applications that arrived in the last 90 days — it deliberately excludes old, already-closed applications whose only recent activity is an unrelated administrative task (e.g. a bookkeeping fee charge), which would otherwise skew the score with stale backlog noise.",
+  "Showing Completion Rate": "Showings completed ÷ showings scheduled, across AVAILABLE listings only (RentEngine's own unit status isn't \"Leased\") for the selected period. RentEngine doesn't break showings into accompanied vs. self-guided, so self-showings can't be excluded from either side.",
+  "Lease Renewal Rate": "Renewed ÷ decided, across Lease Renewal Processes CREATED in the trailing 12 months. \"Decided\" excludes still-in-progress processes (Upcoming, Send Lease) — everything else counts, including an Owner/Tenant Non-Renewal outcome even if it shows no closed date yet. \"Renewed\" = a completed Lease Renewed outcome.",
 };
 
 teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requireAdmin, async (req, res) => {
@@ -168,6 +172,34 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
           windowStart,
           windowEnd
         );
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Showing Completion Rate": {
+        const leasingPerf = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+        if (!leasingPerf.connected || !leasingPerf.rows) {
+          res.status(502).json({ error: "RentEngine isn't connected — can't load the data behind Showing Completion Rate." });
+          return;
+        }
+        const units = await fetchUnits();
+        if (!units.connected || !units.data) {
+          res.status(502).json({ error: "RentEngine isn't connected — can't load the data behind Showing Completion Rate." });
+          return;
+        }
+        const rows = showingCompletionRateExplainRows(leasingPerf.rows, units.data);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Lease Renewal Rate": {
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const windowEnd = now.toISOString().slice(0, 10);
+        const renewalProcesses = await fetchLeaseRenewalProcesses();
+        if (!renewalProcesses.connected || !renewalProcesses.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Lease Renewal Rate." });
+          return;
+        }
+        const rows = leaseRenewalRateExplainRows(renewalProcesses.data, windowStart, windowEnd);
         res.json({ kpiName, formula, rows });
         return;
       }

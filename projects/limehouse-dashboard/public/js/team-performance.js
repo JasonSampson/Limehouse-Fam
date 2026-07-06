@@ -233,6 +233,18 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Within 24h", render: (r) => (r.within24h === null ? "—" : r.within24h ? "yes" : "no") },
     { label: "Assignee", render: (r) => r.assignee ?? "—" },
   ],
+  "Showing Completion Rate": [
+    { label: "Unit", key: "unitId" },
+    { label: "Showings Scheduled", key: "showingsScheduled" },
+    { label: "Showings Completed", key: "showingsCompleted" },
+  ],
+  "Lease Renewal Rate": [
+    { label: "Process", key: "processName" },
+    { label: "Stage", render: (r) => r.stage ?? "—" },
+    { label: "Created", render: (r) => r.createdAt.slice(0, 10) },
+    { label: "Closed", render: (r) => (r.closedAt ? r.closedAt.slice(0, 10) : "open") },
+    { label: "Renewed", render: (r) => (r.renewed ? "yes" : "no") },
+  ],
 };
 
 // KPI name is clickable (has a "›" chevron) — matches the vendor site's own

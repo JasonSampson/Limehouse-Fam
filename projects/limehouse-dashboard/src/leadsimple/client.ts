@@ -403,28 +403,26 @@ function roundPercent(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-// Rate = renewed / decided over the trailing window, where "decided"
-// excludes still-in-progress processes and uses each process's updated_at
-// (the date it reached its current stage) as the decision date — a
-// process still sitting in "Upcoming"/"Send Lease" was correctly never
-// counted either way. VERIFIED LIVE 2026-07-05: this produces 70.9%
-// company-wide (144 renewed / 203 decided) over a trailing-12-month
-// window — close to the Dashboard's own company-wide Renewal Rate
-// (70.6%/70.8%) but NOT Jason's reported 61.9% for this specific Team
-// Performance KPI. OPEN QUESTION, not yet resolved: Team Performance
-// scores individual people (CEO View shows "3 people" under Portfolio
-// Manager) — 61.9% may need to be scoped to one specific portfolio
-// manager's leases/properties rather than company-wide. Do not wire this
-// into a Team Performance KPI definition until that scoping question is
-// answered — the company-wide math here is confirmed correct, but which
-// population to run it against for THIS specific KPI is not yet confirmed.
+// CONFIRMED LIVE 2026-07-06 against the vendor's own real drill-down data
+// (manually counted and matched exactly: 73 renewed / 118 decided = 61.9%):
+// the trailing-12-month WINDOW is scoped by each process's created_at (when
+// the renewal process itself started), not updated_at. "Decided" then means
+// any process in that population whose stage isn't Upcoming/Send Lease —
+// this includes "Owner/Tenant Non-Renewal" (backlog status) processes even
+// though those show no real closed_at ("still open" in the vendor's own
+// table), confirmed by the real vendor data: only counting created_at
+// within the window (regardless of closed_at) reproduces 118 decided
+// exactly. "Renewed" = a completed Lease Renewed outcome. The earlier
+// updated_at-based version produced 70.9% company-wide (144/203) — close
+// to the Dashboard's own separate Renewal Rate tile, but wrong for this
+// specific KPI, which needed created_at scoping instead.
 export function summarizeLeaseRenewalRate(processes: LeadSimpleProcess[], fromDate: string, toDate: string): LeaseRenewalRateSummary {
   const from = new Date(fromDate);
   const to = new Date(toDate);
   const decided = processes.filter((p) => {
     if (!p.stage || IN_PROGRESS_STAGE_NAMES.has(p.stage.name)) return false;
-    const decidedAt = new Date(p.updated_at);
-    return decidedAt >= from && decidedAt <= to;
+    const createdAt = new Date(p.created_at);
+    return createdAt >= from && createdAt <= to;
   });
   const renewed = decided.filter((p) => p.stage?.name === RENEWED_STAGE_NAME);
   return {
@@ -432,4 +430,33 @@ export function summarizeLeaseRenewalRate(processes: LeadSimpleProcess[], fromDa
     decidedCount: decided.length,
     ratePercent: decided.length > 0 ? roundPercent((renewed.length / decided.length) * 100) : null,
   };
+}
+
+export interface LeaseRenewalRateExplainRow {
+  processName: string;
+  stage: string | null;
+  createdAt: string;
+  closedAt: string | null;
+  renewed: boolean;
+}
+
+export function leaseRenewalRateExplainRows(
+  processes: LeadSimpleProcess[],
+  fromDate: string,
+  toDate: string
+): LeaseRenewalRateExplainRow[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  return processes
+    .filter((p) => {
+      const createdAt = new Date(p.created_at);
+      return createdAt >= from && createdAt <= to;
+    })
+    .map((p) => ({
+      processName: p.name,
+      stage: p.stage?.name ?? null,
+      createdAt: p.created_at,
+      closedAt: p.closed_at,
+      renewed: p.stage?.name === RENEWED_STAGE_NAME,
+    }));
 }

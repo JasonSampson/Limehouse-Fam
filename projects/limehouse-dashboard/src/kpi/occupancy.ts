@@ -99,6 +99,7 @@ export function summarizeLeaseMix(activeLeases: BuildiumLease[]): LeaseMixSummar
 export interface UpcomingRenewalRow {
   leaseId: string;
   propertyId: string;
+  unitNumber: string | null;
   leaseToDate: string;
   daysUntilExpiration: number;
 }
@@ -115,6 +116,7 @@ export function upcomingRenewals(activeLeases: BuildiumLease[], asOfDate: Date, 
       rows.push({
         leaseId: String(lease.Id),
         propertyId: String(lease.PropertyId),
+        unitNumber: lease.UnitNumber,
         leaseToDate: lease.LeaseToDate,
         daysUntilExpiration: daysUntil,
       });

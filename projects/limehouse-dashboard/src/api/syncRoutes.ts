@@ -30,7 +30,7 @@ import { logError, logInfo } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
 import { summarizeOccupancy, summarizeDelinquencyRate } from "../kpi/occupancy.js";
-import { summarizeDaysOnMarket } from "../rentengine/client.js";
+import { summarizeDaysOnMarket, summarizeShowingCompletionRate, fetchUnits } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
 import {
   summarizeReconciliationAccuracy,
@@ -44,6 +44,8 @@ import {
   summarizeApplicationProcessingTime,
   fetchApplicationsWithTasksForResponseTimeliness,
   summarizeApplicantResponseTimeliness,
+  fetchLeaseRenewalProcesses,
+  summarizeLeaseRenewalRate,
 } from "../leadsimple/client.js";
 import { periodToSnapshotLabel } from "../kpi/period.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
@@ -399,6 +401,22 @@ syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, async (_req, re
       delinquencyRate.ratePercent !== null, delinquencyRate.ratePercent, 3, false, "buildium"
     );
 
+    // Lease Renewal Rate is a fixed trailing-12-month window (the vendor's
+    // own label reads "(12 mo)"), scoped by each process's created_at —
+    // CONFIRMED LIVE 2026-07-06 by manually counting the vendor's own real
+    // drill-down data (73 renewed / 118 decided = 61.9%, exact match).
+    if (isLeadSimpleConnected()) {
+      const renewalWindowStart = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const renewalProcesses = await fetchLeaseRenewalProcesses();
+      if (renewalProcesses.connected && renewalProcesses.data) {
+        const renewalRate = summarizeLeaseRenewalRate(renewalProcesses.data, renewalWindowStart, asOfDate);
+        await writeSnapshotForEveryDisplayGroup(
+          "portfolio_manager", "Lease Renewal Rate", period, periodStart, periodEnd,
+          renewalRate.ratePercent !== null, renewalRate.ratePercent, 70, true, "lead_simple"
+        );
+      }
+    }
+
     if (isRentEngineConnected()) {
       const leasingPerf = await getOrFetchLeasingPerformanceForAllUnits(monthStart, monthEnd);
       if (leasingPerf.connected && leasingPerf.rows) {
@@ -407,6 +425,23 @@ syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, async (_req, re
           "portfolio_manager", "Days on Market", period, periodStart, periodEnd,
           dom.avgDaysOnMarket !== null, dom.avgDaysOnMarket, 21, false, "rent_engine"
         );
+
+        // Portfolio Assistant — KPI definition not seeded yet (waiting on
+        // the role's other 2 KPIs so the $750/3-way split is correct from
+        // the start), but the calculation itself is confirmed live
+        // 2026-07-06 against the vendor's own drill-down (28/47 = 59.6%
+        // for June). writeSnapshotForEveryDisplayGroup is a no-op today
+        // since getKpiDefinitionIdsByName finds no matching definition —
+        // this starts writing real snapshots the moment the migration
+        // lands, no code change needed then.
+        const units = await fetchUnits();
+        if (units.connected && units.data) {
+          const showingCompletion = summarizeShowingCompletionRate(leasingPerf.rows, units.data);
+          await writeSnapshotForEveryDisplayGroup(
+            "portfolio_assistant", "Showing Completion Rate", period, periodStart, periodEnd,
+            showingCompletion.ratePercent !== null, showingCompletion.ratePercent, 95, true, "rent_engine"
+          );
+        }
       }
     }
 

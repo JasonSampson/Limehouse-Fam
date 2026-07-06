@@ -17,20 +17,21 @@ export interface DateRange {
 export function resolvePeriod(period: PeriodKey, now: Date = new Date()): DateRange {
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth(); // 0-indexed
+  const today = toDateString(now);
 
   switch (period) {
     case "this_month":
-      return monthRange(year, month);
+      return clampEnd(monthRange(year, month), today);
     case "last_month":
       return monthRange(year, month - 1);
     case "this_quarter":
-      return quarterRange(year, quarterOf(month));
+      return clampEnd(quarterRange(year, quarterOf(month)), today);
     case "last_quarter": {
       const q = quarterOf(month);
       return q === 0 ? quarterRange(year - 1, 3) : quarterRange(year, (q - 1) as 0 | 1 | 2 | 3);
     }
     case "this_year":
-      return { from: `${year}-01-01`, to: `${year}-12-31` };
+      return clampEnd({ from: `${year}-01-01`, to: `${year}-12-31` }, today);
     case "last_year":
       return { from: `${year - 1}-01-01`, to: `${year - 1}-12-31` };
     default: {
@@ -38,6 +39,21 @@ export function resolvePeriod(period: PeriodKey, now: Date = new Date()): DateRa
       throw new Error(`Unknown period: ${_exhaustive}`);
     }
   }
+}
+
+// FIXED 2026-07-05: "this_month"/"this_quarter"/"this_year" used to resolve
+// to the full natural calendar period even when that period extends past
+// today — e.g. requesting "this_quarter" on 2026-07-05 returned Jul 1-Sep
+// 30, two months in the future. Confirmed live against the vendor site,
+// which caps all three "current period" options at today's date (e.g.
+// "THIS QUARTER · JUL 1 - JUL 5, 2026"). A range reaching into the future
+// isn't just a cosmetic label problem — Buildium already has real
+// future-dated records (e.g. a lease with a start date next week), so an
+// un-clamped range can wrongly include things that haven't happened yet.
+// "last_*" periods are already fully in the past and are intentionally
+// left untouched.
+function clampEnd(range: DateRange, today: string): DateRange {
+  return range.to > today ? { from: range.from, to: today } : range;
 }
 
 function quarterOf(monthIndex: number): 0 | 1 | 2 | 3 {

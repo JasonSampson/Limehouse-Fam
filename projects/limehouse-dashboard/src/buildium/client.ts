@@ -22,23 +22,56 @@ export class BuildiumApiError extends Error {
   }
 }
 
+// CONFIRMED LIVE 2026-07-03 against Jason's real Buildium account: a burst
+// of ~230 rapid sequential per-lease calls (one per active lease, e.g. the
+// old rent-collection transactions loop) hits Buildium's rate limit and
+// gets back real 429 responses partway through. buildiumGet now retries a
+// 429 with exponential backoff (honoring a Retry-After header if Buildium
+// sends one) instead of surfacing the failure immediately — this makes any
+// call site that happens to burst past the rate limit self-heal rather
+// than fail outright. This does NOT replace fixing call sites that
+// generate the burst in the first place (see fetchLeaseTransactions'
+// caller in dashboardRoutes.ts, now cache-backed) — it's a safety net for
+// any burst that still occurs, not a substitute for not bursting.
+const MAX_RATE_LIMIT_RETRIES = 4;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function buildiumGet<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, any>): Promise<T> {
   const env = loadEnv();
-  const res = await fetch(`${env.BUILDIUM_BASE_URL}${path}`, { headers: buildiumHeaders() });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "<no body>");
-    throw new BuildiumApiError(`Buildium API error ${res.status} on ${path}`, res.status, body);
+
+  let attempt = 0;
+  for (;;) {
+    const res = await fetch(`${env.BUILDIUM_BASE_URL}${path}`, { headers: buildiumHeaders() });
+
+    if (res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+      const retryAfterHeader = res.headers.get("Retry-After");
+      const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : NaN;
+      // Exponential backoff (500ms, 1s, 2s, 4s) as the fallback when
+      // Buildium doesn't send a usable Retry-After header.
+      const backoffMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : 500 * 2 ** attempt;
+      await sleep(backoffMs);
+      attempt++;
+      continue;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "<no body>");
+      throw new BuildiumApiError(`Buildium API error ${res.status} on ${path}`, res.status, body);
+    }
+    const json = await res.json();
+    const parsed = schema.safeParse(json);
+    if (!parsed.success) {
+      throw new BuildiumApiError(
+        `Buildium API response for ${path} did not match expected shape: ${parsed.error.message}`,
+        res.status,
+        JSON.stringify(json)
+      );
+    }
+    return parsed.data;
   }
-  const json = await res.json();
-  const parsed = schema.safeParse(json);
-  if (!parsed.success) {
-    throw new BuildiumApiError(
-      `Buildium API response for ${path} did not match expected shape: ${parsed.error.message}`,
-      res.status,
-      JSON.stringify(json)
-    );
-  }
-  return parsed.data;
 }
 
 // Generic pager for list endpoints that use Buildium's offset/limit
@@ -80,19 +113,22 @@ const buildiumTenantSchema = z.object({
 // AutomaticallyMoveOutTenants/term info) are used below to distinguish
 // fixed-term vs month-to-month for the Dashboard's lease-mix tiles.
 //
-// RESEARCH NOTE (unverified, same discipline as fetchGlEntries below): per
-// Buildium's OpenAPI spec ("LeaseMessage"), a lease carries a CurrentRent
-// object (with an Amount field, the active rent charge amount) and a
-// SecurityDeposit object (with an Amount field, the deposit amount on
-// file). These two fields back the Dashboard Financials tab's "Avg
-// Rent/Lease" and "Avg SD Withheld" tiles. NOT yet confirmed against a live
-// response for this account — no Buildium credentials exist for this
-// project yet (see project brief). If the real response shapes these
-// differently (e.g. a flat RentAmount instead of nested CurrentRent.Amount),
-// this schema will need a live-verified correction once Jason provisions
-// the fresh Buildium key.
-const buildiumRentSchema = z.object({ Amount: z.number().nullable() }).nullable();
-const buildiumSecurityDepositSchema = z.object({ Amount: z.number().nullable() }).nullable();
+// CONFIRMED LIVE 2026-07-03 against Jason's real Buildium account (first
+// live credentials for this project): the guessed CurrentRent.Amount /
+// SecurityDeposit.Amount nested shape was WRONG — a real lease response
+// carries no CurrentRent or SecurityDeposit field at all. The actual rent
+// and deposit figures live on a nested `AccountDetails` object:
+// AccountDetails.Rent and AccountDetails.SecurityDeposit, both flat
+// numbers (not {Amount: number} objects). This was the root cause of
+// /api/dashboard/financials/rent-and-deposit always returning all-null —
+// the old field paths simply didn't exist on the real response, so every
+// value silently fell through to "no data" instead of erroring loudly.
+const buildiumAccountDetailsSchema = z
+  .object({
+    Rent: z.number().nullable(),
+    SecurityDeposit: z.number().nullable(),
+  })
+  .nullable();
 
 const buildiumLeaseSchema = z.object({
   Id: z.number(),
@@ -106,8 +142,23 @@ const buildiumLeaseSchema = z.object({
   IsEvictionPending: z.boolean(),
   PaymentDueDay: z.number().int().min(1).max(31).nullable(),
   CurrentTenants: z.array(buildiumTenantSchema).nullable(),
-  CurrentRent: buildiumRentSchema.optional(),
-  SecurityDeposit: buildiumSecurityDepositSchema.optional(),
+  AccountDetails: buildiumAccountDetailsSchema.optional(),
+  // ADDED 2026-07-05 for the trailing-12-month Renewal Rate rebuild (see
+  // summarizeRenewalRate in src/kpi/occupancy.ts) — CONFIRMED LIVE this is
+  // real and populated on every lease. Real Buildium accounts do NOT create
+  // a new lease record when a tenant renews (confirmed: zero same-tenant
+  // successor-lease matches found across 574 real leases when searching
+  // for one) — a renewal instead extends LeaseToDate IN PLACE on the same
+  // record, which is why 132 of 240 real Active leases were originally
+  // created 2018-2021 yet still show LeaseStatus="Active" today with a
+  // LastUpdatedDateTime from within the last few months. That gap between
+  // CreatedDateTime and a recent LastUpdatedDateTime, combined with a
+  // total lease term longer than a normal first year, is the only
+  // available signal for "this lease was renewed," since Buildium doesn't
+  // expose renewal history as its own record for this account (see
+  // occupancy.ts for the full derivation and why /leases/renewals wasn't
+  // usable here).
+  LastUpdatedDateTime: z.string().nullable().optional(),
 });
 
 export type BuildiumLease = z.infer<typeof buildiumLeaseSchema>;
@@ -127,8 +178,25 @@ export async function fetchLeasesByStatus(
   );
 }
 
+// FIXED 2026-07-05: this is now the SINGLE place "active leases" are
+// fetched for every KPI on the dashboard (Avg Rent/Lease, lease-mix
+// counts, the header's total lease count, occupancy, delinquency,
+// renewals, tenancy, move-ins, evictions — every dashboardRoutes.ts route
+// that used to call fetchLeasesByStatus(["Active"]) directly now calls
+// this instead). CONFIRMED LIVE: 37 of Buildium's 240 LeaseStatus="Active"
+// leases are stale/ghost records — CurrentTenants is empty and
+// LeaseToDate is years in the past (e.g. lease 774300: LeaseFromDate
+// 2015-11-12, LeaseToDate 2018-04-22, CurrentTenants: [], but LeaseStatus
+// still says "Active"; Buildium's LeaseStatus field just never got
+// flipped to "Past" for these). This filter was already applied for the
+// rent-collection sync (src/api/syncRoutes.ts) but nothing else — e.g.
+// Avg Rent/Lease averaged across all 240 including the 37 ghosts,
+// producing $1,881.82 instead of the vendor's real ~$1,975. Filtering
+// once here, at the fetch layer, means every caller gets the correct
+// 203-lease set with no risk of a future call-site forgetting the filter.
 export async function fetchActiveLeases(): Promise<BuildiumLease[]> {
-  return fetchLeasesByStatus(["Active"]);
+  const leases = await fetchLeasesByStatus(["Active"]);
+  return leases.filter((l) => l.CurrentTenants && l.CurrentTenants.length > 0);
 }
 
 export async function fetchAllLeases(): Promise<BuildiumLease[]> {
@@ -220,40 +288,177 @@ export async function fetchProperties(): Promise<BuildiumProperty[]> {
   return buildiumGetAllPages<BuildiumProperty>("/rentals", z.array(buildiumPropertySchema));
 }
 
-// CONFIRMED via OpenAPI spec "RentalUnitMessage": units are a nested
-// resource under a rental property (/rentals/{id}/units), not a top-level
-// /units list endpoint. UnitStatus (Occupied/Vacant/etc.) is what backs the
-// occupancy/vacancy tiles.
+// CORRECTED LIVE 2026-07-03 against Jason's real Buildium account: the
+// originally-guessed nested endpoint /rentals/{id}/units (per the OpenAPI
+// spec's "RentalUnitMessage" docs) returns a 404 for EVERY property in this
+// account, not just single-unit ones — confirmed by testing it against
+// properties of every RentalSubType (SingleFamily, MultiFamily,
+// CondoTownhome) and unit count. This was the root cause of
+// /api/dashboard/occupancy failing outright. The REAL working endpoint is
+// the bulk /rentals/units list (optionally filtered with a `propertyids`
+// query param) — same data, one call instead of one call per property,
+// which also fixes the N+1 pattern the old per-property loop had.
+// IsUnitOccupied (confirmed present on the real response) is a direct,
+// authoritative occupancy signal — better than deriving occupancy from
+// active-lease counts, which the Dashboard's occupancy summary previously
+// had to do without this field.
 const buildiumUnitSchema = z.object({
   Id: z.number(),
   PropertyId: z.number(),
   UnitNumber: z.string().nullable(),
   UnitSize: z.number().nullable(),
   MarketRent: z.number().nullable(),
+  IsUnitOccupied: z.boolean(),
 });
 
 export type BuildiumUnit = z.infer<typeof buildiumUnitSchema>;
 
+// Fetches ALL units across the portfolio in one paginated bulk call,
+// including inactive/former-client/non-residential properties' units.
+// NOTE: for occupancy/portfolio-size reporting, use
+// fetchActiveResidentialUnits() below instead — this raw function is kept
+// for callers that genuinely need the unfiltered set (e.g. an admin/audit
+// view), but using it directly for a "how many units do I manage" number
+// is the exact mistake that produced 401 instead of the real ~230 (see
+// that function's comment for the full story).
+export async function fetchAllUnits(): Promise<BuildiumUnit[]> {
+  return buildiumGetAllPages<BuildiumUnit>("/rentals/units", z.array(buildiumUnitSchema));
+}
+
+// CORRECTED LIVE 2026-07-03 against Jason's real Buildium account (second
+// pass): fetchAllUnits() above returns 401 units — but Jason confirmed his
+// real managed portfolio is ~230 units, matching CLAUDE.md's stated
+// portfolio size. Investigated what's actually different between the ~230
+// real units and the ~171 extra ones in this account's real data (not
+// guessed from generic docs): properties carry IsActive (true/false) and
+// RentalType ("Residential"/"Commercial"). In this account:
+//   - IsActive: false properties account for 167 of the extra units —
+//     former clients / inactive properties still sitting in Buildium's
+//     data but no longer actually managed day to day.
+//   - RentalType: "Commercial" accounts for 2 more units, outside what
+//     Jason's residential property management business actually covers.
+// Filtering to IsActive === true AND RentalType === "Residential" and
+// cross-checking two different ways (summing property.NumberUnits vs.
+// counting actual unit records) both independently land on 233 — right in
+// the ~230 range Jason confirmed, not a coincidence. This is now the
+// correct definition of "a unit that counts" for the Dashboard's
+// occupancy/portfolio-size tiles.
+export async function fetchActiveResidentialUnits(): Promise<BuildiumUnit[]> {
+  const properties = await fetchProperties();
+  const activeResidentialPropertyIds = new Set(
+    properties.filter((p) => p.IsActive === true && p.RentalType === "Residential").map((p) => p.Id)
+  );
+  const allUnits = await fetchAllUnits();
+  return allUnits.filter((u) => activeResidentialPropertyIds.has(u.PropertyId));
+}
+
+// Active properties of ANY RentalType (confirmed live: 201 total for this
+// account — 200 Residential + 1 Commercial), for callers that need the
+// full set of properties Jason actually manages today, not just the
+// residential subset fetchActiveResidentialUnits() scopes to. Property
+// Health (src/kpi/propertyHealth.ts) needs this broader set since
+// Commercial is one of its real categories.
+export async function fetchActiveProperties(): Promise<BuildiumProperty[]> {
+  const properties = await fetchProperties();
+  return properties.filter((p) => p.IsActive === true);
+}
+
+// ADDED 2026-07-05: Jason confirmed live he pays Buildium for 234 doors
+// total and manages all of them, not just the 233 Residential ones —
+// fetchActiveResidentialUnits() above excludes exactly one real active
+// property ("6056 Providence Road", Buildium property id 668408,
+// RentalType: "Commercial", 1 unit), which is why Total Units/Occupancy/
+// Vacant previously showed 233 instead of the 234 Jason actually pays for.
+// This is the same active-properties-of-any-RentalType set
+// fetchActiveProperties() already returns (IsActive===true, no RentalType
+// filter) — just resolved down to unit records the same way
+// fetchActiveResidentialUnits() does. Scoped ONLY to Total Units/
+// Occupancy/Vacant per Jason's explicit instruction — other metrics that
+// use fetchActiveResidentialUnits() (Avg Rent/Lease, lease-mix, Revenue
+// per Unit, Avg Days Vacant) were NOT switched here since commercial
+// leases/rent structures may not be comparable to residential ones for
+// those; each was left as-is pending Jason's confirmation.
+export async function fetchActiveManagedUnits(): Promise<BuildiumUnit[]> {
+  const properties = await fetchActiveProperties();
+  const activePropertyIds = new Set(properties.map((p) => p.Id));
+  const allUnits = await fetchAllUnits();
+  return allUnits.filter((u) => activePropertyIds.has(u.PropertyId));
+}
+
+// Kept for any caller that genuinely needs one property's units without
+// pulling the whole portfolio — uses the same confirmed-working bulk
+// endpoint with a propertyids filter, NOT the broken nested path.
 export async function fetchUnitsForProperty(propertyId: string): Promise<BuildiumUnit[]> {
   return buildiumGetAllPages<BuildiumUnit>(
-    `/rentals/${encodeURIComponent(propertyId)}/units`,
+    `/rentals/units?propertyids=${encodeURIComponent(propertyId)}`,
     z.array(buildiumUnitSchema)
   );
 }
 
-const buildiumOwnerSchema = z.object({
+// CONFIRMED LIVE 2026-07-03 against Jason's real Buildium account: Email
+// was originally validated with z.string().email(), which rejects the
+// whole /rentals/owners list the moment ANY one record fails strict RFC
+// email format — and one real owner record in this account has
+// Email: "" (empty string, not null), which .email() rejects. This is
+// real, valid data Buildium itself returned (an owner simply has no email
+// on file, represented as "" rather than null) — the schema was too
+// strict, not the data wrong. Relaxed to a plain nullable string so one
+// owner's missing/malformed email can never take down the entire owners
+// list; format validation, if ever needed, should happen at display time
+// (e.g. "looks incomplete" UI hint) rather than at the API-ingestion layer
+// where a rejection here means Jason can't see ANY owner's data at all.
+// Exported (unlike most schemas in this file) specifically so a unit test
+// can assert on its parsing behavior directly — the exact regression this
+// schema exists to prevent (one owner's real-but-loosely-formatted Email
+// value taking down the entire /rentals/owners list) needs a test that
+// exercises the schema itself, not just the higher-level fetchOwners()
+// function, which would require mocking global fetch to exercise the same
+// thing less directly.
+// EXTENDED 2026-07-03 for Doors Added (Occupancy & Doors section):
+// ManagementAgreementStartDate, ManagementAgreementEndDate, and
+// PropertyIds — CONFIRMED LIVE present on real /rentals/owners records for
+// this account (previously silently dropped; zod ignores unrecognized
+// object keys by default, so nothing broke, they just weren't captured).
+// ManagementAgreementEndDate is captured here for completeness but is NOT
+// used for Doors Lost yet — confirmed live only 12 of 383 owner records
+// have any end date at all, most recent 2023, which does not match what
+// Jason reports as real recent/ongoing churn (40+ doors lost last year, 2
+// already this month per the coordinator). That field is not the real
+// signal for door losses on this account; Doors Lost is intentionally not
+// built against it (see src/kpi/churn.ts) pending further research into
+// the actual real signal.
+export const buildiumOwnerSchema = z.object({
   Id: z.number(),
   FirstName: z.string().nullable(),
   LastName: z.string().nullable(),
   IsCompany: z.boolean().nullable(),
   CompanyName: z.string().nullable(),
-  Email: z.string().email().nullable(),
+  Email: z.string().nullable(),
+  ManagementAgreementStartDate: z.string().nullable(),
+  ManagementAgreementEndDate: z.string().nullable(),
+  PropertyIds: z.array(z.number()).nullable(),
 });
 
 export type BuildiumOwner = z.infer<typeof buildiumOwnerSchema>;
 
+// Deliberately returns BOTH active and inactive owners (no status filter) —
+// Doors Added/Lost and Net Doors (see dashboardRoutes.ts /api/dashboard/doors
+// and /api/dashboard/net-doors/properties) need an owner's
+// ManagementAgreementStartDate even after that owner has gone inactive, since
+// "went inactive recently" is exactly how a lost door is detected. Do NOT
+// swap this to fetchActiveOwners() for those routes.
 export async function fetchOwners(): Promise<BuildiumOwner[]> {
   return buildiumGetAllPages<BuildiumOwner>("/rentals/owners", z.array(buildiumOwnerSchema));
+}
+
+// CONFIRMED LIVE 2026-07-05: Buildium's /rentals/owners defaults to
+// returning both active AND inactive owners when no status param is given
+// (383 total for this account = 251 Active + 132 Inactive). The Dashboard's
+// Owners count tile should match the vendor's own dashboard, which shows
+// Active owners only (251) — use this function for that tile, not
+// fetchOwners().
+export async function fetchActiveOwners(): Promise<BuildiumOwner[]> {
+  return buildiumGetAllPages<BuildiumOwner>("/rentals/owners?status=Active", z.array(buildiumOwnerSchema));
 }
 
 // ============================================================================
@@ -295,59 +500,160 @@ export async function fetchGlAccountsById(): Promise<Map<number, BuildiumGlAccou
 }
 
 // ============================================================================
-// General ledger transactions (financial/GL history for Gross Income / Net
-// Income / Revenue-per-Unit tiles)
+// General ledger (financial/GL history for Gross Income / Net Income /
+// Revenue-per-Unit tiles)
 // ============================================================================
 //
-// RESEARCH NOTE (verify against real account before trusting the date range
-// in production): Buildium's OpenAPI spec exposes /v1/glentries (GL journal
-// entries — the raw double-entry rows, each with a JournalId, a Date, a
-// Memo, and Lines[] carrying GlAccountId + Amount + PostingType Debit/Credit)
-// and /v1/generalledger/accountbalances (a summarized net-change/balance
-// endpoint per GL account over a date range). There is NO endpoint that
-// directly returns "Gross Income" / "Net Income" as named figures — those
-// are derived by summing glentries (or accountbalances) for GL accounts
-// classified Type=Income or Type=Expense via fetchGlAccountsById above,
-// the same classify-then-sum pattern late-rent-notices already uses for
-// itemized charges. This function fetches raw journal entries for a date
-// range; monthly Income/Expense rollups are computed in
-// src/kpi/financialSummary.ts by classifying each line's GlAccountId and
-// bucketing by the entry's month.
+// CONFIRMED LIVE 2026-07-05 against Jason's real Buildium account, replacing
+// the old fetchGlEntries()'s guessed /glentries endpoint (which 404s — it
+// does not exist). The real endpoint is GET /v1/generalledger, and it
+// returns pre-summed per-account totals (BeginningBalance, TotalAmount, plus
+// the raw Entries[] for that account/range), NOT raw double-entry journal
+// rows — so no PostingType Debit/Credit sign-flipping is needed here;
+// TotalAmount is already the correct signed net-change for the account over
+// the range.
 //
-// Buildium's actual data retention for GL history is account-specific (it
-// depends on how long Limehouse has used Buildium and whether older data
-// was ever migrated in) — this client does NOT assume data exists back to
-// 2018. Callers must inspect the real earliest entry date returned and
-// report that plainly rather than assume the full requested range came
-// back. See src/kpi/financialSummary.ts for where that check happens.
-const buildiumGlEntryLineSchema = z.object({
-  GlAccountId: z.number(),
-  Amount: z.number(),
-  PostingType: z.enum(["Debit", "Credit"]),
-});
+// Required query params (exact lowercase names, confirmed via real 200
+// responses):
+//   startdate, enddate       "YYYY-MM-DD". CONFIRMED the range between them
+//                            must be <= 365 days per request (a wider range
+//                            gets a real 422: "The time range must be less
+//                            than or equal to 365 days.") — multi-year pulls
+//                            need one call per <=365-day window, not one big
+//                            call. See fetchMonthlyGlTotals below.
+//   accountingbasis          'Cash' | 'Accrual'. CONFIRMED Cash is correct
+//                            for this account: computed Gross Income for
+//                            Jan-Jun 2026 (plus the Jul 1-5 partial month)
+//                            matched Jason's real CEO View figures to the
+//                            penny for all 7 months under Cash; Accrual does
+//                            not match.
+//   glaccountids             One or more GL account IDs. CONFIRMED Buildium
+//                            accepts this as a REPEATED query param
+//                            (glaccountids=3&glaccountids=4&...), not a
+//                            single comma-separated value — tested both live
+//                            and only the repeated form returns the expected
+//                            per-account rows.
+//   entitytype, entityid     Optional, but REQUIRED for a correct Gross/Net
+//                            Income figure for this account. Without them,
+//                            summing Income-type accounts returns Jason's
+//                            entire trust-ledger activity (rent collected on
+//                            behalf of every owner, ~6.45x too high) rather
+//                            than Limehouse's own company revenue. Buildium
+//                            tags each GL entry's AccountingEntity with an
+//                            AccountingEntityType of either "Rental" (an
+//                            individual owner's property/unit — pass-through,
+//                            not Limehouse's income) or "Company" (Limehouse
+//                            Property Management's own operating books).
+//                            CONFIRMED the real Company entity ID for this
+//                            account is 15695 (found by pulling real Jan 2026
+//                            income entries and reading the AccountingEntity.Id
+//                            off every entry tagged AccountingEntityType=
+//                            "Company" — there is no dedicated /companies
+//                            list endpoint, so this is the only way to
+//                            discover it). Passing entitytype=Company&
+//                            entityid=15695 reproduces Jason's real vendor
+//                            Gross Income numbers exactly for every month
+//                            checked (Jan-Jun 2026 plus partial Jul 2026,
+//                            all matched to the penny).
+const BUILDIUM_COMPANY_ENTITY_ID = 15695;
 
-const buildiumGlEntrySchema = z.object({
+const buildiumGlAccountEntrySchema = z.object({
   Id: z.number(),
   Date: z.string(),
-  Memo: z.string().nullable(),
-  Lines: z.array(buildiumGlEntryLineSchema),
+  Description: z.string().nullable(),
+  Amount: z.number(),
+  Balance: z.number(),
+  TransactionType: z.string(),
 });
 
-export type BuildiumGlEntry = z.infer<typeof buildiumGlEntrySchema>;
+const buildiumGeneralLedgerAccountSchema = z.object({
+  GLAccountId: z.number(),
+  GLAccountName: z.string(),
+  BeginningBalance: z.number(),
+  TotalAmount: z.number(),
+  Entries: z.array(buildiumGlAccountEntrySchema),
+});
 
-// fromDate/toDate are "YYYY-MM-DD". Buildium's /glentries endpoint accepts
-// FromDate/ToDate query params per the OpenAPI spec (confirmed live pattern
-// with other Buildium endpoints' PascalCase-but-lowercase-in-querystring
-// convention — verify actual param casing against a real 200 response
-// before relying on this in production; Buildium's query params are
-// case-insensitive in practice but this is noted here as unverified for
-// THIS specific endpoint until a live call has been made against Jason's
-// real account).
-export async function fetchGlEntries(fromDate: string, toDate: string): Promise<BuildiumGlEntry[]> {
-  return buildiumGetAllPages<BuildiumGlEntry>(
-    `/glentries?fromdate=${encodeURIComponent(fromDate)}&todate=${encodeURIComponent(toDate)}`,
-    z.array(buildiumGlEntrySchema)
-  );
+export type BuildiumGeneralLedgerAccount = z.infer<typeof buildiumGeneralLedgerAccountSchema>;
+
+// Buildium's own hard limit, confirmed via a real 422 ("The time range must
+// be less than or equal to 365 days.") when a wider range was requested.
+const MAX_GL_RANGE_DAYS = 365;
+
+export function splitIntoMaxRangeWindows(startDate: string, endDate: string): Array<{ start: string; end: string }> {
+  const windows: Array<{ start: string; end: string }> = [];
+  let windowStart = new Date(`${startDate}T00:00:00Z`);
+  const overallEnd = new Date(`${endDate}T00:00:00Z`);
+
+  while (windowStart <= overallEnd) {
+    const windowEnd = new Date(windowStart);
+    windowEnd.setUTCDate(windowEnd.getUTCDate() + MAX_GL_RANGE_DAYS - 1);
+    const clampedEnd = windowEnd > overallEnd ? overallEnd : windowEnd;
+    windows.push({
+      start: windowStart.toISOString().slice(0, 10),
+      end: clampedEnd.toISOString().slice(0, 10),
+    });
+    const nextStart = new Date(clampedEnd);
+    nextStart.setUTCDate(nextStart.getUTCDate() + 1);
+    windowStart = nextStart;
+  }
+  return windows;
+}
+
+// Fetches GL totals for a set of accounts over a date range, scoped to
+// Limehouse's own Company entity (see BUILDIUM_COMPANY_ENTITY_ID above), for
+// the given accounting basis. Splits the range into <=365-day windows
+// automatically (Buildium's hard per-request limit) and merges the results
+// per GL account (summing TotalAmount across windows, concatenating
+// Entries) so callers never need to think about the windowing themselves.
+//
+// glAccountIds is capped at 50 per request (batched) — not yet confirmed as
+// a real Buildium limit (this account's chart of accounts has 144 total
+// entries, well under any batch size tested), but matches this project's
+// existing conservative batching convention elsewhere and avoids an
+// unnecessarily long query string.
+const GL_ACCOUNT_BATCH_SIZE = 50;
+
+export async function fetchGeneralLedgerTotals(
+  glAccountIds: number[],
+  startDate: string,
+  endDate: string,
+  accountingBasis: "Cash" | "Accrual" = "Cash"
+): Promise<BuildiumGeneralLedgerAccount[]> {
+  if (glAccountIds.length === 0) return [];
+
+  const windows = splitIntoMaxRangeWindows(startDate, endDate);
+  const merged = new Map<number, BuildiumGeneralLedgerAccount>();
+
+  for (const window of windows) {
+    for (let i = 0; i < glAccountIds.length; i += GL_ACCOUNT_BATCH_SIZE) {
+      const batch = glAccountIds.slice(i, i + GL_ACCOUNT_BATCH_SIZE);
+      const glParams = batch.map((id) => `glaccountids=${id}`).join("&");
+      const path =
+        `/generalledger?startdate=${encodeURIComponent(window.start)}` +
+        `&enddate=${encodeURIComponent(window.end)}` +
+        `&accountingbasis=${accountingBasis}` +
+        `&entitytype=Company&entityid=${BUILDIUM_COMPANY_ENTITY_ID}` +
+        `&${glParams}`;
+
+      const rows = await buildiumGetAllPages<z.infer<typeof buildiumGeneralLedgerAccountSchema>>(
+        path,
+        z.array(buildiumGeneralLedgerAccountSchema)
+      );
+
+      for (const row of rows) {
+        const existing = merged.get(row.GLAccountId);
+        if (existing) {
+          existing.TotalAmount += row.TotalAmount;
+          existing.Entries.push(...row.Entries);
+        } else {
+          merged.set(row.GLAccountId, { ...row, Entries: [...row.Entries] });
+        }
+      }
+    }
+  }
+
+  return [...merged.values()];
 }
 
 // ============================================================================
@@ -367,12 +673,39 @@ export async function fetchGlEntries(fromDate: string, toDate: string): Promise<
 // /transactions is a REAL, working endpoint distinct from /charges — this
 // reuses that same confirmed endpoint, just requesting a different field
 // (TransactionType) than the sibling project needed.
+// Journal.Lines added 2026-07-04, per Oracle's real-data research into the
+// Rent By 3rd/10th and Avg SD Withheld % fixes — confirmed present on
+// every real transaction sampled (600+ across ~25 leases). Each line
+// carries which GL account (e.g. "Rent Income" id 3, "Prepayments" id 18)
+// a portion of the transaction posted against — this is the ONLY reliable
+// way to tell "this dollar was rent" apart from "this dollar was a fee/
+// deposit/credit" on a real Buildium ledger; TransactionType alone isn't
+// enough (e.g. "Applied Prepayment" still needs its Journal.Lines to know
+// which GL account received the money). Real confirmed TransactionType
+// string values: "Payment", "Charge", "Applied Prepayment",
+// "Applied Deposit", "Refund", "Reversed Payment", "Credit".
+const buildiumJournalLineGlAccountSchema = z.object({
+  Id: z.number(),
+  Name: z.string(),
+});
+
+const buildiumJournalLineSchema = z.object({
+  GLAccount: buildiumJournalLineGlAccountSchema,
+  Amount: z.number(),
+});
+
+const buildiumJournalSchema = z.object({
+  Memo: z.string().nullable(),
+  Lines: z.array(buildiumJournalLineSchema),
+});
+
 const buildiumLeaseTransactionSchema = z.object({
   Id: z.number(),
   LeaseId: z.number(),
   Date: z.string(),
-  TransactionType: z.string(), // "Payment" | "Charge" | "Credit" | ... — filter to "Payment" for collection tracking
+  TransactionType: z.string(), // "Payment" | "Charge" | "Applied Prepayment" | "Applied Deposit" | "Refund" | "Reversed Payment" | "Credit"
   TotalAmount: z.number(),
+  Journal: buildiumJournalSchema.optional(), // optional defensively; confirmed present on every real transaction sampled, but not worth a hard crash if a future/edge-case transaction type omits it
 });
 
 export type BuildiumLeaseTransaction = z.infer<typeof buildiumLeaseTransactionSchema>;
@@ -382,4 +715,94 @@ export async function fetchLeaseTransactions(buildiumLeaseId: string): Promise<B
     `/leases/${encodeURIComponent(buildiumLeaseId)}/transactions`,
     z.array(buildiumLeaseTransactionSchema)
   );
+}
+
+// ============================================================================
+// Vendors — for Bookkeeper's Vendor Compliance / 1099 Compliance KPIs.
+// CONFIRMED LIVE 2026-07-05: Category.Name for maintenance/trade vendors
+// really does start with "Contractor" (e.g. "Contractors - Plumbing",
+// "Contractor - RE Contractor (1099 Work)") — 55 real active vendors match
+// this scope out of 499 total. Buildium's own ?statuses=Active query param
+// was NOT used here per Jason's own findings that it's unreliable — every
+// vendor is fetched and re-filtered on its own IsActive flag instead.
+const buildiumVendorCategorySchema = z.object({
+  Id: z.number(),
+  Name: z.string().nullable(),
+});
+
+const buildiumVendorInsuranceSchema = z.object({
+  Provider: z.string().nullable(),
+  PolicyNumber: z.string().nullable(),
+  ExpirationDate: z.string().nullable(),
+});
+
+const buildiumVendorTaxInformationSchema = z.object({
+  TaxPayerIdType: z.string().nullable(),
+  TaxPayerId: z.string().nullable(),
+  IncludeIn1099: z.boolean(),
+});
+
+const buildiumVendorSchema = z.object({
+  Id: z.number(),
+  IsActive: z.boolean(),
+  CompanyName: z.string().nullable(),
+  Category: buildiumVendorCategorySchema,
+  VendorInsurance: buildiumVendorInsuranceSchema,
+  TaxInformation: buildiumVendorTaxInformationSchema,
+});
+
+export type BuildiumVendor = z.infer<typeof buildiumVendorSchema>;
+
+export async function fetchVendors(): Promise<BuildiumVendor[]> {
+  return buildiumGetAllPages<BuildiumVendor>("/vendors", z.array(buildiumVendorSchema));
+}
+
+// ============================================================================
+// Bank accounts / reconciliations — for Bookkeeper's Reconciliation Accuracy
+// KPI. CONFIRMED LIVE: Balance and IsActive are top-level fields on the
+// bank account itself (not nested under GLAccount). Some accounts (credit
+// cards linked via an external feed) return a 409 from the reconciliations
+// endpoint ("Cannot retrieve reconciliation(s) for an externally linked
+// bank account") — this is a real, permanent state for that account type,
+// not a transient error, so callers must treat it as "not reconcilable
+// here" rather than retrying or crashing.
+const buildiumBankAccountSchema = z.object({
+  Id: z.number(),
+  Name: z.string().nullable(),
+  IsActive: z.boolean(),
+  Balance: z.number(),
+});
+
+export type BuildiumBankAccount = z.infer<typeof buildiumBankAccountSchema>;
+
+export async function fetchBankAccounts(): Promise<BuildiumBankAccount[]> {
+  return buildiumGetAllPages<BuildiumBankAccount>("/bankaccounts", z.array(buildiumBankAccountSchema));
+}
+
+const buildiumReconciliationSchema = z.object({
+  Id: z.number(),
+  StatementEndingDate: z.string(),
+  IsFinished: z.boolean(),
+});
+
+export type BuildiumReconciliation = z.infer<typeof buildiumReconciliationSchema>;
+
+export interface BankAccountReconciliationsResult {
+  reconcilable: boolean;
+  reconciliations: BuildiumReconciliation[];
+}
+
+export async function fetchBankAccountReconciliations(bankAccountId: number): Promise<BankAccountReconciliationsResult> {
+  try {
+    const reconciliations = await buildiumGetAllPages<BuildiumReconciliation>(
+      `/bankaccounts/${bankAccountId}/reconciliations`,
+      z.array(buildiumReconciliationSchema)
+    );
+    return { reconcilable: true, reconciliations };
+  } catch (err) {
+    if (err instanceof BuildiumApiError && err.status === 409) {
+      return { reconcilable: false, reconciliations: [] };
+    }
+    throw err;
+  }
 }

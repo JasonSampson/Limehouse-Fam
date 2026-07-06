@@ -3,17 +3,20 @@
 // (property/unit/balance for delinquency, property/unit/rent for occupied
 // units, etc. — per the project brief).
 
-function openDrillDownModal({ title, columns, rows, emptyText = "No records for this period." }) {
+function openDrillDownModal({ title, formula, columns, rows, emptyText = "No records for this period." }) {
   closeDrillDownModal();
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.id = "drill-down-overlay";
 
+  const formulaHtml = formula ? `<p class="modal-formula"><strong>Formula:</strong> ${formula}</p>` : "";
+
   const bodyHtml =
     rows.length === 0
-      ? `<p class="loading-text">${emptyText}</p>`
+      ? `${formulaHtml}<p class="loading-text">${emptyText}</p>`
       : `
+        ${formulaHtml}
         <table class="drill-table">
           <thead>
             <tr>${columns.map((c) => `<th>${c.label}</th>`).join("")}</tr>

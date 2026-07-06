@@ -5,8 +5,8 @@ import { resolvePeriod, periodToSnapshotLabel } from "../../src/kpi/period.js";
 const NOW = new Date("2026-07-03T12:00:00Z");
 
 describe("resolvePeriod", () => {
-  it("this_month", () => {
-    expect(resolvePeriod("this_month", NOW)).toEqual({ from: "2026-07-01", to: "2026-07-31" });
+  it("this_month clamps to today, not the full calendar month", () => {
+    expect(resolvePeriod("this_month", NOW)).toEqual({ from: "2026-07-01", to: "2026-07-03" });
   });
 
   it("last_month", () => {
@@ -18,9 +18,15 @@ describe("resolvePeriod", () => {
     expect(resolvePeriod("last_month", jan)).toEqual({ from: "2025-12-01", to: "2025-12-31" });
   });
 
-  it("this_quarter", () => {
-    // July is Q3: Jul-Sep
-    expect(resolvePeriod("this_quarter", NOW)).toEqual({ from: "2026-07-01", to: "2026-09-30" });
+  it("this_quarter clamps to today, not the full calendar quarter", () => {
+    // July is Q3: Jul-Sep, but today is Jul 3
+    expect(resolvePeriod("this_quarter", NOW)).toEqual({ from: "2026-07-01", to: "2026-07-03" });
+  });
+
+  it("this_month/this_quarter/this_year do not clamp when today is already past the natural end", () => {
+    // Sanity check: clamping only kicks in when the natural end is in the future.
+    const endOfMonth = new Date("2026-07-31T12:00:00Z");
+    expect(resolvePeriod("this_month", endOfMonth)).toEqual({ from: "2026-07-01", to: "2026-07-31" });
   });
 
   it("last_quarter", () => {
@@ -33,8 +39,8 @@ describe("resolvePeriod", () => {
     expect(resolvePeriod("last_quarter", feb)).toEqual({ from: "2025-10-01", to: "2025-12-31" });
   });
 
-  it("this_year", () => {
-    expect(resolvePeriod("this_year", NOW)).toEqual({ from: "2026-01-01", to: "2026-12-31" });
+  it("this_year clamps to today, not the full calendar year", () => {
+    expect(resolvePeriod("this_year", NOW)).toEqual({ from: "2026-01-01", to: "2026-07-03" });
   });
 
   it("last_year", () => {

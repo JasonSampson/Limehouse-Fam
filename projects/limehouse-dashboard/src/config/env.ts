@@ -26,8 +26,20 @@ const envSchema = z.object({
   BUILDIUM_BASE_URL: z.string().url().default("https://api.buildium.com/v1"),
 
   // Optional: RentEngine API access may not exist yet for this account.
+  // CONFIRMED LIVE 2026-07-03: the real base URL is
+  // app.rentengine.io/api/public/v1 — api.rentengine.com/v1 (the previous
+  // default here) does not exist and was never actually reachable.
   RENTENGINE_API_KEY: z.string().optional(),
-  RENTENGINE_BASE_URL: z.string().url().default("https://api.rentengine.com/v1"),
+  RENTENGINE_BASE_URL: z.string().url().default("https://app.rentengine.io/api/public/v1"),
+  // account_id query param required by /calls and /messages (confirmed
+  // live — see src/rentengine/client.ts). Confirmed fixed for this
+  // account (29a7815c-08a9-45df-a13a-f75376c95770) across every prospect
+  // record checked, but kept as its own optional env var rather than
+  // hardcoded in source, in case Jason's RentEngine setup ever spans
+  // multiple accounts. If left blank, syncCallActivityForPeriod's caller
+  // must derive it from a live prospect record instead of assuming the
+  // hardcoded value.
+  RENTENGINE_ACCOUNT_ID: z.string().optional(),
 
   // Optional: LeadSimple API access may not exist yet for this account.
   LEADSIMPLE_API_KEY: z.string().optional(),
@@ -36,9 +48,19 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3100),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
-  // Session secret for the Team Performance shared-password gate (signs the
-  // "unlocked" session cookie once the shared password is checked).
+  // Signs the app's own session cookie issued after a successful Microsoft
+  // sign-in (see src/auth/session.ts). Not related to Entra itself.
   SESSION_COOKIE_SECRET: z.string().min(16, "SESSION_COOKIE_SECRET must be at least 16 chars"),
+
+  // Microsoft Entra SSO — this project's OWN app registration, separate from
+  // late-rent-notices' (different redirect URI, own client secret so it can
+  // be revoked independently). Jason must register this dashboard as its own
+  // app in the Microsoft 365 admin center; these four values come from that
+  // registration. Same naming convention as late-rent-notices' env.ts.
+  ENTRA_TENANT_ID: z.string().min(1, "ENTRA_TENANT_ID is required"),
+  ENTRA_CLIENT_ID: z.string().min(1, "ENTRA_CLIENT_ID is required"),
+  ENTRA_CLIENT_SECRET: z.string().min(1, "ENTRA_CLIENT_SECRET is required"),
+  ENTRA_REDIRECT_URI: z.string().url("ENTRA_REDIRECT_URI must be a full URL"),
 });
 
 export type Env = z.infer<typeof envSchema>;

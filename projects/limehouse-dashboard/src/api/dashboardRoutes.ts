@@ -3,10 +3,14 @@ import { z } from "zod";
 import {
   fetchOutstandingBalances,
   fetchProperties,
-  fetchUnitsForProperty,
-  fetchLeasesByStatus,
+  fetchActiveProperties,
+  fetchActiveResidentialUnits,
+  fetchActiveManagedUnits,
+  fetchAllUnits,
+  fetchAllLeases,
+  fetchActiveLeases,
   fetchOwners,
-  fetchLeaseTransactions,
+  fetchActiveOwners,
 } from "../buildium/client.js";
 import {
   summarizeDelinquency,
@@ -14,42 +18,117 @@ import {
   bucketDelinquencyByAge,
   daysLateAsOf,
 } from "../buildium/delinquency.js";
-import { summarizeOccupancy, summarizeLeaseMix, upcomingRenewals } from "../kpi/occupancy.js";
-import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
 import {
-  summarizeRentAndDeposit,
-  summarizeMonthlyCollectionRates,
-  earliestPaymentPerMonth,
-} from "../kpi/rentCollection.js";
-import { logError } from "../lib/logger.js";
+  summarizeOccupancy,
+  summarizeLeaseMix,
+  upcomingRenewals,
+  averageTenancyMonths,
+  summarizeRenewalRate,
+} from "../kpi/occupancy.js";
+import { summarizePropertyHealthFromReporting } from "../rentengine/client.js";
+import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
+import {
+  buildPropertyManagementStarts,
+  summarizeDoorsAdded,
+  estimatePropertyLossDates,
+  summarizeDoorsLostEstimate,
+  netDoorsRows,
+} from "../kpi/churn.js";
+import {
+  rentLeaseRows,
+  fixedTermLeaseRows,
+  monthToMonthLeaseRows,
+  evictionPendingLeaseRows,
+  tenancyRows,
+  moveInLeaseRows,
+  unitStatusRows,
+  vacantUnitRows,
+  vacantUnitDaysRows,
+  averageDaysVacant,
+  renewalRateRows,
+} from "../kpi/leaseRows.js";
+import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
+import { summarizeRentAndDeposit } from "../kpi/rentCollection.js";
+import { getCachedMetric, isCacheFresh } from "../db/metricCache.js";
+import { logError, logWarn } from "../lib/logger.js";
+import { requireLogin } from "../auth/session.js";
 
+// requireLogin applied per-route (not via dashboardRoutes.use()) — this
+// router is mounted at the app root with no path prefix, and a blanket
+// .use() here would catch every request that reaches this router's dispatch
+// chain, including ones destined for routers mounted after it. See
+// teamPerformanceRoutes.ts's comment for the real bug this caused before.
 export const dashboardRoutes = Router();
 
 const periodSchema = z
   .enum(["this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"])
   .default("this_month");
 
+// Same helper as rentEngineRoutes.ts's resolveDateRangeFromQuery (kept
+// local rather than exported/shared across files, since it's a 4-line
+// wrapper around resolvePeriod — not worth a cross-file import for this).
+function resolveDateRangeFromQuery(periodRaw: unknown): { from: string; to: string } {
+  const parsed = periodSchema.safeParse(periodRaw);
+  const period: PeriodKey = parsed.success ? parsed.data : "this_month";
+  const range = resolvePeriod(period);
+  return { from: `${range.from}T00:00:00Z`, to: `${range.to}T23:59:59Z` };
+}
+
 // ============================================================================
 // STRUCTURAL tiles — always as-of-today, period param is intentionally
 // ignored if a caller sends one, per the brief's flow-vs-structural rule.
 // ============================================================================
 
-dashboardRoutes.get("/api/dashboard/occupancy", async (_req, res) => {
+// CORRECTED 2026-07-03, second pass: the first fix (fetchAllUnits, one
+// bulk call) solved the 404 crash but returned 401 units — Jason confirmed
+// his real managed portfolio is ~230, matching CLAUDE.md. The extra ~171
+// were inactive/former-client properties and 2 commercial units still
+// present in Buildium's data but not actually managed today. Now uses
+// fetchActiveResidentialUnits() (see src/buildium/client.ts for the full
+// investigation — IsActive===true AND RentalType==="Residential" is the
+// real distinguishing filter, confirmed against this account's actual
+// data, landing on 233 units via two independent counting methods).
+//
+// CORRECTED 2026-07-04, third pass: switched from summarizeOccupancyFromUnits
+// (trusting the unit record's raw IsUnitOccupied flag) to summarizeOccupancy
+// (deriving "occupied" from having a currently-Active lease). CONFIRMED LIVE
+// 2026-07-04 comparing against the vendor site side-by-side: IsUnitOccupied
+// gave 211/233 = 90.6%, but the vendor showed 86.8%. Investigated 9 real
+// units where IsUnitOccupied=true but no Active lease exists — every one is
+// a transition gap where the outgoing tenant's lease already ended (Past)
+// and the incoming tenant's lease hasn't started yet (Future, e.g. signed
+// but move-in is 1-3 weeks out), so Buildium's IsUnitOccupied flag hasn't
+// caught up even though no lease is currently Active. Deriving occupancy
+// from Active-lease status instead gives 202/233 = 86.7%, matching the
+// vendor almost exactly (the remaining ~0.1pt is the already-known,
+// accepted 233-vs-234 total-unit-count variance). Only Active leases on a
+// unit that's actually in our tracked residential set count, so this stays
+// scoped to the same 233 units as before rather than picking up leases on
+// properties fetchActiveResidentialUnits() intentionally excludes.
+//
+// CHANGED 2026-07-05: switched from fetchActiveResidentialUnits() (233
+// units) to fetchActiveManagedUnits() (234 units) — Jason confirmed live he
+// pays Buildium for and manages 234 doors total, including one Commercial
+// property (6056 Providence Road, 1 unit) that the residential-only filter
+// excluded. Total Units/Occupancy/Vacant should reflect everything he
+// manages, not just the residential subset. See fetchActiveManagedUnits'
+// doc comment in src/buildium/client.ts for why other metrics (Avg Rent/
+// Lease, lease-mix, Revenue per Unit, Avg Days Vacant) were NOT changed.
+dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) => {
   try {
-    const properties = await fetchProperties();
-    const unitLists = await Promise.all(properties.map((p) => fetchUnitsForProperty(String(p.Id))));
-    const totalUnits = unitLists.reduce((sum, units) => sum + units.length, 0);
-    const activeLeases = await fetchLeasesByStatus(["Active"]);
-    res.json(summarizeOccupancy(totalUnits, activeLeases));
+    const [units, activeLeases] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases()]);
+    const trackedUnitIds = new Set(units.map((u) => u.Id));
+    const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
+    res.json(summarizeOccupancy(units.length, activeLeasesOnTrackedUnits));
   } catch (err) {
     logError("GET /api/dashboard/occupancy failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load occupancy data from Buildium." });
   }
 });
 
-dashboardRoutes.get("/api/dashboard/lease-mix", async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/lease-mix", requireLogin, async (_req, res) => {
   try {
-    const activeLeases = await fetchLeasesByStatus(["Active"]);
+    const activeLeases = await fetchActiveLeases();
     res.json(summarizeLeaseMix(activeLeases));
   } catch (err) {
     logError("GET /api/dashboard/lease-mix failed", { error: String(err) });
@@ -57,7 +136,22 @@ dashboardRoutes.get("/api/dashboard/lease-mix", async (_req, res) => {
   }
 });
 
-dashboardRoutes.get("/api/dashboard/delinquency", async (_req, res) => {
+// Avg Tenancy (Leasing Pipeline section) — STRUCTURAL, measured from each
+// active lease's LeaseFromDate to today. See src/kpi/occupancy.ts for why
+// this measures to LeaseFromDate rather than LeaseToDate (month-to-month
+// leases have no end date and would otherwise be silently excluded).
+dashboardRoutes.get("/api/dashboard/avg-tenancy", requireLogin, async (_req, res) => {
+  try {
+    const activeLeases = await fetchActiveLeases();
+    const avgTenancyMonths = averageTenancyMonths(activeLeases, new Date());
+    res.json({ avgTenancyMonths });
+  } catch (err) {
+    logError("GET /api/dashboard/avg-tenancy failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load average tenancy data from Buildium." });
+  }
+});
+
+dashboardRoutes.get("/api/dashboard/delinquency", requireLogin, async (_req, res) => {
   try {
     const balances = await fetchOutstandingBalances();
     res.json(summarizeDelinquency(balances));
@@ -68,7 +162,7 @@ dashboardRoutes.get("/api/dashboard/delinquency", async (_req, res) => {
 });
 
 // Drill-down: property/unit/balance, sorted highest balance first.
-dashboardRoutes.get("/api/dashboard/delinquency/leases", async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/delinquency/leases", requireLogin, async (_req, res) => {
   try {
     const balances = await fetchOutstandingBalances();
     res.json(delinquentLeaseRows(balances));
@@ -82,14 +176,14 @@ const renewalsQuerySchema = z.object({
   withinDays: z.coerce.number().int().positive().max(365).default(60),
 });
 
-dashboardRoutes.get("/api/dashboard/renewals", async (req, res) => {
+dashboardRoutes.get("/api/dashboard/renewals", requireLogin, async (req, res) => {
   const parsed = renewalsQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid withinDays query param." });
     return;
   }
   try {
-    const activeLeases = await fetchLeasesByStatus(["Active"]);
+    const activeLeases = await fetchActiveLeases();
     res.json(upcomingRenewals(activeLeases, new Date(), parsed.data.withinDays));
   } catch (err) {
     logError("GET /api/dashboard/renewals failed", { error: String(err) });
@@ -97,7 +191,37 @@ dashboardRoutes.get("/api/dashboard/renewals", async (req, res) => {
   }
 });
 
-dashboardRoutes.get("/api/dashboard/properties", async (_req, res) => {
+// Renewal Rate (top-of-mind tile) — REBUILT 2026-07-05: "% of leases that
+// renewed instead of moving out, over the trailing 12 months," replacing
+// the old "% of active leases coming up for renewal in the next 60 days"
+// definition. See summarizeRenewalRate in src/kpi/occupancy.ts for the
+// full derivation, why the obvious approaches didn't work, and the real-
+// data verification (166 renewed / 69 moved out = 70.6% vs. vendor's
+// 70.8%). Needs ALL leases (Active/Past/Future), not just Active — the
+// "moved out" half of the population is specifically Past leases.
+dashboardRoutes.get("/api/dashboard/renewal-rate", requireLogin, async (_req, res) => {
+  try {
+    const allLeases = await fetchAllLeases();
+    res.json(summarizeRenewalRate(allLeases, new Date()));
+  } catch (err) {
+    logError("GET /api/dashboard/renewal-rate failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load renewal rate data from Buildium." });
+  }
+});
+
+// Renewal Rate drill-down — the renewed/moved-out row list behind the
+// percentage above.
+dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, async (_req, res) => {
+  try {
+    const allLeases = await fetchAllLeases();
+    res.json(renewalRateRows(allLeases, new Date()));
+  } catch (err) {
+    logError("GET /api/dashboard/renewal-rate/leases failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load renewal rate lease data from Buildium." });
+  }
+});
+
+dashboardRoutes.get("/api/dashboard/properties", requireLogin, async (_req, res) => {
   try {
     const properties = await fetchProperties();
     res.json(properties.map((p) => ({ id: p.Id, name: p.Name, numberUnits: p.NumberUnits })));
@@ -107,9 +231,114 @@ dashboardRoutes.get("/api/dashboard/properties", async (_req, res) => {
   }
 });
 
-dashboardRoutes.get("/api/dashboard/owners", async (_req, res) => {
+// Property Health breakdown (Occupancy & Doors section) — CORRECTED
+// 2026-07-04: the Buildium-derived formula below (classifyPropertyHealth,
+// kept in src/kpi/propertyHealth.ts for reference/tests but no longer
+// wired here) was WRONG. Jason found RentEngine's real docs
+// (docs.rentengine.io/openapi), which confirmed Property Health is a REAL
+// field RentEngine returns directly per unit
+// (GET /reporting/leasing-performance/units/{unitId} -> property_health),
+// with the exact same 7 category values used here as a coincidence-proof
+// match to the Buildium guess, not evidence the guess was right. This is
+// scoped to RentEngine's own ~61 tracked units (a real, different, smaller
+// denominator than Buildium's ~201 active properties) — see
+// src/rentengine/client.ts's summarizePropertyHealthFromReporting for the
+// full note on that distinction. Cache-backed (same pattern as
+// rent-collection/call-activity): computing this live would mean ~61
+// RentEngine calls on every page load.
+dashboardRoutes.get("/api/dashboard/property-health", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const owners = await fetchOwners();
+    const shared = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+    if (!shared.connected) {
+      res.json({ connected: false, totalUnits: null, countsByCategory: null });
+      return;
+    }
+    if (shared.error || !shared.rows) {
+      logError("GET /api/dashboard/property-health failed", { error: shared.error });
+      res.status(502).json({ error: "Failed to load property health data from RentEngine.", detail: shared.error });
+      return;
+    }
+    const summary = summarizePropertyHealthFromReporting(shared.rows);
+    res.json({ connected: true, ...summary, cached: shared.cached, cachedAt: shared.cachedAt, stale: shared.stale });
+  } catch (err) {
+    logError("GET /api/dashboard/property-health failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load property health data from RentEngine." });
+  }
+});
+
+// Doors Added (Occupancy & Doors section) — CORRECTED 2026-07-03: the
+// original research (no CreatedDate/CreatedDateTime on /rentals or
+// /rentals/units) was right that THOSE fields don't exist, but missed a
+// real signal that does: /rentals/owners carries
+// ManagementAgreementStartDate per owner, which IS a genuine
+// "when did this door join the portfolio" date (see src/kpi/churn.ts).
+// Verified live: 5/11/17 doors added in the trailing 30/60/90 days for
+// this account, matching Jason's own expectation. A property with
+// multiple owners whose start dates disagree by more than 30 days is
+// flagged in flaggedDisagreements (logged, not silently resolved) — this
+// account has 5 such properties as of 2026-07-03 (largest gap ~1,106
+// days, which reads as a Buildium data-entry quirk, not a bug here).
+//
+// Doors Lost is an ESTIMATE, not a real figure — labeled that way in the
+// response on purpose (doorsLostEstimated, not doorsLost). Buildium's
+// ManagementAgreementEndDate is stale for this account (12 of 383 owner
+// records have any end date, most recent 2023) and cannot be tracking
+// Jason's real recent losses, so it is NOT used. Instead: for a property
+// that is CURRENTLY IsActive:false, the most recent LeaseToDate across
+// its leases approximates the loss date (Oracle-confirmed proxy — see
+// src/kpi/churn.ts for the full derivation and its two documented
+// limitations: undercounts properties with zero lease history, and can't
+// apply the 30-day reactivation-confirmation rule retroactively since
+// there's no history of past active/inactive flips to check it against).
+// Verified live: 2 doors lost (estimated) in the last 31 days, 26 in the
+// last 12 months — matches Oracle's numbers exactly.
+dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
+  try {
+    const [allProperties, allLeases, owners] = await Promise.all([
+      fetchProperties(),
+      fetchAllLeases(),
+      fetchOwners(),
+    ]);
+    const activeProperties = allProperties.filter((p) => p.IsActive === true);
+    const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
+    const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
+
+    const { properties, flaggedDisagreements } = buildPropertyManagementStarts(owners, activePropertyIds);
+    const doorsAdded = summarizeDoorsAdded(properties, new Date());
+
+    if (flaggedDisagreements.length > 0) {
+      logWarn("Property Doors Added: co-owner management-start-date disagreements found", {
+        count: flaggedDisagreements.length,
+        flaggedDisagreements,
+      });
+    }
+
+    const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
+    const doorsLostEstimated = summarizeDoorsLostEstimate(lossEstimates, inactiveProperties.length, new Date());
+
+    res.json({
+      doorsAdded,
+      doorsAddedFlaggedDisagreements: flaggedDisagreements,
+      doorsLostEstimated: {
+        ...doorsLostEstimated,
+        estimated: true,
+        note:
+          "Estimated from the most recent lease end date on each currently-inactive property, not a real deactivation date — likely undercounts properties that never had a Buildium lease on file (see propertiesUndercounted).",
+      },
+    });
+  } catch (err) {
+    logError("GET /api/dashboard/doors failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load doors-added data from Buildium." });
+  }
+});
+
+dashboardRoutes.get("/api/dashboard/owners", requireLogin, async (_req, res) => {
+  try {
+    // Active owners only — matches vendor's own dashboard (251), not the
+    // 383 you get from fetchOwners() which deliberately includes inactive
+    // owners for the Doors Added/Lost calculations elsewhere on this page.
+    const owners = await fetchActiveOwners();
     res.json(
       owners.map((o) => ({
         id: o.Id,
@@ -128,23 +357,54 @@ dashboardRoutes.get("/api/dashboard/owners", async (_req, res) => {
 // months chart, Delinquency Aging. All Buildium-only (no RentEngine/
 // LeadSimple dependency).
 //
-// UNVERIFIED FIELD SHAPES, flagged per the same discipline as
-// fetchGlEntries: CurrentRent.Amount, SecurityDeposit.Amount on
-// BuildiumLease, and TransactionType on BuildiumLeaseTransaction are all
-// best-guess schemas based on Buildium's OpenAPI spec, not yet confirmed
-// against a live response (no Buildium credentials exist for this project
-// yet). The MATH in src/kpi/rentCollection.ts and
-// src/buildium/delinquency.ts is fully unit-tested; only the upstream
-// field names are the open question, and this route will need a
-// live-verified pass once Jason provisions the fresh Buildium key.
+// Field shapes (AccountDetails.Rent/SecurityDeposit, Journal.Lines on
+// transactions) are CONFIRMED LIVE against Jason's real Buildium account —
+// this note used to flag them as unverified guesses before real credentials
+// existed for this project; that's no longer the case. See rentCollection.ts
+// for the verification history on each metric.
 // ============================================================================
 
-// Avg Rent/Lease, Avg SD Withheld, Avg SD Withheld % — STRUCTURAL (as-of-
-// today across all active leases, not period-dependent).
-dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", async (_req, res) => {
+// Avg Rent/Lease, Avg SD Withheld — STRUCTURAL (as-of-today across all
+// active leases, deposits currently HELD, not period-dependent).
+//
+// Avg SD Withheld % — CORRECTED 2026-07-04, per Oracle's real-data spec.
+// This is a DIFFERENT population (recent Past/move-out leases, not Active
+// ones) and a DIFFERENT calculation (sum-of-withheld / sum-of-deposit
+// across settled move-outs, via POST /api/sync/security-deposit-withheld,
+// not deposit-as-percent-of-rent). Cache-backed, same pattern as
+// rent-collection — reads whatever the sync last computed rather than
+// running the Past-lease/transaction fetch live on every page load.
+dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", requireLogin, async (_req, res) => {
   try {
-    const activeLeases = await fetchLeasesByStatus(["Active"]);
-    res.json(summarizeRentAndDeposit(activeLeases));
+    const activeLeases = await fetchActiveLeases();
+    const baseSummary = summarizeRentAndDeposit(activeLeases);
+
+    const cached = await getCachedMetric("security_deposit_withheld", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json({
+        ...baseSummary,
+        avgSecurityDepositWithheldPercent: null,
+        securityDepositWithheldSynced: false,
+        securityDepositWithheldMessage:
+          "Security deposit withheld % has not been synced yet. Trigger POST /api/sync/security-deposit-withheld first.",
+      });
+      return;
+    }
+
+    const withheldSummary = cached.value as {
+      avgSecurityDepositWithheldPercent: number | null;
+      settledLeaseCount: number;
+      unsettledLeaseCount: number;
+    };
+    res.json({
+      ...baseSummary,
+      avgSecurityDepositWithheldPercent: withheldSummary.avgSecurityDepositWithheldPercent,
+      securityDepositWithheldSynced: true,
+      securityDepositWithheldStale: !isCacheFresh(cached),
+      securityDepositWithheldCachedAt: cached.fetchedAt,
+      settledLeaseCount: withheldSummary.settledLeaseCount,
+      unsettledLeaseCount: withheldSummary.unsettledLeaseCount,
+    });
   } catch (err) {
     logError("GET /api/dashboard/financials/rent-and-deposit failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load rent/deposit data from Buildium." });
@@ -155,9 +415,9 @@ dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", async (_req, r
 // STRUCTURAL, built on the same fetchOutstandingBalances() data as
 // /api/dashboard/delinquency above, bucketed by days-late using each
 // lease's PaymentDueDay.
-dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", requireLogin, async (_req, res) => {
   try {
-    const [balances, activeLeases] = await Promise.all([fetchOutstandingBalances(), fetchLeasesByStatus(["Active"])]);
+    const [balances, activeLeases] = await Promise.all([fetchOutstandingBalances(), fetchActiveLeases()]);
     const dueDayByLeaseId = new Map(activeLeases.map((l) => [String(l.Id), l.PaymentDueDay]));
     const asOf = new Date();
 
@@ -182,47 +442,39 @@ dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", async (_req, 
 // "the last 12 months," matching the vendor dashboard's own fixed chart
 // window rather than the this/last month/quarter/year selector.
 //
-// N+1 WARNING, noted honestly: this fetches transactions per-lease
-// (fetchLeaseTransactions is a single-lease call), so this endpoint makes
-// one Buildium call per active lease. Fine for occasional dashboard loads
-// at 230 units; if this becomes slow in practice once real data is
-// flowing, the fix is a metric_cache-backed background sync (Neo's
-// dashboard_metric_cache table already exists for exactly this) rather
-// than computing it live on every request — flagged here rather than
-// silently left as a surprise.
-dashboardRoutes.get("/api/dashboard/financials/rent-collection", async (_req, res) => {
+// CACHE-BACKED as of 2026-07-03 (confirmed live rate-limit issue, not
+// hypothetical): this used to compute live on every page load by calling
+// fetchLeaseTransactions once per active lease (~230 Buildium calls fired
+// via Promise.all), which genuinely triggered real 429 rate-limit errors
+// against Jason's live account. The expensive computation now runs only in
+// POST /api/sync/rent-collection (syncRoutes.ts), spaced out sequentially
+// rather than fired all at once, and writes its result to
+// dashboard_metric_cache. This route just reads that cache — no Buildium
+// calls on the page-load path at all. If the cache has never been
+// populated yet (first run before any sync), this returns an honest 503
+// telling the caller to trigger a sync, rather than falling back to the
+// old expensive live path and reintroducing the exact rate-limit problem
+// this fix exists to prevent.
+dashboardRoutes.get("/api/dashboard/financials/rent-collection", requireLogin, async (_req, res) => {
   try {
-    const activeLeases = await fetchLeasesByStatus(["Active"]);
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setUTCMonth(twelveMonthsAgo.getUTCMonth() - 11);
-    const monthsInWindow = last12Months(new Date());
-
-    const duePerMonth = activeLeases.flatMap((lease) =>
-      monthsInWindow.map((month) => ({ leaseId: String(lease.Id), month }))
-    );
-
-    const paymentsByLease = await Promise.all(
-      activeLeases.map(async (lease) => {
-        const transactions = await fetchLeaseTransactions(String(lease.Id));
-        return earliestPaymentPerMonth(String(lease.Id), transactions);
-      })
-    );
-
-    res.json(summarizeMonthlyCollectionRates(duePerMonth, paymentsByLease.flat()));
+    const cached = await getCachedMetric("rent_collection_12mo", "portfolio");
+    if (!cached || cached.value === null) {
+      res.status(503).json({
+        error: "Rent collection data has not been synced yet. Trigger POST /api/sync/rent-collection first.",
+      });
+      return;
+    }
+    res.json({
+      months: cached.value,
+      cachedAt: cached.fetchedAt,
+      stale: !isCacheFresh(cached),
+      lastError: cached.lastError,
+    });
   } catch (err) {
     logError("GET /api/dashboard/financials/rent-collection failed", { error: String(err) });
-    res.status(502).json({ error: "Failed to load rent collection data from Buildium." });
+    res.status(502).json({ error: "Failed to load cached rent collection data." });
   }
 });
-
-function last12Months(asOf: Date): string[] {
-  const months: string[] = [];
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth() - i, 1));
-    months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
-  }
-  return months;
-}
 
 // ============================================================================
 // FLOW tiles — respect the period selector. Currently exposes the resolved
@@ -232,8 +484,194 @@ function last12Months(asOf: Date): string[] {
 // fetchGlEntries).
 // ============================================================================
 
-dashboardRoutes.get("/api/dashboard/period-info", (req, res) => {
+dashboardRoutes.get("/api/dashboard/period-info", requireLogin, (req, res) => {
   const parsed = periodSchema.safeParse(req.query.period);
   const period: PeriodKey = parsed.success ? parsed.data : "this_month";
   res.json({ period, range: resolvePeriod(period) });
+});
+
+// ============================================================================
+// Drill-downs added 2026-07-04, per Jason's original "exact copy — same
+// layout and functionality" requirement (the vendor site has "tap any tile
+// for the full record list" on ~30 tiles; most weren't built yet). Jason
+// explicitly approved this batch EXCLUDING Rent By 3rd/10th and Avg SD
+// Withheld — those two sit on a calculation already confirmed wrong (see
+// src/kpi/rentCollection.ts's "KNOWN WRONG METRIC" notice) and are
+// deliberately NOT getting drill-downs until that's fixed, so as not to
+// present detailed per-lease numbers built on math everyone already knows
+// is incorrect. Row shape matches the existing drill-downs (propertyId/
+// leaseId as plain identifiers, not resolved property names/addresses —
+// no existing drill-down resolves names either; that's a separate,
+// larger change, not part of this batch).
+// ============================================================================
+
+// Renewal Rate drill-down — same underlying list as the Renewals tile
+// itself (both are "leases renewing within 60 days"), just reached from a
+// different tile. No new route needed — the frontend can call the
+// existing /api/dashboard/renewals?withinDays=60 endpoint directly.
+
+// Avg Rent/Lease drill-down.
+dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit/leases", requireLogin, async (_req, res) => {
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json(rentLeaseRows(activeLeases));
+  } catch (err) {
+    logError("GET /api/dashboard/financials/rent-and-deposit/leases failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load lease rent data from Buildium." });
+  }
+});
+
+// Total Units drill-down: every tracked unit with occupied/vacant status.
+// CHANGED 2026-07-05: uses fetchActiveManagedUnits() (234 units, matches
+// the Total Units tile above) instead of fetchActiveResidentialUnits() —
+// see that route's comment for why.
+dashboardRoutes.get("/api/dashboard/units", requireLogin, async (_req, res) => {
+  try {
+    const [units, activeLeases] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases()]);
+    res.json(unitStatusRows(units, activeLeases));
+  } catch (err) {
+    logError("GET /api/dashboard/units failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load unit data from Buildium." });
+  }
+});
+
+// Vacant — Not Rented drill-down.
+// CHANGED 2026-07-05: uses fetchActiveManagedUnits() (234 units, matches
+// the Vacant tile above) instead of fetchActiveResidentialUnits() — see
+// /api/dashboard/occupancy's comment for why.
+dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, async (_req, res) => {
+  try {
+    const [units, activeLeases] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases()]);
+    res.json(vacantUnitRows(units, activeLeases));
+  } catch (err) {
+    logError("GET /api/dashboard/units/vacant failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load vacant unit data from Buildium." });
+  }
+});
+
+// Avg Days Vacant — STRUCTURAL summary + drill-down. Previously hardcoded
+// to "Not connected yet" even though it's fully computable from data
+// already fetched elsewhere (fetchActiveResidentialUnits, fetchAllLeases)
+// — no new endpoint needed, just never wired up. "Days vacant" for a unit
+// with zero lease history on file is a genuine gap (no LeaseToDate to
+// measure from) and is excluded from the average rather than guessed,
+// same rule the Doors Lost estimate already follows.
+dashboardRoutes.get("/api/dashboard/avg-days-vacant", requireLogin, async (_req, res) => {
+  try {
+    const [units, activeLeases, allLeases] = await Promise.all([
+      fetchActiveResidentialUnits(),
+      fetchActiveLeases(),
+      fetchAllLeases(),
+    ]);
+    const rows = vacantUnitDaysRows(units, activeLeases, allLeases, new Date());
+    res.json({ avgDaysVacant: averageDaysVacant(rows), vacantUnitCount: rows.length });
+  } catch (err) {
+    logError("GET /api/dashboard/avg-days-vacant failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load avg days vacant data from Buildium." });
+  }
+});
+
+dashboardRoutes.get("/api/dashboard/avg-days-vacant/units", requireLogin, async (_req, res) => {
+  try {
+    const [units, activeLeases, allLeases] = await Promise.all([
+      fetchActiveResidentialUnits(),
+      fetchActiveLeases(),
+      fetchAllLeases(),
+    ]);
+    res.json(vacantUnitDaysRows(units, activeLeases, allLeases, new Date()));
+  } catch (err) {
+    logError("GET /api/dashboard/avg-days-vacant/units failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load vacant unit day-count data from Buildium." });
+  }
+});
+
+// Fixed-Term Leases / Month-to-Month drill-downs.
+dashboardRoutes.get("/api/dashboard/lease-mix/fixed-term", requireLogin, async (_req, res) => {
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json(fixedTermLeaseRows(activeLeases));
+  } catch (err) {
+    logError("GET /api/dashboard/lease-mix/fixed-term failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load fixed-term lease data from Buildium." });
+  }
+});
+
+dashboardRoutes.get("/api/dashboard/lease-mix/month-to-month", requireLogin, async (_req, res) => {
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json(monthToMonthLeaseRows(activeLeases));
+  } catch (err) {
+    logError("GET /api/dashboard/lease-mix/month-to-month failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load month-to-month lease data from Buildium." });
+  }
+});
+
+// Move-Ins — FLOW summary + drill-down (respects the period selector).
+// Previously hardcoded to "Not connected yet" even though it's fully
+// computable from data already fetched elsewhere — same situation as Avg
+// Days Vacant above, just never wired up.
+dashboardRoutes.get("/api/dashboard/move-ins", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json({ moveIns: moveInLeaseRows(activeLeases, from, to).length });
+  } catch (err) {
+    logError("GET /api/dashboard/move-ins failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load move-in data from Buildium." });
+  }
+});
+
+dashboardRoutes.get("/api/dashboard/move-ins/leases", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json(moveInLeaseRows(activeLeases, from, to));
+  } catch (err) {
+    logError("GET /api/dashboard/move-ins/leases failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load move-in lease data from Buildium." });
+  }
+});
+
+// Evictions Pending drill-down.
+dashboardRoutes.get("/api/dashboard/evictions-pending", requireLogin, async (_req, res) => {
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json(evictionPendingLeaseRows(activeLeases));
+  } catch (err) {
+    logError("GET /api/dashboard/evictions-pending failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load eviction-pending data from Buildium." });
+  }
+});
+
+// Avg Tenancy drill-down.
+dashboardRoutes.get("/api/dashboard/avg-tenancy/leases", requireLogin, async (_req, res) => {
+  try {
+    const activeLeases = await fetchActiveLeases();
+    res.json(tenancyRows(activeLeases, new Date()));
+  } catch (err) {
+    logError("GET /api/dashboard/avg-tenancy/leases failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load tenancy data from Buildium." });
+  }
+});
+
+// Net Doors drill-down: combined Doors Added / Doors Lost (estimated) rows,
+// each row tagged with its type so a single list can show both. Delegates
+// to netDoorsRows (src/kpi/churn.ts) — see that function's comment for the
+// two bugs fixed there 2026-07-05 (missing future-date guard, and added/lost
+// using mismatched 90-day vs 12-month windows).
+dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, async (_req, res) => {
+  try {
+    const [allProperties, allLeases, owners] = await Promise.all([fetchProperties(), fetchAllLeases(), fetchOwners()]);
+    const activeProperties = allProperties.filter((p) => p.IsActive === true);
+    const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
+    const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
+
+    const { properties } = buildPropertyManagementStarts(owners, activePropertyIds);
+    const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
+
+    res.json(netDoorsRows(properties, lossEstimates, new Date()));
+  } catch (err) {
+    logError("GET /api/dashboard/net-doors/properties failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load net doors data from Buildium." });
+  }
 });

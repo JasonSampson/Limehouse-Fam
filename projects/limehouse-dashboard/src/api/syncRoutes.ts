@@ -1,18 +1,64 @@
 import { Router } from "express";
-import { isRentEngineConnected, isLeadSimpleConnected } from "../config/env.js";
-import { fetchOutstandingBalances, fetchProperties } from "../buildium/client.js";
+import { loadEnv, isRentEngineConnected, isLeadSimpleConnected } from "../config/env.js";
+import {
+  fetchOutstandingBalances,
+  fetchProperties,
+  fetchLeasesByStatus,
+  fetchActiveLeases,
+  fetchLeaseTransactions,
+  fetchActiveManagedUnits,
+  fetchVendors,
+  fetchBankAccounts,
+  fetchBankAccountReconciliations,
+} from "../buildium/client.js";
 import { upsertCachedMetric, recordCacheRefreshFailure } from "../db/metricCache.js";
 import { startSyncRun, completeSyncRun, failSyncRun, getLastSuccessfulSync } from "../db/syncLog.js";
 import { summarizeDelinquency } from "../buildium/delinquency.js";
+import {
+  summarizeMonthlyCollectionRates,
+  resolvePaymentDatesPerMonth,
+  last12Months,
+  excludeCurrentInProgressMonth,
+  buildDuePerMonth,
+  extractDepositDisposition,
+  summarizeSecurityDepositWithheld,
+  type PastLeaseDeposit,
+} from "../kpi/rentCollection.js";
+import { syncCallActivityForPeriod } from "../rentengine/callActivitySync.js";
+import { resolvePeriod } from "../kpi/period.js";
 import { logError, logInfo } from "../lib/logger.js";
+import { requireLogin } from "../auth/session.js";
+import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
+import { summarizeOccupancy, summarizeDelinquencyRate } from "../kpi/occupancy.js";
+import { summarizeDaysOnMarket } from "../rentengine/client.js";
+import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
+import {
+  summarizeReconciliationAccuracy,
+  summarizeRentProcessingAccuracy,
+  summarizeVendorCompliance,
+  summarize1099Compliance,
+  type ReconciliationAccuracyInput,
+} from "../kpi/bookkeeperMetrics.js";
+import {
+  fetchApplicationProcesses,
+  summarizeApplicationProcessingTime,
+  fetchApplicationsWithTasksForResponseTimeliness,
+  summarizeApplicantResponseTimeliness,
+} from "../leadsimple/client.js";
+import { periodToSnapshotLabel } from "../kpi/period.js";
+import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
 
+// requireLogin applied per-route, not via syncRoutes.use() — this router is
+// mounted at the app root with no path prefix, and a past real bug here (an
+// unscoped .use() on a sibling router accidentally catching /api/sync/status)
+// is exactly why every route below gets its own middleware instead.
 export const syncRoutes = Router();
 
 // Reports which sources are actually usable right now, and when each one
 // last succeeded (never just "last attempted" — see src/db/syncLog.ts).
 // Frontend uses this to show "RentEngine: not connected" vs "Buildium: last
 // synced 4 minutes ago" instead of guessing.
-syncRoutes.get("/api/sync/status", async (_req, res) => {
+syncRoutes.get("/api/sync/status", requireLogin, async (_req, res) => {
   try {
     const [buildium, rentEngine, leadSimple] = await Promise.all([
       getLastSuccessfulSync("buildium"),
@@ -35,7 +81,7 @@ syncRoutes.get("/api/sync/status", async (_req, res) => {
 // this covers is small enough (delinquency summary + property count) that
 // a background job isn't warranted yet; if that changes, this becomes a
 // fire-and-forget with the sync log row as the only way to check progress.
-syncRoutes.post("/api/sync/now", async (_req, res) => {
+syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "metric_cache_refresh");
   try {
     const [balances, properties] = await Promise.all([fetchOutstandingBalances(), fetchProperties()]);
@@ -55,3 +101,404 @@ syncRoutes.post("/api/sync/now", async (_req, res) => {
     res.status(502).json({ error: "Sync failed. Last known-good data is still being served.", detail: message });
   }
 });
+
+// CONFIRMED LIVE 2026-07-03 against Jason's real Buildium account: the
+// rent-collection chart previously computed live on every page load by
+// calling fetchLeaseTransactions once per active lease (~230 calls at full
+// portfolio size) — this genuinely hit Buildium's rate limit and returned
+// real 429s, not a hypothetical risk anymore. This sync endpoint moves that
+// same expensive computation OFF the page-load path and into an explicit,
+// on-demand refresh that writes its result to dashboard_metric_cache;
+// GET /api/dashboard/financials/rent-collection (dashboardRoutes.ts) now
+// reads from that cache instead of hitting Buildium directly. Separate
+// endpoint (not folded into /api/sync/now above) so a full portfolio sync
+// doesn't get slower every time this endpoint is hit — the two caches
+// refresh independently, at whatever cadence each one's caller needs.
+//
+// ============================================================================
+// FIXED 2026-07-04 — the 4th and final bug in this endpoint (prepayment/
+// applied-credit reconciliation) is now closed. See resolveRentPaymentDates
+// in src/kpi/rentCollection.ts for the FIFO cash-application model that
+// replaces earliestPaymentPerMonth (kept only for reference, no longer
+// called). Verified by hand against 6 real leases covering every pattern
+// found (on-time, prepaid via two different real Buildium mechanisms, late,
+// chronic partial payer, and a genuinely-unpaid eviction case) — all 6
+// matched the expected paid-by-3rd/10th outcome exactly before this was
+// wired in here. Combined with the three earlier fixes (current-month
+// exclusion, lease-start-date-aware denominator, ghost-lease filtering),
+// this should now land close to the vendor's real 91.8%/96.6% — re-verify
+// live against the vendor site once this sync has run for real, since a
+// live comparison is the only way to be sure rather than trusting the
+// fixture tests alone.
+syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => {
+  const syncLogId = await startSyncRun("buildium", "rent_collection_cache_refresh");
+  try {
+    // FIXED 2026-07-04, moved into fetchActiveLeases() itself 2026-07-05:
+    // found while investigating the paid-by-3rd/10th bug — CONFIRMED LIVE
+    // against Jason's real account that 37 of the 240 leases Buildium
+    // reports as LeaseStatus="Active" are actually stale/ghost records:
+    // CurrentTenants is empty AND LeaseToDate is years in the past (e.g.
+    // lease 774300: LeaseFromDate 2015-11-12, LeaseToDate 2018-04-22,
+    // CurrentTenants: [], but LeaseStatus still says "Active"). These
+    // never get a real rent payment in any recent month because nobody
+    // actually lives there anymore — Buildium's LeaseStatus field just
+    // never got flipped to "Past" for them. Left in the denominator,
+    // these leases can only ever count as "unpaid," dragging every
+    // month's paid-by-3rd/10th percentage down regardless of the other
+    // fixes here. This filter now lives in fetchActiveLeases()
+    // (src/buildium/client.ts) so every dashboard KPI gets it, not just
+    // this sync — filtering drops the set from 240 to 203, matching the
+    // ~202 genuinely-occupied-unit count the occupancy fix (see
+    // src/kpi/occupancy.ts) independently landed on.
+    const activeLeases = await fetchActiveLeases();
+    // See last12Months/excludeCurrentInProgressMonth/buildDuePerMonth in
+    // src/kpi/rentCollection.ts for the other two real bugs fixed here
+    // (2026-07-04): the current in-progress month trivially made
+    // paidByThird == paidByTenth, and leases were counted as "due" in
+    // months before they even started, inflating the denominator and
+    // dragging every month's percentage down versus the real vendor
+    // numbers.
+    const monthsInWindow = excludeCurrentInProgressMonth(last12Months(new Date()), new Date());
+    const duePerMonth = buildDuePerMonth(activeLeases, monthsInWindow);
+
+    // Sequential, not Promise.all: the old Promise.all(activeLeases.map(...))
+    // fired every lease's transaction fetch at once, which is exactly what
+    // triggered the real 429s. buildiumGet's own retry-with-backoff (see
+    // src/buildium/client.ts) is a safety net for isolated bursts, but
+    // deliberately spacing out ~230 calls in the first place is the actual
+    // fix — this endpoint is meant to be called by a scheduled sync, not on
+    // every page load, so taking longer here is an acceptable trade.
+    const paymentsByLease: ReturnType<typeof resolvePaymentDatesPerMonth>[] = [];
+    for (const lease of activeLeases) {
+      const transactions = await fetchLeaseTransactions(String(lease.Id));
+      paymentsByLease.push(resolvePaymentDatesPerMonth(String(lease.Id), transactions));
+    }
+
+    const rentCollection = summarizeMonthlyCollectionRates(duePerMonth, paymentsByLease.flat());
+    await upsertCachedMetric("rent_collection_12mo", "portfolio", "buildium", rentCollection);
+
+    await completeSyncRun(syncLogId, activeLeases.length);
+    logInfo("Rent collection sync completed", { syncLogId, leaseCount: activeLeases.length });
+    res.json({ ok: true, syncedAt: new Date().toISOString() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("rent_collection_12mo", "portfolio", "buildium", message);
+    await failSyncRun(syncLogId, message);
+    logError("Rent collection sync failed", { syncLogId, error: message });
+    res.status(502).json({ error: "Rent collection sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
+// Avg SD Withheld % (Dashboard tab Financials section) — NEW 2026-07-04,
+// per Oracle's real-data research. Operates on Past leases with a recent
+// move-out date, not Active leases — a fundamentally different population
+// than the rest of the Financials section. Sequential per-lease transaction
+// fetches, same rate-limit discipline as the rent-collection sync above
+// (this endpoint's population is much smaller — recent move-outs only, not
+// the whole active portfolio — so this runs quickly in practice).
+//
+// Window: trailing 12 months of LeaseToDate, matching the same "last 12
+// months" convention used elsewhere on this dashboard. If this doesn't land
+// close to the vendor's real 57% once compared live, the window is the
+// first thing to adjust — Oracle's spec flagged this as unconfirmed against
+// the vendor's own population, not the formula.
+syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req, res) => {
+  const syncLogId = await startSyncRun("buildium", "security_deposit_withheld_cache_refresh");
+  try {
+    const pastLeases = await fetchLeasesByStatus(["Past"]);
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setUTCMonth(twelveMonthsAgo.getUTCMonth() - 12);
+    const recentMoveOuts = pastLeases.filter(
+      (l) => l.LeaseToDate !== null && new Date(l.LeaseToDate) >= twelveMonthsAgo
+    );
+
+    const deposits: PastLeaseDeposit[] = recentMoveOuts.map((l) => ({
+      leaseId: String(l.Id),
+      securityDeposit: l.AccountDetails?.SecurityDeposit ?? null,
+    }));
+
+    // Sequential, not Promise.all — same rate-limit reasoning as the
+    // rent-collection sync above, applied here even though this
+    // population is smaller.
+    const dispositions = [];
+    for (const lease of recentMoveOuts) {
+      const transactions = await fetchLeaseTransactions(String(lease.Id));
+      dispositions.push(extractDepositDisposition(String(lease.Id), transactions));
+    }
+
+    const summary = summarizeSecurityDepositWithheld(deposits, dispositions);
+    await upsertCachedMetric("security_deposit_withheld", "portfolio", "buildium", summary);
+
+    await completeSyncRun(syncLogId, recentMoveOuts.length);
+    logInfo("Security deposit withheld sync completed", { syncLogId, ...summary });
+    res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("security_deposit_withheld", "portfolio", "buildium", message);
+    await failSyncRun(syncLogId, message);
+    logError("Security deposit withheld sync failed", { syncLogId, error: message });
+    res
+      .status(502)
+      .json({ error: "Security deposit withheld sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
+// Total Calls / Outbound Texts (Marketing & Showings section). CONFIRMED
+// LIVE 2026-07-03: RentEngine's /calls and /messages endpoints require one
+// request PER PROSPECT (no bulk/account-wide variant), against a confirmed
+// 30 req/min rate limit — this cannot run live on a page-load path (see
+// src/rentengine/callActivitySync.ts for the full investigation). This
+// endpoint runs that scoped, rate-limit-respecting sync for THIS MONTH's
+// prospects and writes the result to dashboard_metric_cache; the
+// corresponding GET route in rentEngineRoutes.ts (once wired) reads from
+// that cache instead of ever calling /calls or /messages directly.
+//
+// Deliberately scoped to "this month" only, not a longer window — with
+// ~4.2s between each prospect's paired calls+messages fetch, a month with
+// even 50 new prospects takes ~3.5 minutes to sync; running this for
+// every month in a 12-month window in one request would take over 40
+// minutes and is exactly the kind of long-running, rate-limited job that
+// belongs in a real scheduled background job (not built yet), not
+// something to make bigger on the request/response path just because the
+// current 1-month scope is quick enough to call synchronously today.
+syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
+  if (!isRentEngineConnected()) {
+    res.status(409).json({ error: "RentEngine is not connected." });
+    return;
+  }
+  const env = loadEnv();
+  if (!env.RENTENGINE_ACCOUNT_ID) {
+    res.status(409).json({ error: "RENTENGINE_ACCOUNT_ID is not configured." });
+    return;
+  }
+
+  const syncLogId = await startSyncRun("rent_engine", "call_activity_sync");
+  try {
+    const range = resolvePeriod("this_month");
+    const result = await syncCallActivityForPeriod(
+      `${range.from}T00:00:00Z`,
+      `${range.to}T23:59:59Z`,
+      env.RENTENGINE_ACCOUNT_ID
+    );
+
+    await upsertCachedMetric("call_activity_this_month", "portfolio", "rent_engine", result);
+    await completeSyncRun(syncLogId, result.prospectsScanned);
+    logInfo("RentEngine call activity sync completed", { syncLogId, ...result });
+    res.json({ ok: true, syncedAt: new Date().toISOString(), ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("call_activity_this_month", "portfolio", "rent_engine", message);
+    await failSyncRun(syncLogId, message);
+    logError("RentEngine call activity sync failed", { syncLogId, error: message });
+    res.status(502).json({ error: "Call activity sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
+// CEO View Gross Income / Net Income / Revenue-per-Unit history
+// (dashboard_financial_history, Neo's migration 0008). CONFIRMED LIVE
+// 2026-07-05 against Jason's real Buildium account and real CEO View
+// numbers — see src/kpi/financialSummary.ts and
+// src/buildium/client.ts's fetchGeneralLedgerTotals for the confirmed
+// formula/endpoint. This can be a genuinely slow one-time backfill (one
+// Buildium call pair per calendar month back to 2018-01), so it's a
+// separate on-demand sync endpoint, same pattern as rent-collection/
+// security-deposit-withheld above — NOT run on every /api/sync/now or on
+// every CEO View page load. Safe to call repeatedly: syncFinancialHistory
+// only re-fetches months not already cached, plus the always-live current
+// month, so a second call after the first full backfill completes in a
+// few seconds instead of minutes.
+syncRoutes.post("/api/sync/financial-history", requireLogin, async (_req, res) => {
+  const syncLogId = await startSyncRun("buildium", "financial_history_sync");
+  try {
+    const result = await syncFinancialHistory();
+    await completeSyncRun(syncLogId, result.monthsWritten);
+    logInfo("Financial history sync completed", { syncLogId, ...result });
+    res.json({ ok: true, syncedAt: new Date().toISOString(), ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await failSyncRun(syncLogId, message);
+    logError("Financial history sync failed", { syncLogId, error: message });
+    res.status(502).json({ error: "Financial history sync failed.", detail: message });
+  }
+});
+
+// Team Performance / CEO View KPI snapshots — computes real values for
+// every KPI confirmed live 2026-07-05 (Portfolio Manager: Occupancy, Days
+// on Market, Delinquency Rate; Bookkeeper: all 4) and writes them into
+// dashboard_kpi_snapshots for the current quarter. Deliberately does NOT
+// touch Lease Renewal Rate (scoping question still open with Jason — see
+// src/leadsimple/client.ts's summarizeLeaseRenewalRate comment) — its KPI
+// DEFINITION row exists (migration 0009) so the role's dollar-per-KPI math
+// stays correct, but no snapshot is written for it, which the existing
+// scoring engine already treats as "no data yet" (same tested pattern as
+// Bookkeeper's Reconciliation Accuracy before this migration).
+async function writeSnapshotForEveryDisplayGroup(
+  role: string,
+  kpiName: string,
+  period: string,
+  periodStart: string,
+  periodEnd: string,
+  hasData: boolean,
+  actualValue: number | null,
+  targetValue: number,
+  higherIsBetter: boolean,
+  sourceSystem: string
+): Promise<void> {
+  const definitionIds = await getKpiDefinitionIdsByName(role, kpiName);
+  for (const kpiDefinitionId of definitionIds) {
+    await upsertKpiSnapshot({
+      kpiDefinitionId,
+      period,
+      periodStart,
+      periodEnd,
+      hasData,
+      actualValue,
+      targetValue,
+      higherIsBetter,
+      sourceSystem,
+    });
+  }
+}
+
+syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, async (_req, res) => {
+  const syncLogId = await startSyncRun("buildium", "team_performance_kpis_sync");
+  try {
+    const now = new Date();
+    const period = periodToSnapshotLabel("this_quarter", now);
+    const quarterStartMonth = Math.floor(now.getUTCMonth() / 3) * 3;
+    const periodStart = new Date(Date.UTC(now.getUTCFullYear(), quarterStartMonth, 1)).toISOString().slice(0, 10);
+    // Stored on the snapshot row as the quarter's real calendar end — but
+    // NEVER passed as the "to" bound into a KPI calculation itself. Same
+    // future-dates bug already fixed elsewhere today (This Month/Quarter/
+    // Year reaching past today): summarizeReconciliationAccuracy's
+    // "completed months in range" check only looks at whether a month's
+    // calendar end falls inside [from, to] — it doesn't independently know
+    // today's real date, so passing the quarter's true end (up to 3 months
+    // in the future) would make it count August/September as "completed"
+    // days after the quarter merely started. asOfDate clamps every KPI
+    // calculation's "to" bound to today; periodEnd is kept separately, for
+    // storage only.
+    const periodEnd = new Date(Date.UTC(now.getUTCFullYear(), quarterStartMonth + 3, 0)).toISOString().slice(0, 10);
+    const asOfDate = now.toISOString().slice(0, 10);
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
+    const monthEnd = now.toISOString().slice(0, 10);
+
+    // Portfolio Manager
+    const units = await fetchActiveManagedUnits();
+    const activeLeases = await fetchActiveLeases();
+    const occupancy = summarizeOccupancy(units.length, activeLeases);
+    await writeSnapshotForEveryDisplayGroup(
+      "portfolio_manager", "Portfolio Occupancy Rate", period, periodStart, periodEnd,
+      true, occupancy.occupancyRatePercent, 95, true, "buildium"
+    );
+
+    const balances = await fetchOutstandingBalances();
+    const delinquencyRate = summarizeDelinquencyRate(balances, activeLeases);
+    await writeSnapshotForEveryDisplayGroup(
+      "portfolio_manager", "Delinquency Rate", period, periodStart, periodEnd,
+      delinquencyRate.ratePercent !== null, delinquencyRate.ratePercent, 3, false, "buildium"
+    );
+
+    if (isRentEngineConnected()) {
+      const leasingPerf = await getOrFetchLeasingPerformanceForAllUnits(monthStart, monthEnd);
+      if (leasingPerf.connected && leasingPerf.rows) {
+        const dom = summarizeDaysOnMarket(leasingPerf.rows);
+        await writeSnapshotForEveryDisplayGroup(
+          "portfolio_manager", "Days on Market", period, periodStart, periodEnd,
+          dom.avgDaysOnMarket !== null, dom.avgDaysOnMarket, 21, false, "rent_engine"
+        );
+      }
+    }
+
+    // Bookkeeper
+    const vendors = await fetchVendors();
+    const vendorCompliance = summarizeVendorCompliance(vendors);
+    await writeSnapshotForEveryDisplayGroup(
+      "bookkeeper", "Vendor Compliance", period, periodStart, periodEnd,
+      vendorCompliance.compliancePercent !== null, vendorCompliance.compliancePercent, 100, true, "buildium"
+    );
+    const nineNine = summarize1099Compliance(vendors);
+    await writeSnapshotForEveryDisplayGroup(
+      "bookkeeper", "1099 Compliance", period, periodStart, periodEnd,
+      nineNine.compliancePercent !== null, nineNine.compliancePercent, 100, true, "buildium"
+    );
+
+    const bankAccounts = await fetchBankAccounts();
+    const reconInputs: ReconciliationAccuracyInput[] = [];
+    for (const account of bankAccounts) {
+      const { reconcilable, reconciliations } = await fetchBankAccountReconciliations(account.Id);
+      reconInputs.push({ account, reconcilable, reconciliations });
+    }
+    const reconciliationAccuracy = summarizeReconciliationAccuracy(reconInputs, periodStart, asOfDate);
+    await writeSnapshotForEveryDisplayGroup(
+      "bookkeeper", "Reconciliation Accuracy", period, periodStart, periodEnd,
+      reconciliationAccuracy.accuracyPercent !== null, reconciliationAccuracy.accuracyPercent, 100, true, "buildium"
+    );
+
+    const transactionsByLease: Awaited<ReturnType<typeof fetchLeaseTransactions>>[] = [];
+    for (const lease of activeLeases) {
+      transactionsByLease.push(await fetchLeaseTransactions(String(lease.Id)));
+    }
+    const rentProcessingAccuracy = summarizeRentProcessingAccuracy(transactionsByLease, periodStart, asOfDate);
+    await writeSnapshotForEveryDisplayGroup(
+      "bookkeeper", "Rent Processing Accuracy", period, periodStart, periodEnd,
+      rentProcessingAccuracy.accuracyPercent !== null, rentProcessingAccuracy.accuracyPercent, 100, true, "buildium"
+    );
+
+    // Leasing Specialist
+    let applicantResponseTimelinessPercent: number | null = null;
+    let applicationProcessingTimeHours: number | null = null;
+    if (isLeadSimpleConnected()) {
+      const applicationsResult = await fetchApplicationProcesses();
+      if (applicationsResult.connected && applicationsResult.data) {
+        const processingTime = summarizeApplicationProcessingTime(applicationsResult.data, periodStart, asOfDate);
+        applicationProcessingTimeHours = processingTime.averageHours;
+        await writeSnapshotForEveryDisplayGroup(
+          "leasing_specialist", "Application Processing Time", period, periodStart, periodEnd,
+          processingTime.averageHours !== null, processingTime.averageHours, 48, false, "lead_simple"
+        );
+      }
+
+      // Applicant Response Timeliness is a fixed trailing-90-day metric
+      // (the vendor's own label reads "(90d)", not tied to the quarter
+      // selector) — deliberately NOT scoped to periodStart/periodEnd like
+      // the KPIs above.
+      const responseWindowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const responseData = await fetchApplicationsWithTasksForResponseTimeliness(responseWindowStart);
+      if (responseData.connected && responseData.data) {
+        const responseTimeliness = summarizeApplicantResponseTimeliness(
+          responseData.data.processes,
+          responseData.data.tasksByProcessId,
+          responseWindowStart,
+          asOfDate
+        );
+        applicantResponseTimelinessPercent = responseTimeliness.ratePercent;
+        await writeSnapshotForEveryDisplayGroup(
+          "leasing_specialist", "Applicant Response Timeliness", period, periodStart, periodEnd,
+          responseTimeliness.ratePercent !== null, responseTimeliness.ratePercent, 95, true, "lead_simple"
+        );
+      }
+    }
+
+    const summary = {
+      period,
+      occupancyRatePercent: occupancy.occupancyRatePercent,
+      delinquencyRatePercent: delinquencyRate.ratePercent,
+      vendorCompliancePercent: vendorCompliance.compliancePercent,
+      nineNineCompliancePercent: nineNine.compliancePercent,
+      reconciliationAccuracyPercent: reconciliationAccuracy.accuracyPercent,
+      rentProcessingAccuracyPercent: rentProcessingAccuracy.accuracyPercent,
+      applicantResponseTimelinessPercent,
+      applicationProcessingTimeHours,
+    };
+    await completeSyncRun(syncLogId, bankAccounts.length + vendors.length + activeLeases.length);
+    logInfo("Team Performance KPIs sync completed", { syncLogId, ...summary });
+    res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await failSyncRun(syncLogId, message);
+    logError("Team Performance KPIs sync failed", { syncLogId, error: message });
+    res.status(502).json({ error: "Team Performance KPIs sync failed.", detail: message });
+  }
+});
+

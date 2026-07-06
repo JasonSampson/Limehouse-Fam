@@ -101,6 +101,7 @@ function tileHtml(opts) {
     pending = null, // text shown with an hourglass, e.g. Doors Added
     notConnected = false,
     notConnectedReason = "Not connected yet",
+    sparkline = null, // { values: number[], color: string } — small inline trend line under the number
   } = opts;
 
   const classes = ["tile"];
@@ -115,6 +116,10 @@ function tileHtml(opts) {
   const yoyHtml =
     yoy && !notConnected ? `<div class="tile-yoy ${yoy.direction}">${yoy.text}</div>` : "";
   const pendingHtml = pending && !notConnected ? `<div class="tile-pending">⏳ ${pending}</div>` : "";
+  const sparklineHtmlStr =
+    sparkline && !notConnected && typeof sparklineHtml === "function"
+      ? sparklineHtml(sparkline.values, sparkline.color)
+      : "";
 
   return `
     <div class="${classes.join(" ")}" ${clickable && !notConnected ? `data-tile-id="${id}"` : ""}>
@@ -126,12 +131,22 @@ function tileHtml(opts) {
       ${subHtml}
       ${yoyHtml}
       ${pendingHtml}
+      ${sparklineHtmlStr}
     </div>
   `;
 }
 
 function notConnectedBox(title, reason) {
   return `<div class="not-connected-box"><strong>${title}</strong>${reason}</div>`;
+}
+
+// Distinct from notConnectedBox: for metrics that are genuinely impossible
+// to compute (confirmed against the real Buildium/RentEngine API — no
+// field/timestamp exists, not just "we haven't wired it up yet"). Reuses
+// the same box styling but different wording/icon so it doesn't wrongly
+// imply this will show up once someone connects something.
+function notAvailableBox(title, reason) {
+  return `<div class="not-connected-box not-available-box"><strong>${title}</strong>${reason}</div>`;
 }
 
 function errorBanner(message) {

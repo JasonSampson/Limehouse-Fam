@@ -1,5 +1,5 @@
 import { getPool } from "./pool.js";
-import { scoreRole, type KpiInput, type RoleScoreResult } from "../kpi/scoring.js";
+import { scoreRole, scoreBand, BAND_POINTS, type KpiInput, type RoleScoreResult } from "../kpi/scoring.js";
 
 // Data-access layer bridging dashboard_kpi_definitions (0002) and
 // dashboard_kpi_snapshots (0003) to src/kpi/scoring.ts's pure scoring
@@ -263,4 +263,65 @@ export async function getScoredRoles(
     roleDisplayName: roleDisplayName(role, displayGroup),
     ...scoreRole(role, maxBonusUsd, kpis),
   }));
+}
+
+// Every KPI definition row (both display_group variants, e.g. Portfolio
+// Manager's team_performance AND ceo_view rows) for a given role+kpi_name —
+// used by the sync job below to find every definition_id a freshly-
+// computed real value needs to be written to, without the sync job having
+// to know about the ceo_view/team_performance split itself.
+export async function getKpiDefinitionIdsByName(role: string, kpiName: string): Promise<number[]> {
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT id FROM dashboard_kpi_definitions WHERE role = $1 AND kpi_name = $2 AND is_active = true`,
+    [role, kpiName]
+  );
+  return rows.map((r) => Number(r.id));
+}
+
+export interface KpiSnapshotUpsertInput {
+  kpiDefinitionId: number;
+  period: string;
+  periodStart: string;
+  periodEnd: string;
+  hasData: boolean;
+  actualValue: number | null;
+  targetValue: number;
+  higherIsBetter: boolean;
+  sourceSystem: string;
+}
+
+// Real per-KPI value for a period, one row per (kpi_definition_id, period)
+// — matches the unique constraint in migration 0003. `score` is computed
+// here via the same scoreBand()/BAND_POINTS scoring.ts uses (required NOT
+// NULL by the schema's CHECK constraint whenever has_data=true) — but this
+// is a stored, point-in-time record only; getScoredRoles() at read time
+// recomputes score/payout fresh from actual_value+target_value rather than
+// trusting this column, so this value is for audit/history, not the live
+// read path. payout_usd is deliberately left NULL here (per-KPI payout
+// depends on the ROLE's total KPI count for perKpiMax, which this
+// single-KPI function doesn't have — the schema's own CHECK constraint
+// only requires payout_usd when has_data=false, confirming it's allowed to
+// be computed elsewhere/later, not required at write time here).
+export async function upsertKpiSnapshot(input: KpiSnapshotUpsertInput): Promise<void> {
+  const pool = getPool();
+  if (!input.hasData) {
+    await pool.query(
+      `INSERT INTO dashboard_kpi_snapshots (kpi_definition_id, period, period_start, period_end, has_data, actual_value, target_value, score, payout_usd, source_system, computed_at)
+       VALUES ($1, $2, $3, $4, false, NULL, NULL, NULL, NULL, $5, now())
+       ON CONFLICT (kpi_definition_id, period) DO UPDATE SET
+         has_data = false, actual_value = NULL, target_value = NULL, score = NULL, payout_usd = NULL, source_system = $5, computed_at = now()`,
+      [input.kpiDefinitionId, input.period, input.periodStart, input.periodEnd, input.sourceSystem]
+    );
+    return;
+  }
+  const band = scoreBand(input.actualValue!, input.targetValue, input.higherIsBetter);
+  const scorePoints = BAND_POINTS[band];
+  await pool.query(
+    `INSERT INTO dashboard_kpi_snapshots (kpi_definition_id, period, period_start, period_end, has_data, actual_value, target_value, score, source_system, computed_at)
+     VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, now())
+     ON CONFLICT (kpi_definition_id, period) DO UPDATE SET
+       has_data = true, actual_value = $5, target_value = $6, score = $7, source_system = $8, computed_at = now()`,
+    [input.kpiDefinitionId, input.period, input.periodStart, input.periodEnd, input.actualValue, input.targetValue, scorePoints, input.sourceSystem]
+  );
 }

@@ -11,6 +11,19 @@
   --red: #cf222e;
   --radius: 10px;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* Limehouse brand palette (matches vendor site) */
+  --lime-green: #1e5631;
+  --lime-green-dark: #143d22;
+  --lime-green-light: #4a8f5c;
+  --lime-amber: #c8791e;
+  --lime-amber-light: #e8b567;
+  --lime-red: #c23b3b;
+  --lime-blue: #2f6fb0;
+  --lime-purple: #7a52a0;
+  --lime-gray: #8b93a1;
+  --lime-gray-dark: #4b5563;
+  --navy: #1c2b3a;
 }
 
 * {
@@ -38,6 +51,40 @@ header.app-header {
   position: sticky;
   top: 0;
   z-index: 20;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.logout-btn {
+  margin-left: auto;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.logout-btn:hover {
+  background: var(--bg);
+}
+
+.app-brand-logo {
+  height: 32px;
+  width: auto;
+  flex-shrink: 0;
+  display: block;
+}
+
+.app-brand-logo--lg {
+  height: 56px;
 }
 
 .app-title {
@@ -116,8 +163,9 @@ nav.tabs a {
 }
 
 nav.tabs a.active {
-  color: var(--brand);
-  background: #eaf0ff;
+  color: var(--lime-green);
+  background: #e9f2ec;
+  border-bottom: 2px solid var(--lime-green);
 }
 
 /* ---------- Layout ---------- */
@@ -247,6 +295,17 @@ main {
   margin-top: 2px;
 }
 
+.tile-sparkline {
+  margin-top: 6px;
+  height: 28px;
+  line-height: 0;
+}
+
+.tile-sparkline canvas {
+  width: 100% !important;
+  height: 28px !important;
+}
+
 /* ---------- Chart placeholder cards ---------- */
 
 .chart-card {
@@ -258,10 +317,176 @@ main {
   margin-top: 10px;
 }
 
+.chart-card-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .chart-card-title {
   font-size: 13px;
   font-weight: 700;
-  margin-bottom: 8px;
+  margin: 0;
+}
+
+.chart-card-summary {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.chart-legend-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.chart-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+
+/* ---------- Donut/ring chart with side legend (Property Health) ---------- */
+
+.donut-layout {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.donut-canvas-wrap {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  flex-shrink: 0;
+}
+
+.donut-legend {
+  flex: 1 1 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 140px;
+}
+
+.donut-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.donut-legend-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.donut-legend-label {
+  flex: 1;
+  color: var(--text);
+}
+
+.donut-legend-count {
+  font-weight: 700;
+}
+
+/* ---------- Ring gauge (single-value percent ring) ---------- */
+
+.ring-gauge {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  flex-shrink: 0;
+}
+
+.ring-gauge-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+/* ---------- Horizontal proportional bars (delinquency aging, funnel, sources) ---------- */
+
+.hbar-row {
+  margin-bottom: 10px;
+}
+
+.hbar-row:last-child {
+  margin-bottom: 0;
+}
+
+.hbar-row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13.5px;
+  margin-bottom: 4px;
+  gap: 8px;
+}
+
+.hbar-row-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.hbar-row-value {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hbar-row-change {
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+.hbar-row-change.up { color: var(--lime-green); }
+.hbar-row-change.down { color: var(--lime-red); }
+
+.hbar-track {
+  background: #eef0f3;
+  border-radius: 6px;
+  height: 14px;
+  overflow: hidden;
+  position: relative;
+}
+
+.hbar-fill {
+  height: 100%;
+  border-radius: 6px;
+  min-width: 3%;
+}
+
+/* Delinquency aging bars have the $ amount outside/right of the bar */
+.hbar-row.aging .hbar-track {
+  width: 100%;
+}
+
+.hbar-row.aging .hbar-row-top .hbar-row-value {
+  min-width: 90px;
+  text-align: right;
 }
 
 .not-connected-box {
@@ -279,6 +504,15 @@ main {
   color: var(--text);
   font-size: 13px;
   margin-bottom: 4px;
+}
+
+/* Genuinely-impossible-to-compute metrics (confirmed against the real
+   API — no field/timestamp exists) get a solid border instead of dashed,
+   so they read as "this is a permanent fact," not "wire it up later." */
+.not-available-box {
+  border-style: solid;
+  border-color: #e4dfd3;
+  background: #fbfaf6;
 }
 
 /* ---------- Breakdown lists (aging, property health, sources) ---------- */
@@ -375,6 +609,16 @@ main {
   padding: 8px 16px 16px;
 }
 
+.modal-formula {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  background: var(--bg-subtle, #f5f6f4);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  line-height: 1.45;
+}
+
 table.drill-table {
   width: 100%;
   border-collapse: collapse;
@@ -442,31 +686,115 @@ table.drill-table td {
   margin-top: 6px;
 }
 
+/* ---------- Login page ---------- */
+
+.login-card {
+  max-width: 360px;
+  margin: 80px auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 32px 28px;
+}
+
+.microsoft-signin-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 15px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.microsoft-signin-btn:hover {
+  background: var(--bg);
+}
+
+.login-note {
+  color: var(--red);
+  font-size: 13.5px;
+  text-align: center;
+  margin-top: 14px;
+}
+
+/* ---------- Manage Staff ---------- */
+
+.invite-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.invite-form input[type="email"] {
+  flex: 1 1 240px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.invite-form select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 14px;
+  background: var(--card-bg);
+}
+
+.invite-form button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: var(--brand);
+  color: white;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+
 /* ---------- Role sub-tabs (Team Performance) ---------- */
 
 .role-tabs {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   overflow-x: auto;
   margin-bottom: 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
+  padding-bottom: 4px;
 }
 
 .role-tabs button {
-  background: none;
+  background: #eef0f3;
   border: none;
-  padding: 10px 12px;
+  padding: 8px 14px;
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text);
   cursor: pointer;
   white-space: nowrap;
-  border-bottom: 2px solid transparent;
+  border-radius: 20px;
+  border-bottom: none;
 }
 
 .role-tabs button.active {
-  color: var(--brand);
-  border-bottom-color: var(--brand);
+  color: #ffffff;
+  background: var(--navy);
+}
+
+.role-tabs button.role-tab-disabled {
+  color: var(--text-muted);
+  background: #f2f3f5;
+  opacity: 0.75;
 }
 
 .role-summary-line {
@@ -479,6 +807,84 @@ table.drill-table td {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 14px;
+}
+
+/* ---------- Overall score ring + quarterly trend (Team Performance) ---------- */
+
+.role-detail-top {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.role-detail-top-text {
+  flex: 1;
+  min-width: 180px;
+}
+
+.quarterly-trend-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  margin: 16px 0;
+}
+
+.quarterly-trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  height: 90px;
+  padding-top: 6px;
+}
+
+.quarterly-trend-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 60px;
+  max-width: 90px;
+  height: 100%;
+  justify-content: flex-end;
+}
+
+.quarterly-trend-bar {
+  width: 100%;
+  max-width: 48px;
+  background: var(--lime-green-light);
+  border-radius: 4px 4px 0 0;
+  min-height: 4px;
+}
+
+.quarterly-trend-bar-amount {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.quarterly-trend-bar-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.quarterly-trend-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  font-style: italic;
+}
+
+.kpi-name-link {
+  color: var(--brand);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.kpi-name-link:hover {
+  text-decoration: underline;
 }
 
 table.kpi-table {
@@ -515,11 +921,16 @@ table.kpi-table td {
   display: inline-block;
 }
 
-.band-best { background: #e6f6ea; color: var(--green); }
-.band-better { background: #eaf3ff; color: var(--brand); }
-.band-good { background: #fff8e5; color: var(--yellow); }
-.band-red { background: #fff1f0; color: var(--red); }
+.band-best { background: #e6f6ea; color: var(--lime-green); }
+.band-better { background: #fbf0dc; color: var(--lime-amber); }
+.band-good { background: #fdeee1; color: #c2540f; }
+.band-red { background: #fbe6e6; color: var(--lime-red); }
 .band-none { background: #eef0f3; color: var(--text-muted); }
+
+.actual-best { color: var(--lime-green); }
+.actual-better { color: var(--lime-amber); }
+.actual-good { color: #c2540f; }
+.actual-red { color: var(--lime-red); }
 
 .bonus-summary {
   background: var(--card-bg);
@@ -529,19 +940,47 @@ table.kpi-table td {
   margin: 16px 0;
 }
 
+.bonus-summary .big-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 8px;
+  text-align: right;
+}
+
 .bonus-summary .big {
-  font-size: 26px;
-  font-weight: 700;
+  font-size: 30px;
+  font-weight: 800;
 }
 
 .legend-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 16px;
   font-size: 12.5px;
   color: var(--text-muted);
 }
+
+.legend-row-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.legend-dot.band-best { background: var(--lime-green); }
+.legend-dot.band-better { background: var(--lime-amber); }
+.legend-dot.band-good { background: #c2540f; }
+.legend-dot.band-red { background: var(--lime-red); }
+.legend-dot.band-none { background: var(--text-muted); }
 
 .empty-state {
   text-align: center;
@@ -601,6 +1040,107 @@ table.kpi-table td {
   background: #fafbfc;
 }
 
+.role-kpi-row-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.role-kpi-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.status-dot.status-on-track { background: var(--lime-green); }
+.status-dot.status-at-risk { background: var(--lime-amber); }
+.status-dot.status-off-track { background: var(--lime-red); }
+
+/* ---------- CEO View: role summary pill row ---------- */
+
+.role-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.role-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+}
+
+/* ---------- CEO View: role card status pill + fraction ring ---------- */
+
+.role-card {
+  position: relative;
+}
+
+.status-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+
+.status-pill.status-on-track { background: #e6f6ea; color: var(--lime-green); }
+.status-pill.status-at-risk { background: #fbf0dc; color: var(--lime-amber); }
+.status-pill.status-off-track { background: #fbe6e6; color: var(--lime-red); }
+
+.role-card-body {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.fraction-ring {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+
+.fraction-ring-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.role-card-kpi-list {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #eef0f3;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
 footer.app-footer {
   text-align: center;
   font-size: 12px;
@@ -610,4 +1150,38 @@ footer.app-footer {
 
 .negative {
   color: var(--red);
+}
+
+/* ---------- Mobile adjustments for chart components ---------- */
+
+@media (max-width: 480px) {
+  .donut-layout {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .donut-canvas-wrap {
+    margin: 0 auto;
+  }
+
+  .role-card-body {
+    flex-direction: column;
+  }
+
+  .role-detail-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .quarterly-trend-bars {
+    gap: 8px;
+  }
+
+  .app-brand-logo {
+    height: 26px;
+  }
+
+  .app-brand-logo--lg {
+    height: 44px;
+  }
 }

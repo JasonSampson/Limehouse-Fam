@@ -1,7 +1,6 @@
-// Tab 2: Team Performance. Password-gated (separate password from the main
-// session, per spec) — locked state shows a prompt, correct password sets a
-// cookie via /api/team-performance/check-password and unlocks for the rest
-// of the session.
+// Tab 2: Team Performance. Admin-only — gated server-side (both the page
+// load itself and /api/team-performance/roles require an Admin session), so
+// this loads directly with no client-side password prompt.
 
 const ROLE_TAB_ORDER = [
   "Portfolio Manager",
@@ -17,12 +16,12 @@ let tpActiveRole = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   renderHeader("team");
-  checkUnlockedAndRender();
-  window.addEventListener("lh:period-changed", checkUnlockedAndRender);
-  window.addEventListener("lh:sync-complete", checkUnlockedAndRender);
+  loadAndRender();
+  window.addEventListener("lh:period-changed", loadAndRender);
+  window.addEventListener("lh:sync-complete", loadAndRender);
 });
 
-async function checkUnlockedAndRender() {
+async function loadAndRender() {
   const content = document.getElementById("page-content");
   content.innerHTML = `<p class="loading-text">Loading…</p>`;
 
@@ -31,50 +30,8 @@ async function checkUnlockedAndRender() {
     tpRolesData = roles;
     renderUnlockedView();
   } catch (err) {
-    if (err.status === 401) {
-      renderLockedView();
-    } else {
-      content.innerHTML = errorBanner(`Couldn't load Team Performance data: ${err.message}`);
-    }
+    content.innerHTML = errorBanner(`Couldn't load Team Performance data: ${err.message}`);
   }
-}
-
-function renderLockedView() {
-  const content = document.getElementById("page-content");
-  content.innerHTML = `
-    <div class="password-gate">
-      <h2>Team Performance</h2>
-      <p>Enter password to continue</p>
-      <input type="password" id="tp-password-input" placeholder="Password" autocomplete="current-password" />
-      <button id="tp-unlock-btn">Unlock</button>
-      <p class="password-error" id="tp-password-error"></p>
-    </div>
-  `;
-
-  const input = document.getElementById("tp-password-input");
-  const errorEl = document.getElementById("tp-password-error");
-  const unlockBtn = document.getElementById("tp-unlock-btn");
-
-  const attemptUnlock = async () => {
-    const password = input.value;
-    if (!password) return;
-    errorEl.textContent = "";
-    unlockBtn.disabled = true;
-    try {
-      await apiPost("/api/team-performance/check-password", { password });
-      await checkUnlockedAndRender();
-    } catch (err) {
-      errorEl.textContent = "Incorrect password.";
-    } finally {
-      unlockBtn.disabled = false;
-    }
-  };
-
-  unlockBtn.addEventListener("click", attemptUnlock);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") attemptUnlock();
-  });
-  input.focus();
 }
 
 function renderUnlockedView() {
@@ -109,10 +66,14 @@ function renderUnlockedView() {
     <p class="context-line">${period} · AS OF ${asOf.toUpperCase()}</p>
     <div class="role-tabs" id="role-tabs">
       ${orderedRoles
-        .map(
-          (label) =>
-            `<button data-role="${label}" class="${label === tpActiveRole ? "active" : ""}">${label}</button>`
-        )
+        .map((label) => {
+          const role = tpRolesData.roles.find((r) => r.roleDisplayName === label);
+          const isEmpty = !role || role.kpis.length === 0;
+          const classes = [label === tpActiveRole ? "active" : "", isEmpty ? "role-tab-disabled" : ""]
+            .filter(Boolean)
+            .join(" ");
+          return `<button data-role="${label}" class="${classes}">${label}</button>`;
+        })
         .join("")}
     </div>
     <div id="role-detail"></div>
@@ -150,10 +111,17 @@ function renderRoleDetail(roleDisplayName) {
   // percentOfMax already comes back as a percentage (e.g. 25, not 0.25) —
   // src/kpi/scoring.ts's roundPercent() multiplies by 100 server-side.
   const pctText = `${role.percentOfMax.toFixed(1)}%`;
+  const ringCanvasId = `overall-score-ring-${roleDisplayName.replace(/\W+/g, "")}`;
 
   detailEl.innerHTML = `
-    <p class="role-summary-line">${role.kpis.length} accountability KPIs · $${formatNumber(role.maxBonusUsd)} max quarterly bonus</p>
-    <p class="trend-line" style="color:var(--text-muted);">Quarter-over-quarter trend: not connected yet</p>
+    <div class="role-detail-top">
+      ${ringGaugeHtml({ canvasId: ringCanvasId, percent: role.percentOfMax, size: 84 })}
+      <div class="role-detail-top-text">
+        <p class="role-summary-line">${role.kpis.length} accountability KPIs · $${formatNumber(role.maxBonusUsd)} max quarterly bonus</p>
+        <p class="role-summary-line" style="margin-bottom:0;">Overall score: ${pctText} of max bonus</p>
+      </div>
+    </div>
+
     <table class="kpi-table">
       <thead>
         <tr>
@@ -167,9 +135,9 @@ function renderRoleDetail(roleDisplayName) {
           .map(
             (k) => `
           <tr>
-            <td>${k.kpiName}</td>
+            <td><span class="kpi-name-link" data-kpi-name="${k.kpiName}">${k.kpiName} ›</span></td>
             <td>${bandPill(k.band, k.hasData)}</td>
-            <td>${k.hasData ? formatCurrency(k.payoutUsd) : "—"}</td>
+            <td class="${k.hasData ? `actual-${k.band}` : ""}">${k.hasData ? formatCurrency(k.payoutUsd) : "—"}</td>
           </tr>
         `
           )
@@ -178,20 +146,131 @@ function renderRoleDetail(roleDisplayName) {
     </table>
     <p class="tile-sub" style="margin-top:6px;">Target and Actual values aren't in the data feed yet — score band and payout are live.</p>
 
+    <div class="quarterly-trend-card">
+      <p class="section-title" style="margin-bottom:6px;">Quarterly Trend</p>
+      <div class="quarterly-trend-bars">
+        <div class="quarterly-trend-bar-col">
+          <span class="quarterly-trend-bar-amount">${formatCurrency(role.totalPayoutUsd)}</span>
+          <div class="quarterly-trend-bar" style="height:${Math.max(8, Math.round((role.percentOfMax / 100) * 80))}px;"></div>
+          <span class="quarterly-trend-bar-label">${tpRolesData.period || "This quarter"}</span>
+        </div>
+      </div>
+      <p class="quarterly-trend-note">Trend builds as each quarter is captured — next quarter will appear here so you can compare progress over time.</p>
+    </div>
+
     <div class="bonus-summary">
       <p class="section-title" style="margin-bottom:6px;">Quarterly Bonus Estimate</p>
-      <div class="big">${formatCurrency(role.totalPayoutUsd)} <span style="font-size:14px;color:var(--text-muted);font-weight:600;">of ${formatCurrency(role.maxBonusUsd)} max (${pctText})</span></div>
+      <div class="big-row">
+        <span class="big">${formatCurrency(role.totalPayoutUsd)}</span>
+        <span style="font-size:14px;color:var(--text-muted);font-weight:600;">of ${formatCurrency(role.maxBonusUsd)} max (${pctText})</span>
+      </div>
       <p class="tile-sub" style="margin-top:6px;">Formula: each scored KPI's share of the max bonus, weighted by score band. KPIs with no data yet don't count toward or against the total.</p>
     </div>
 
     <div class="legend-row">
-      <span><span class="band-pill band-best">BEST</span> meets/exceeds target — full share</span>
-      <span><span class="band-pill band-better">BETTER</span> within 10% of target — 66.7%</span>
-      <span><span class="band-pill band-good">GOOD</span> within 20% of target — 33.3%</span>
-      <span><span class="band-pill band-red">RED</span> missed by more than 20% — $0</span>
-      <span><span class="band-pill band-none">NO DATA</span> excluded from scoring</span>
+      <span class="legend-row-item"><span class="legend-dot band-best"></span><span class="band-pill band-best">BEST</span> meets/exceeds target — full share</span>
+      <span class="legend-row-item"><span class="legend-dot band-better"></span><span class="band-pill band-better">BETTER</span> within 10% of target — 66.7%</span>
+      <span class="legend-row-item"><span class="legend-dot band-good"></span><span class="band-pill band-good">GOOD</span> within 20% of target — 33.3%</span>
+      <span class="legend-row-item"><span class="legend-dot band-red"></span><span class="band-pill band-red">RED</span> missed by more than 20% — $0</span>
+      <span class="legend-row-item"><span class="legend-dot band-none"></span><span class="band-pill band-none">NO DATA</span> excluded from scoring</span>
     </div>
   `;
+
+  wireKpiNameClicks();
+}
+
+// Column definitions per KPI — different KPIs show different underlying
+// record shapes (units, leases, vendors, bank accounts, transactions).
+const KPI_EXPLAIN_COLUMNS = {
+  "Portfolio Occupancy Rate": [
+    { label: "Unit", key: "unitId" },
+    { label: "Status", render: (r) => (r.occupied ? "Occupied" : "Vacant") },
+  ],
+  "Delinquency Rate": [
+    { label: "Lease", key: "leaseId" },
+    { label: "Monthly Rent", render: (r) => formatCurrency(r.monthlyRent) },
+    { label: "Delinquent Balance", render: (r) => formatCurrency(r.delinquentBalance) },
+  ],
+  "Reconciliation Accuracy": [
+    { label: "Account", key: "accountName" },
+    { label: "Balance", render: (r) => formatCurrency(r.balance) },
+    { label: "Status", key: "status" },
+  ],
+  "Rent Processing Accuracy": [
+    { label: "Lease", key: "leaseId" },
+    { label: "Date", key: "date" },
+    { label: "Amount", render: (r) => formatCurrency(r.amount) },
+    { label: "Classification", key: "classification" },
+    { label: "Memo", render: (r) => r.memo ?? "—" },
+  ],
+  "Vendor Compliance": [
+    { label: "Vendor", key: "vendorName" },
+    { label: "Category", render: (r) => r.category ?? "—" },
+    { label: "Tax ID on File", render: (r) => (r.hasTaxPayerId ? "Yes" : "No") },
+    { label: "Insurance Expires", render: (r) => (r.insuranceExpirationDate ? r.insuranceExpirationDate.slice(0, 10) : "—") },
+    { label: "Compliant", render: (r) => (r.compliant ? "Yes" : "No") },
+  ],
+  "1099 Compliance": [
+    { label: "Vendor", key: "vendorName" },
+    { label: "Category", render: (r) => r.category ?? "—" },
+    { label: "Tax ID on File", render: (r) => (r.hasTaxPayerId ? "Yes" : "No") },
+    { label: "Compliant", render: (r) => (r.compliant ? "Yes" : "No") },
+  ],
+  "Days on Market": [
+    { label: "Unit", key: "unitId" },
+    { label: "Days on Market", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
+  ],
+  "Application Processing Time": [
+    { label: "Application", key: "applicationName" },
+    { label: "Created", render: (r) => r.createdAt.slice(0, 10) },
+    { label: "Closed", render: (r) => r.closedAt.slice(0, 10) },
+    { label: "Hours", key: "hours" },
+  ],
+  "Applicant Response Timeliness": [
+    { label: "Application", key: "applicationName" },
+    { label: "First Task", render: (r) => r.firstTaskDescription ?? "No completed task yet" },
+    { label: "Hours to Complete", render: (r) => (r.hoursToComplete === null ? "—" : r.hoursToComplete) },
+    { label: "Within 24h", render: (r) => (r.within24h === null ? "—" : r.within24h ? "yes" : "no") },
+    { label: "Assignee", render: (r) => r.assignee ?? "—" },
+  ],
+};
+
+// KPI name is clickable (has a "›" chevron) — matches the vendor site's own
+// "tap any KPI to see the data behind it" pattern. For KPIs with a real,
+// live-verified formula, this fetches the actual formula text and the real
+// records that produced the number; for anything not wired up yet, it
+// shows an honest "not available yet" message rather than fabricating one.
+function wireKpiNameClicks() {
+  document.querySelectorAll(".kpi-name-link").forEach((el) => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const kpiName = el.dataset.kpiName;
+      openLoadingModal(kpiName);
+      try {
+        const result = await apiGet(
+          `/api/team-performance/kpi-explain/${encodeURIComponent(kpiName)}?period=${getStoredPeriod()}`
+        );
+        const columns = KPI_EXPLAIN_COLUMNS[kpiName] ?? [];
+        openDrillDownModal({
+          title: kpiName,
+          formula: result.formula,
+          columns,
+          rows: result.rows,
+          emptyText: "No records behind this KPI for the selected period.",
+        });
+      } catch (err) {
+        openDrillDownModal({
+          title: kpiName,
+          columns: [],
+          rows: [],
+          emptyText:
+            err.status === 404
+              ? "The data behind this KPI isn't wired up yet — only the score band and payout are live right now."
+              : `Couldn't load the data behind this KPI: ${err.message}`,
+        });
+      }
+    });
+  });
 }
 
 function bandPill(band, hasData) {

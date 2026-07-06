@@ -60,8 +60,10 @@
 export type ScoreBand = "best" | "better" | "good" | "red";
 
 // Raw points out of 3 — the shared unit both the dollar and percent
-// calculations derive from.
-const BAND_POINTS: Record<ScoreBand, number> = {
+// calculations derive from. Exported so a single-KPI snapshot writer
+// (db/kpiRepository.ts's upsertKpiSnapshot) can store the same point value
+// scoreRole() derives at read time, without duplicating this mapping.
+export const BAND_POINTS: Record<ScoreBand, number> = {
   best: 3,
   better: 2,
   good: 1,

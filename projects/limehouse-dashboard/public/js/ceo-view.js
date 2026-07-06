@@ -99,7 +99,7 @@ function renderFinancialCharts(incomeData) {
       ${coverageNote ? `<p class="tile-sub" style="margin-bottom:10px;">${coverageNote}</p>` : ""}
       <div class="chart-card">
         <p class="chart-card-title">Gross Income — By Year</p>
-        ${renderIncomeMonthList(months, "grossIncome")}
+        ${renderYearOverYearChart(months, "grossIncome", currentYear, "gross-income-chart", formatCurrencyShort)}
       </div>
       <div class="tile-grid" style="margin-bottom:20px;">
         ${tileHtml({
@@ -112,7 +112,7 @@ function renderFinancialCharts(incomeData) {
       </div>
       <div class="chart-card">
         <p class="chart-card-title">Net Income — By Year</p>
-        ${renderIncomeMonthList(months, "netIncome")}
+        ${renderYearOverYearChart(months, "netIncome", currentYear, "net-income-chart", formatCurrencyShort)}
       </div>
       <div class="tile-grid" style="margin-bottom:20px;">
         ${tileHtml({
@@ -125,7 +125,7 @@ function renderFinancialCharts(incomeData) {
       </div>
       <div class="chart-card">
         <p class="chart-card-title">Revenue Per Unit — By Year</p>
-        ${renderIncomeMonthList(months, "revenuePerUnit")}
+        ${renderYearOverYearChart(months, "revenuePerUnit", currentYear, "rpu-chart", formatCurrencyShort)}
       </div>
       <div class="tile-grid" style="margin-bottom:20px;">
         ${tileHtml({
@@ -141,9 +141,48 @@ function renderFinancialCharts(incomeData) {
   `;
 }
 
-// Plain month-by-month list (no chart library, per the project's simplicity
-// bar). Negative values (Net Income can go negative) are styled distinctly
-// per spec via formatCurrency's parenthetical + .negative class.
+function formatCurrencyShort(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1000) return `${n < 0 ? "-" : ""}$${Math.round(abs / 1000)}k`;
+  return formatCurrency(n);
+}
+
+// One line chart per metric with MULTIPLE overlapping lines — one per
+// year (2018 through today) — all plotted against the same Jan-Dec x-axis
+// so seasonal patterns compare year over year, per the visual-parity
+// spec. Older years render as light gray/olive; the current year is
+// highlighted in blue. Falls back to the flat monthly list if there
+// aren't at least 2 distinct years of data yet (a single-year line chart
+// wouldn't show the year-over-year comparison this chart type exists for).
+function renderYearOverYearChart(months, field, currentYear, canvasId, yFormat) {
+  if (months.length === 0) {
+    return `<p class="loading-text">No data for this range yet.</p>`;
+  }
+
+  const seriesByYear = {};
+  months.forEach((m) => {
+    const [year, monthNum] = m.month.split("-").map(Number);
+    if (!seriesByYear[year]) seriesByYear[year] = new Array(12).fill(null);
+    const value = m[field];
+    seriesByYear[year][monthNum - 1] = value === null || value === undefined ? null : value;
+  });
+
+  const years = Object.keys(seriesByYear);
+  if (years.length < 2) {
+    // Not enough distinct years yet for a meaningful year-over-year
+    // comparison — show the plain month list instead.
+    return renderIncomeMonthList(months, field);
+  }
+
+  return yearOverYearLineChartHtml({ canvasId, seriesByYear, currentYear, yFormat });
+}
+
+// Plain month-by-month list — fallback for when there's under 2 years of
+// history (not enough for the year-over-year line chart), or as a simple
+// readable alternative. Negative values (Net Income can go negative) are
+// styled distinctly per spec via formatCurrency's parenthetical +
+// .negative class.
 function renderIncomeMonthList(months, field) {
   if (months.length === 0) {
     return `<p class="loading-text">No data for this range yet.</p>`;
@@ -184,12 +223,42 @@ function renderPerformanceByRole(rolesData) {
   const byName = new Map(rolesData.roles.map((r) => [r.roleDisplayName, r]));
   const extraRoles = rolesData.roles.map((r) => r.roleDisplayName).filter((name) => !CEO_ROLE_ORDER.includes(name));
   const orderedNames = [...CEO_ROLE_ORDER, ...extraRoles];
+  const orderedRoles = orderedNames.map((name) => ({ role: byName.get(name), name }));
 
   return `
     <div class="section">
       <p class="section-title">Performance by Role · tap any KPI to see the data behind it</p>
-      ${orderedNames.map((name) => renderRoleCard(byName.get(name), name)).join("")}
+      <div class="role-pill-row">
+        ${orderedRoles.map(({ role, name }) => renderRolePill(role, name)).join("")}
+      </div>
+      ${orderedRoles.map(({ role, name }) => renderRoleCard(role, name)).join("")}
     </div>
+  `;
+}
+
+// Status is derived from each role's KPI bands: off-track if any KPI is
+// "red", at-risk if any is "good"/"better" (but none red), on-track
+// otherwise. Roles with no scored KPIs yet show as on-track (neutral)
+// rather than implying a problem that isn't there.
+function roleStatus(role) {
+  if (!role || role.kpis.length === 0) return "on-track";
+  const withData = role.kpis.filter((k) => k.hasData);
+  if (withData.some((k) => k.band === "red")) return "off-track";
+  if (withData.some((k) => k.band === "good" || k.band === "better")) return "at-risk";
+  return "on-track";
+}
+
+function renderRolePill(role, fallbackName) {
+  const roleDisplayName = role ? role.roleDisplayName : fallbackName;
+  const abbrev = CEO_ROLE_ABBREV[roleDisplayName] || roleDisplayName;
+  const status = roleStatus(role);
+  const onTarget = role ? role.kpis.filter((k) => k.hasData && k.band === "best").length : 0;
+  const scored = role ? role.kpis.filter((k) => k.hasData).length : 0;
+  return `
+    <span class="role-pill">
+      <span class="status-dot status-${status}"></span>
+      ${abbrev} · ${roleDisplayName} · ${onTarget}/${scored || "—"} on tgt
+    </span>
   `;
 }
 
@@ -215,30 +284,54 @@ function renderRoleCard(role, fallbackName) {
   const onTarget = withData.filter((k) => k.band === "best").length;
   const atRisk = withData.filter((k) => k.band === "good" || k.band === "better").length;
   const offTrack = withData.filter((k) => k.band === "red").length;
+  const status = roleStatus(role);
+  const statusLabel = { "on-track": "On track", "at-risk": "At risk", "off-track": "Off track" }[status];
+  const fractionCanvasId = `fraction-ring-${abbrev.replace(/\W+/g, "")}`;
+  const fractionPercent = withData.length > 0 ? Math.round((onTarget / withData.length) * 100) : 0;
 
   return `
     <div class="role-card">
       <div class="role-card-header">
         <span class="role-card-title">${abbrev} · ${role.roleDisplayName}</span>
-        <span class="role-card-stats">
-          <span>${onTarget} on tgt</span>
-          <span>${withData.length} scored</span>
-          <span>${atRisk} at-risk</span>
-          <span>${offTrack} off-track</span>
-        </span>
+        <span class="status-pill status-${status}">${statusLabel}</span>
       </div>
-      ${role.kpis
-        .map(
-          (k) => `
-        <div class="role-kpi-row" data-kpi-name="${k.kpiName}" data-role="${role.roleDisplayName}">
-          <span>${k.kpiName}</span>
-          <span>${bandPillCeo(k.band, k.hasData)} ${k.hasData ? formatCurrency(k.payoutUsd) : ""}</span>
+      <div class="role-card-body">
+        ${ringGaugeHtml({ canvasId: fractionCanvasId, percent: fractionPercent, size: 56, label: `${onTarget}/${withData.length}` })}
+        <div class="role-card-kpi-list">
+          <span class="role-card-stats" style="margin-bottom:6px;display:flex;">
+            <span>${onTarget} on tgt</span>
+            <span>${withData.length} scored</span>
+            <span>${atRisk} at-risk</span>
+            <span>${offTrack} off-track</span>
+          </span>
+          ${role.kpis
+            .map(
+              (k) => `
+            <div class="role-kpi-row" data-kpi-name="${k.kpiName}" data-role="${role.roleDisplayName}">
+              <span class="role-kpi-row-left">
+                <span class="status-dot status-${kpiStatusDot(k)}"></span>
+                <span class="source-tag">BD</span>
+                ${k.kpiName}
+              </span>
+              <span class="role-kpi-row-right">
+                ${bandPillCeo(k.band, k.hasData)}
+                <span class="${k.hasData ? `actual-${k.band}` : ""}">${k.hasData ? formatCurrency(k.payoutUsd) : ""}</span>
+              </span>
+            </div>
+          `
+            )
+            .join("")}
         </div>
-      `
-        )
-        .join("")}
+      </div>
     </div>
   `;
+}
+
+function kpiStatusDot(k) {
+  if (!k.hasData || !k.band) return "on-track";
+  if (k.band === "red") return "off-track";
+  if (k.band === "good" || k.band === "better") return "at-risk";
+  return "on-track";
 }
 
 function bandPillCeo(band, hasData) {

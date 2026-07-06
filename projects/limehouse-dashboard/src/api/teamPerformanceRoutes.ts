@@ -1,66 +1,47 @@
 import { Router } from "express";
 import { z } from "zod";
-import { checkTeamPerformancePassword, isTeamPerformancePasswordSet } from "../db/settings.js";
-import { issueUnlockedCookie, requireTeamPerformanceUnlocked } from "./session.js";
+import { requireLogin, requireAdmin } from "../auth/session.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
-import { periodToSnapshotLabel, type PeriodKey } from "../kpi/period.js";
+import { periodToSnapshotLabel, resolvePeriod, type PeriodKey } from "../kpi/period.js";
 import { logError } from "../lib/logger.js";
+import {
+  fetchActiveManagedUnits,
+  fetchActiveLeases,
+  fetchOutstandingBalances,
+  fetchVendors,
+  fetchBankAccounts,
+  fetchBankAccountReconciliations,
+  fetchLeaseTransactions,
+} from "../buildium/client.js";
+import { occupancyExplainRows, delinquencyRateExplainRows } from "../kpi/occupancy.js";
+import {
+  vendorComplianceExplainRows,
+  nineNineComplianceExplainRows,
+  reconciliationAccuracyExplainRows,
+  rentProcessingAccuracyExplainRows,
+  type ReconciliationAccuracyInput,
+} from "../kpi/bookkeeperMetrics.js";
+import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
+import { daysOnMarketExplainRows } from "../rentengine/client.js";
+import {
+  fetchApplicationProcesses,
+  applicationProcessingTimeExplainRows,
+  fetchApplicationsWithTasksForResponseTimeliness,
+  applicantResponseTimelinessExplainRows,
+} from "../leadsimple/client.js";
 
 export const teamPerformanceRoutes = Router();
 
-const passwordCheckSchema = z.object({ password: z.string().min(1) });
-
-// No per-user accounts (per project brief) — one shared password, checked
-// against dashboard_settings.team_performance_password_hash. A correct
-// password sets a signed "unlocked" cookie; wrong password OR no password
-// configured yet both return 401 with the same message (see
-// src/db/settings.ts comment on why those two cases aren't distinguished
-// in the response).
-teamPerformanceRoutes.post("/api/team-performance/check-password", async (req, res) => {
-  const parsed = passwordCheckSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Password is required." });
-    return;
-  }
-  try {
-    const ok = await checkTeamPerformancePassword(parsed.data.password);
-    if (!ok) {
-      res.status(401).json({ error: "Incorrect password." });
-      return;
-    }
-    issueUnlockedCookie(res);
-    res.json({ ok: true });
-  } catch (err) {
-    logError("POST /api/team-performance/check-password failed", { error: String(err) });
-    res.status(500).json({ error: "Failed to check password." });
-  }
-});
-
-// Lets the frontend show "ask Jason to set a password" vs. a normal
-// password prompt, without ever revealing whether a guess was close.
-teamPerformanceRoutes.get("/api/team-performance/status", async (_req, res) => {
-  try {
-    res.json({ passwordConfigured: await isTeamPerformancePasswordSet() });
-  } catch (err) {
-    logError("GET /api/team-performance/status failed", { error: String(err) });
-    res.status(500).json({ error: "Failed to check Team Performance status." });
-  }
-});
+// The shared-password check-password/status routes that used to live here
+// are gone — real per-person Microsoft sign-in replaced the shared password
+// entirely (see migrations/0007_drop_team_performance_password.ts).
+// /roles is now gated the same way CEO View is: signed in AND Admin.
 
 const periodQuerySchema = z
   .enum(["this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"])
   .default("this_quarter");
 
-// requireTeamPerformanceUnlocked is applied per-route (not via a blanket
-// teamPerformanceRoutes.use(...)) because this router is mounted at the
-// app root with no path prefix (app.use(teamPerformanceRoutes) in
-// server.ts) — an unscoped .use() here would match "/" and therefore catch
-// EVERY request that reaches this router's dispatch chain, including ones
-// destined for other routers mounted after it (e.g. /api/sync/status),
-// not just this router's own /api/team-performance/* routes. This was
-// caught by a live smoke test: /api/sync/status returned 401 "Team
-// Performance tab is locked" before this fix.
-teamPerformanceRoutes.get("/api/team-performance/roles", requireTeamPerformanceUnlocked, async (req, res) => {
+teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAdmin, async (req, res) => {
   const parsed = periodQuerySchema.safeParse(req.query.period);
   const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
   const snapshotLabel = periodToSnapshotLabel(period);
@@ -70,5 +51,131 @@ teamPerformanceRoutes.get("/api/team-performance/roles", requireTeamPerformanceU
   } catch (err) {
     logError("GET /api/team-performance/roles failed", { error: String(err) });
     res.status(500).json({ error: "Failed to load Team Performance data." });
+  }
+});
+
+// KPI "explain" drill-down — click a KPI, see the plain-English formula
+// plus the real records behind the number, matching the vendor site's own
+// "tap any KPI to see the data behind it" pattern. Only the KPIs with a
+// real, live-verified formula (2026-07-05) are wired here — anything else
+// 404s with a clear message rather than fabricating an explanation.
+const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
+  "Portfolio Occupancy Rate": "Occupied units ÷ total managed units (234 doors, including the 1 commercial property). A unit counts as occupied only if it has a real Active lease with a current tenant on file.",
+  "Delinquency Rate": "Sum of outstanding balance across leases with a positive balance, ÷ sum of monthly rent across every active lease.",
+  "Reconciliation Accuracy": "Across active bank accounts, how many fully-completed months in this period have a finished bank reconciliation (statement ending date in that month, marked finished). A partial current month never counts. Accounts with $0 balance and no reconciliations are excluded (nothing to reconcile).",
+  "Rent Processing Accuracy": "1 − (operational payment reversals ÷ total payments), across every active lease this period. NSF/bounced/chargeback reversals are tenant-caused, not a processing error, so they're excluded from the percentage (but listed below for reference).",
+  "Vendor Compliance": "Of your active maintenance/trade vendors (Contractors category), the share with both a tax ID on file and current (non-expired) liability insurance.",
+  "1099 Compliance": "Of your active maintenance/trade vendors flagged for 1099 reporting, the share that have a tax ID on file.",
+  "Days on Market": "Average days on market across units RentEngine reports as \"Healthy\" (actively marketed, not At-risk/Waitlist/On Hold/Off-Market/Commercial). Source: RentEngine leasing-performance report, one row per unit.",
+  "Application Processing Time": "Average hours from when an application came in to when it closed out, across every Applications Process that closed this period.",
+  "Applicant Response Timeliness": "Of every Application that came in over the trailing 90 days, the share where the first task on it got completed within 24 hours. Applications with no completed task yet count against the rate. Note: this counts only applications that arrived in the last 90 days — it deliberately excludes old, already-closed applications whose only recent activity is an unrelated administrative task (e.g. a bookkeeping fee charge), which would otherwise skew the score with stale backlog noise.",
+};
+
+teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requireAdmin, async (req, res) => {
+  const kpiName = req.params.kpiName;
+  const formula = KPI_EXPLAIN_FORMULAS[kpiName];
+  if (!formula) {
+    res.status(404).json({ error: `No live formula/drill-down wired up yet for "${kpiName}".` });
+    return;
+  }
+  const parsed = periodQuerySchema.safeParse(req.query.period);
+  const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
+  const { from, to } = resolvePeriod(period);
+
+  try {
+    switch (kpiName) {
+      case "Portfolio Occupancy Rate": {
+        const units = await fetchActiveManagedUnits();
+        const activeLeases = await fetchActiveLeases();
+        const rows = occupancyExplainRows(activeLeases, units.map((u) => String(u.Id)));
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Delinquency Rate": {
+        const balances = await fetchOutstandingBalances();
+        const activeLeases = await fetchActiveLeases();
+        const rows = delinquencyRateExplainRows(balances, activeLeases);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Vendor Compliance": {
+        const vendors = await fetchVendors();
+        const rows = vendorComplianceExplainRows(vendors);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "1099 Compliance": {
+        const vendors = await fetchVendors();
+        const rows = nineNineComplianceExplainRows(vendors);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Reconciliation Accuracy": {
+        const bankAccounts = await fetchBankAccounts();
+        const reconInputs: ReconciliationAccuracyInput[] = [];
+        for (const account of bankAccounts) {
+          const { reconcilable, reconciliations } = await fetchBankAccountReconciliations(account.Id);
+          reconInputs.push({ account, reconcilable, reconciliations });
+        }
+        const rows = reconciliationAccuracyExplainRows(reconInputs, from, to);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Rent Processing Accuracy": {
+        const activeLeases = await fetchActiveLeases();
+        const transactionsByLease = [];
+        for (const lease of activeLeases) {
+          transactionsByLease.push(await fetchLeaseTransactions(String(lease.Id)));
+        }
+        const rows = rentProcessingAccuracyExplainRows(transactionsByLease, from, to);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Days on Market": {
+        const leasingPerf = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+        if (!leasingPerf.connected || !leasingPerf.rows) {
+          res.status(502).json({ error: "RentEngine isn't connected — can't load the data behind Days on Market." });
+          return;
+        }
+        const rows = daysOnMarketExplainRows(leasingPerf.rows);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Application Processing Time": {
+        const applications = await fetchApplicationProcesses();
+        if (!applications.connected || !applications.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Application Processing Time." });
+          return;
+        }
+        const rows = applicationProcessingTimeExplainRows(applications.data, from, to);
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Applicant Response Timeliness": {
+        // Fixed trailing-90-day window (the vendor's own label reads
+        // "(90d)") — deliberately not tied to the quarter/period selector.
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const windowEnd = now.toISOString().slice(0, 10);
+        const responseData = await fetchApplicationsWithTasksForResponseTimeliness(windowStart);
+        if (!responseData.connected || !responseData.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Applicant Response Timeliness." });
+          return;
+        }
+        const rows = applicantResponseTimelinessExplainRows(
+          responseData.data.processes,
+          responseData.data.tasksByProcessId,
+          windowStart,
+          windowEnd
+        );
+        res.json({ kpiName, formula, rows });
+        return;
+      }
+      default:
+        res.status(404).json({ error: `No live formula/drill-down wired up yet for "${kpiName}".` });
+    }
+  } catch (err) {
+    logError("GET /api/team-performance/kpi-explain failed", { kpiName, error: String(err) });
+    res.status(502).json({ error: `Failed to load the data behind "${kpiName}".` });
   }
 });

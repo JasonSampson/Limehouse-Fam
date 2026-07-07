@@ -619,6 +619,30 @@ main {
   line-height: 1.45;
 }
 
+.modal-note {
+  background: var(--bg-subtle, #f5f6f4);
+  border: 1px solid var(--border-subtle, #e2e4e0);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+}
+
+.modal-note-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+.modal-note-text {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
 table.drill-table {
   width: 100%;
   border-collapse: collapse;

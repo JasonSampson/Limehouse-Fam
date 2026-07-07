@@ -290,6 +290,7 @@ function renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection }) 
                 sub: `${formatNumber(latestMonth.paidByThirdCount)} of ${formatNumber(latestMonth.totalLeasesDue)} leases`,
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
                 sparkline: rentByThirdTrend ? { values: rentByThirdTrend, color: "#1e5631" } : null,
               })
             : couldNotLoadTile({ id: "rent-by-3rd", label: "Rent By 3rd", sourceTags: ["BD"] })
@@ -303,6 +304,7 @@ function renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection }) 
                 sub: `${formatNumber(latestMonth.paidByTenthCount)} of ${formatNumber(latestMonth.totalLeasesDue)} leases`,
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
                 sparkline: rentByTenthTrend ? { values: rentByTenthTrend, color: "#1e5631" } : null,
               })
             : couldNotLoadTile({ id: "rent-by-10th", label: "Rent By 10th", sourceTags: ["BD"] })
@@ -1087,6 +1089,40 @@ async function handleTileClick(tileId) {
     return;
   }
 
+  // ADDED 2026-07-07, per Jason directly: a plain-English note explaining
+  // how this number is put together, same idea as the vendor site's own
+  // "NOTE" box on tiles that aren't a simple live count. See
+  // LATE_BALANCE_THRESHOLD / LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID in
+  // src/kpi/rentCollection.ts for the actual logic this note describes.
+  const RENT_BY_CUTOFF_NOTE =
+    "For each active lease, we check Buildium's real payment ledger and calculate how much rent is still owed as of the cutoff date. A lease only counts as late once more than $200 is still outstanding — a tenant short $20–$75 isn't flagged as late. Bounced (NSF) payments are handled correctly: if a payment bounces, the balance goes back to being owed until a real payment replaces it. One inherited lease (3631 Chase Court) has its own late fee policy and isn't considered late until after the 5th instead of the 3rd — more will be added here as they're confirmed.";
+
+  if (tileId === "rent-by-3rd" || tileId === "rent-by-10th") {
+    await simpleDrillDown({
+      tileId,
+      title: tileId === "rent-by-3rd" ? "Rent By 3rd — 12 Months" : "Rent By 10th — 12 Months",
+      url: "/api/dashboard/financials/rent-collection",
+      rowsKey: "months",
+      note: RENT_BY_CUTOFF_NOTE,
+      columns:
+        tileId === "rent-by-3rd"
+          ? [
+              { label: "Month", render: (r) => formatMonthLabel(r.month) },
+              { label: "Leases Due", key: "totalLeasesDue" },
+              { label: "Paid By 3rd", key: "paidByThirdCount" },
+              { label: "% By 3rd", render: (r) => formatPercent(r.paidByThirdPercent) },
+            ]
+          : [
+              { label: "Month", render: (r) => formatMonthLabel(r.month) },
+              { label: "Leases Due", key: "totalLeasesDue" },
+              { label: "Paid By 10th", key: "paidByTenthCount" },
+              { label: "% By 10th", render: (r) => formatPercent(r.paidByTenthPercent) },
+            ],
+      emptyText: "No rent collection history yet for the trailing 12 months.",
+    });
+    return;
+  }
+
   if (tileId === "avg-rent-lease") {
     await simpleDrillDown({
       tileId,
@@ -1299,12 +1335,12 @@ async function handleTileClick(tileId) {
 // each repeat the same try/catch boilerplate. `rowsKey` is for endpoints
 // that wrap rows in an envelope (e.g. {connected, prospects: [...]})
 // instead of returning a bare array.
-async function simpleDrillDown({ tileId, title, url, columns, emptyText, rowsKey }) {
+async function simpleDrillDown({ tileId, title, url, note, columns, emptyText, rowsKey }) {
   openLoadingModal(title);
   try {
     const response = await apiGet(url);
     const rows = rowsKey ? response[rowsKey] ?? [] : response;
-    openDrillDownModal({ title, columns, rows, emptyText });
+    openDrillDownModal({ title, note, columns, rows, emptyText });
   } catch (err) {
     openDrillDownModal({ title, columns: [], rows: [], emptyText: `Couldn't load: ${err.message}` });
   }

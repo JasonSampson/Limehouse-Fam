@@ -3,7 +3,7 @@
 // (property/unit/balance for delinquency, property/unit/rent for occupied
 // units, etc. — per the project brief).
 
-function openDrillDownModal({ title, formula, columns, rows, emptyText = "No records for this period." }) {
+function openDrillDownModal({ title, formula, note, columns, rows, emptyText = "No records for this period." }) {
   closeDrillDownModal();
 
   const overlay = document.createElement("div");
@@ -11,11 +11,18 @@ function openDrillDownModal({ title, formula, columns, rows, emptyText = "No rec
   overlay.id = "drill-down-overlay";
 
   const formulaHtml = formula ? `<p class="modal-formula"><strong>Formula:</strong> ${formula}</p>` : "";
+  // "Note" box — same idea as the vendor site's own explainer box on tiles
+  // whose data isn't a straightforward live number, so Jason can see how a
+  // figure was put together without having to ask.
+  const noteHtml = note
+    ? `<div class="modal-note"><p class="modal-note-label">Note</p><p class="modal-note-text">${note}</p></div>`
+    : "";
 
   const bodyHtml =
     rows.length === 0
-      ? `${formulaHtml}<p class="loading-text">${emptyText}</p>`
+      ? `${noteHtml}${formulaHtml}<p class="loading-text">${emptyText}</p>`
       : `
+        ${noteHtml}
         ${formulaHtml}
         <table class="drill-table">
           <thead>

@@ -18,7 +18,7 @@ import { startSyncRun, completeSyncRun, failSyncRun, getLastSuccessfulSync } fro
 import { summarizeDelinquency } from "../buildium/delinquency.js";
 import {
   summarizeMonthlyCollectionRates,
-  resolvePaymentDatesPerMonth,
+  resolveLeaseBalancesPerMonth,
   last12Months,
   excludeCurrentInProgressMonth,
   buildDuePerMonth,
@@ -121,20 +121,24 @@ syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
 // refresh independently, at whatever cadence each one's caller needs.
 //
 // ============================================================================
-// FIXED 2026-07-04 — the 4th and final bug in this endpoint (prepayment/
-// applied-credit reconciliation) is now closed. See resolveRentPaymentDates
-// in src/kpi/rentCollection.ts for the FIFO cash-application model that
-// replaces earliestPaymentPerMonth (kept only for reference, no longer
-// called). Verified by hand against 6 real leases covering every pattern
-// found (on-time, prepaid via two different real Buildium mechanisms, late,
-// chronic partial payer, and a genuinely-unpaid eviction case) — all 6
-// matched the expected paid-by-3rd/10th outcome exactly before this was
-// wired in here. Combined with the three earlier fixes (current-month
-// exclusion, lease-start-date-aware denominator, ghost-lease filtering),
-// this should now land close to the vendor's real 91.8%/96.6% — re-verify
-// live against the vendor site once this sync has run for real, since a
-// live comparison is the only way to be sure rather than trusting the
-// fixture tests alone.
+// FIXED 2026-07-04 — the 4th bug in this endpoint (prepayment/applied-credit
+// reconciliation) was closed via a FIFO cash-application model, replacing
+// earliestPaymentPerMonth (kept only for reference, no longer called).
+//
+// REBUILT 2026-07-07, per Jason directly: "paid by 3rd/10th" was still the
+// wrong QUESTION, not just the wrong math — Jason only counts a lease as
+// late once the balance still owed exceeds $200 (he's tracked this by hand
+// since Aug 2025 and only counts a lease as late once it clears that bar),
+// and small remaining balances routinely clear between day 3 and day 10.
+// See resolveLeaseBalancesPerMonth + LATE_BALANCE_THRESHOLD in
+// src/kpi/rentCollection.ts — same underlying FIFO engine, now capped at a
+// point in time (day 3 / day 10) instead of run to full resolution, so it
+// reports the balance STILL OWED as of each cutoff rather than a binary
+// paid/not-paid. Also confirmed this correctly handles an NSF bounce
+// (real case: lease 2066996, 4513 Indies Court) without any special-casing
+// — see that function's comment for how. Re-verified live against Jason's
+// own manual tracking spreadsheet (not just the vendor site) after this
+// landed.
 syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "rent_collection_cache_refresh");
   try {
@@ -173,13 +177,13 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
     // deliberately spacing out ~230 calls in the first place is the actual
     // fix — this endpoint is meant to be called by a scheduled sync, not on
     // every page load, so taking longer here is an acceptable trade.
-    const paymentsByLease: ReturnType<typeof resolvePaymentDatesPerMonth>[] = [];
+    const balancesByLease: ReturnType<typeof resolveLeaseBalancesPerMonth>[] = [];
     for (const lease of activeLeases) {
       const transactions = await fetchLeaseTransactions(String(lease.Id));
-      paymentsByLease.push(resolvePaymentDatesPerMonth(String(lease.Id), transactions));
+      balancesByLease.push(resolveLeaseBalancesPerMonth(String(lease.Id), transactions));
     }
 
-    const rentCollection = summarizeMonthlyCollectionRates(duePerMonth, paymentsByLease.flat());
+    const rentCollection = summarizeMonthlyCollectionRates(duePerMonth, balancesByLease.flat());
     await upsertCachedMetric("rent_collection_12mo", "portfolio", "buildium", rentCollection);
 
     await completeSyncRun(syncLogId, activeLeases.length);

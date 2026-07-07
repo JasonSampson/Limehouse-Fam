@@ -5,12 +5,15 @@ import {
   earliestPaymentPerMonth,
   resolveRentPaymentDates,
   resolvePaymentDatesPerMonth,
+  resolveLeaseBalancesPerMonth,
+  LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID,
   extractDepositDisposition,
   summarizeSecurityDepositWithheld,
   last12Months,
   excludeCurrentInProgressMonth,
   buildDuePerMonth,
   type LeasePaymentForMonth,
+  type LeaseBalanceForMonth,
   type PastLeaseDeposit,
   type LeaseDepositDisposition,
 } from "../../src/kpi/rentCollection.js";
@@ -113,6 +116,10 @@ describe("summarizeRentAndDeposit", () => {
   });
 });
 
+function balance(overrides: Partial<LeaseBalanceForMonth>): LeaseBalanceForMonth {
+  return { leaseId: "1", month: "2026-06", balanceByThird: 0, balanceByTenth: 0, ...overrides };
+}
+
 describe("summarizeMonthlyCollectionRates", () => {
   it("computes paid-by-3rd and paid-by-10th percentages per month", () => {
     const duePerMonth = [
@@ -121,13 +128,13 @@ describe("summarizeMonthlyCollectionRates", () => {
       { leaseId: "3", month: "2026-06" },
       { leaseId: "4", month: "2026-06" },
     ];
-    const payments: LeasePaymentForMonth[] = [
-      { leaseId: "1", month: "2026-06", paymentDate: "2026-06-02" }, // by 3rd and by 10th
-      { leaseId: "2", month: "2026-06", paymentDate: "2026-06-07" }, // by 10th only
-      { leaseId: "3", month: "2026-06", paymentDate: "2026-06-15" }, // neither
-      { leaseId: "4", month: "2026-06", paymentDate: null }, // unpaid
+    const balances: LeaseBalanceForMonth[] = [
+      balance({ leaseId: "1", balanceByThird: 0, balanceByTenth: 0 }), // clear by 3rd and by 10th
+      balance({ leaseId: "2", balanceByThird: 1200, balanceByTenth: 0 }), // clear by 10th only
+      balance({ leaseId: "3", balanceByThird: 1200, balanceByTenth: 1200 }), // still owes as of both
+      balance({ leaseId: "4", balanceByThird: 1200, balanceByTenth: 1200 }), // unpaid
     ];
-    const result = summarizeMonthlyCollectionRates(duePerMonth, payments);
+    const result = summarizeMonthlyCollectionRates(duePerMonth, balances);
     expect(result).toEqual([
       {
         month: "2026-06",
@@ -140,7 +147,7 @@ describe("summarizeMonthlyCollectionRates", () => {
     ]);
   });
 
-  it("treats a lease with no matching payment record as unpaid, not a crash", () => {
+  it("treats a lease with no matching balance record as unpaid, not a crash", () => {
     const duePerMonth = [{ leaseId: "1", month: "2026-06" }];
     const result = summarizeMonthlyCollectionRates(duePerMonth, []);
     expect(result[0].paidByThirdCount).toBe(0);
@@ -157,18 +164,21 @@ describe("summarizeMonthlyCollectionRates", () => {
     expect(result.map((r) => r.month)).toEqual(["2026-05", "2026-06", "2026-07"]);
   });
 
-  it("boundary: day 3 counts as paid-by-3rd, day 10 counts as paid-by-10th", () => {
+  // The $200 rule, straight from Jason: a lease that's short $20-$75 isn't
+  // "late" for this metric. Only a remaining balance over $200 counts.
+  it("counts a lease as paid once its remaining balance is $200 or less, not only when fully paid", () => {
     const duePerMonth = [
-      { leaseId: "1", month: "2026-06" },
-      { leaseId: "2", month: "2026-06" },
+      { leaseId: "1", month: "2026-06" }, // owes $50 as of the 3rd — not late
+      { leaseId: "2", month: "2026-06" }, // owes exactly $200 as of the 3rd — boundary, not late
+      { leaseId: "3", month: "2026-06" }, // owes $200.01 as of the 3rd — late
     ];
-    const payments: LeasePaymentForMonth[] = [
-      { leaseId: "1", month: "2026-06", paymentDate: "2026-06-03" },
-      { leaseId: "2", month: "2026-06", paymentDate: "2026-06-10" },
+    const balances: LeaseBalanceForMonth[] = [
+      balance({ leaseId: "1", balanceByThird: 50 }),
+      balance({ leaseId: "2", balanceByThird: 200 }),
+      balance({ leaseId: "3", balanceByThird: 200.01 }),
     ];
-    const result = summarizeMonthlyCollectionRates(duePerMonth, payments);
-    expect(result[0].paidByThirdCount).toBe(1); // only the day-3 payment
-    expect(result[0].paidByTenthCount).toBe(2); // both day-3 and day-10 are <=10
+    const result = summarizeMonthlyCollectionRates(duePerMonth, balances);
+    expect(result[0].paidByThirdCount).toBe(2); // leases 1 and 2
   });
 });
 
@@ -387,6 +397,137 @@ describe("resolvePaymentDatesPerMonth", () => {
     ];
     const result = resolvePaymentDatesPerMonth("10", transactions);
     expect(result).toEqual([{ leaseId: "10", month: "2026-06", paymentDate: "2026-06-01" }]);
+  });
+});
+
+// ============================================================================
+// resolveLeaseBalancesPerMonth — REBUILT 2026-07-07, replaces
+// resolvePaymentDatesPerMonth in the live pipeline (see LATE_BALANCE_THRESHOLD
+// and resolveLeaseBalancesPerMonth's own comment in rentCollection.ts for
+// why: "paid by 3rd/10th" needs the balance STILL OWED as of a cutoff, not
+// a binary fully-paid-or-not answer).
+// ============================================================================
+describe("resolveLeaseBalancesPerMonth", () => {
+  it("reports zero balance at both cutoffs when paid in full on the 1st", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500, glLines: [[RENT_INCOME, "Rent Income", 1500]] }),
+      txn({ Id: 2, Date: "2026-06-01", TransactionType: "Payment", TotalAmount: -1500, glLines: [[RENT_INCOME, "Rent Income", -1500]] }),
+    ];
+    const result = resolveLeaseBalancesPerMonth("10", transactions);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 0, balanceByTenth: 0 }]);
+  });
+
+  it("reports the full charge as owed at both cutoffs when nothing has been paid", () => {
+    const transactions = [txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500, glLines: [[RENT_INCOME, "Rent Income", 1500]] })];
+    const result = resolveLeaseBalancesPerMonth("10", transactions);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 1500, balanceByTenth: 1500 }]);
+  });
+
+  it("reports the remaining balance owed after a partial payment, not just paid/unpaid", () => {
+    // Owes $1500, pays $1450 on the 2nd — $50 still owed at both cutoffs,
+    // under the $200 threshold so this would count as "paid" upstream.
+    const transactions = [
+      txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500, glLines: [[RENT_INCOME, "Rent Income", 1500]] }),
+      txn({ Id: 2, Date: "2026-06-02", TransactionType: "Payment", TotalAmount: -1450, glLines: [[RENT_INCOME, "Rent Income", -1450]] }),
+    ];
+    const result = resolveLeaseBalancesPerMonth("10", transactions);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 50, balanceByTenth: 50 }]);
+  });
+
+  it("date boundary: a credit dated exactly on the 3rd/10th counts toward that cutoff (inclusive)", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1000, glLines: [[RENT_INCOME, "Rent Income", 1000]] }),
+      txn({ Id: 2, Date: "2026-06-03", TransactionType: "Payment", TotalAmount: -600, glLines: [[RENT_INCOME, "Rent Income", -600]] }),
+      txn({ Id: 3, Date: "2026-06-10", TransactionType: "Payment", TotalAmount: -400, glLines: [[RENT_INCOME, "Rent Income", -400]] }),
+    ];
+    const result = resolveLeaseBalancesPerMonth("10", transactions);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 400, balanceByTenth: 0 }]);
+  });
+
+  it("balance owed shrinks as later credits (dated after the 3rd but by the 10th) come in", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1000, glLines: [[RENT_INCOME, "Rent Income", 1000]] }),
+      txn({ Id: 2, Date: "2026-06-07", TransactionType: "Payment", TotalAmount: -1000, glLines: [[RENT_INCOME, "Rent Income", -1000]] }),
+    ];
+    const result = resolveLeaseBalancesPerMonth("10", transactions);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 1000, balanceByTenth: 0 }]);
+  });
+
+  // Real case flagged live by Jason: lease 2066996, 4513 Indies Court.
+  // Tenant's July rent ($1790, GL 3) was paid in full on 7/1, then that same
+  // payment bounced (NSF) — Buildium records the bounce as a "Reversed
+  // Payment" transaction whose Journal.Lines mirror the original payment
+  // (+1790 on GL 3, dated 7/6, confirmed live via fetchLeaseTransactions).
+  // Current real state as of this fix: no replacement payment has posted
+  // yet, so July's rent should read as still fully owed at BOTH cutoffs —
+  // the reversal correctly "un-pays" the 7/1 credit with no special-casing.
+  it("an NSF-bounced payment (Reversed Payment mirrors the original credit) leaves the charge owed again", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-07-01", TransactionType: "Charge", TotalAmount: 1790, glLines: [[RENT_INCOME, "Rent Income", 1790]] }),
+      txn({ Id: 2, Date: "2026-07-01", TransactionType: "Payment", TotalAmount: -1885.95, glLines: [[RENT_INCOME, "Rent Income", -1790]] }),
+      txn({ Id: 3, Date: "2026-07-06", TransactionType: "Reversed Payment", TotalAmount: 1885.95, glLines: [[RENT_INCOME, "Rent Income", 1790]] }),
+    ];
+    const result = resolveLeaseBalancesPerMonth("2066996", transactions);
+    expect(result).toEqual([{ leaseId: "2066996", month: "2026-07", balanceByThird: 1790, balanceByTenth: 1790 }]);
+  });
+
+  // Same real bounce, but with a hypothetical real replacement payment
+  // landing on 7/8 — matching Jason's own description: "what may not have
+  // shown up on the 3rd, may show up on the 6th." 7/8 is after the 3rd-day
+  // cutoff but still on/before the 10th-day cutoff, so this lease should be
+  // late for "by the 3rd" but caught up for "by the 10th" — proving the
+  // reversal-then-repayment sequence resolves to exactly that outcome with
+  // no special-casing.
+  it("a replacement payment landing between the two cutoffs is late for the 3rd but caught up by the 10th", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-07-01", TransactionType: "Charge", TotalAmount: 1790, glLines: [[RENT_INCOME, "Rent Income", 1790]] }),
+      txn({ Id: 2, Date: "2026-07-01", TransactionType: "Payment", TotalAmount: -1885.95, glLines: [[RENT_INCOME, "Rent Income", -1790]] }),
+      txn({ Id: 3, Date: "2026-07-06", TransactionType: "Reversed Payment", TotalAmount: 1885.95, glLines: [[RENT_INCOME, "Rent Income", 1790]] }),
+      txn({ Id: 4, Date: "2026-07-08", TransactionType: "Payment", TotalAmount: -1790, glLines: [[RENT_INCOME, "Rent Income", -1790]] }),
+    ];
+    const result = resolveLeaseBalancesPerMonth("2066996", transactions);
+    expect(result).toEqual([{ leaseId: "2066996", month: "2026-07", balanceByThird: 1790, balanceByTenth: 0 }]);
+  });
+
+  // Real case confirmed live by Jason 2026-07-07: lease 2819658, 3631 Chase
+  // Court, is an inherited lease genuinely not late until after the 5th —
+  // see LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID in rentCollection.ts.
+  describe("per-lease grace-period override (LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID)", () => {
+    it("uses the overridden cutoff day (5th) for a lease with a documented exception, instead of the standard 3rd", () => {
+      const transactions = [
+        txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1450, glLines: [[RENT_INCOME, "Rent Income", 1450]] }),
+        txn({ Id: 2, Date: "2026-06-05", TransactionType: "Payment", TotalAmount: -1450, glLines: [[RENT_INCOME, "Rent Income", -1450]] }),
+      ];
+      const result = resolveLeaseBalancesPerMonth("2819658", transactions);
+      // Paid on the 5th: a standard lease would still show this as owed as
+      // of the 3rd, but 2819658's real cutoff is the 5th, so this should
+      // already read as paid ($0) for balanceByThird.
+      expect(result).toEqual([{ leaseId: "2819658", month: "2026-06", balanceByThird: 0, balanceByTenth: 0 }]);
+    });
+
+    it("still shows a balance owed if paid AFTER the overridden 5th-day cutoff", () => {
+      const transactions = [
+        txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1450, glLines: [[RENT_INCOME, "Rent Income", 1450]] }),
+        txn({ Id: 2, Date: "2026-06-06", TransactionType: "Payment", TotalAmount: -1450, glLines: [[RENT_INCOME, "Rent Income", -1450]] }),
+      ];
+      const result = resolveLeaseBalancesPerMonth("2819658", transactions);
+      expect(result[0].balanceByThird).toBe(1450); // paid on the 6th — even the overridden 5th-day cutoff has passed
+      expect(result[0].balanceByTenth).toBe(0); // still well within the 10th, override or not
+    });
+
+    it("does not affect a lease with no override — standard leases keep the 3rd-day cutoff", () => {
+      const transactions = [
+        txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1450, glLines: [[RENT_INCOME, "Rent Income", 1450]] }),
+        txn({ Id: 2, Date: "2026-06-05", TransactionType: "Payment", TotalAmount: -1450, glLines: [[RENT_INCOME, "Rent Income", -1450]] }),
+      ];
+      const result = resolveLeaseBalancesPerMonth("9999999", transactions); // not in the override list
+      expect(result[0].balanceByThird).toBe(1450); // paid on the 5th, but this lease's real cutoff is still the 3rd
+    });
+
+    it("confirms 2819658 is the only lease currently in the override list", () => {
+      expect(Object.keys(LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID)).toEqual(["2819658"]);
+      expect(LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID["2819658"]).toBe(5);
+    });
   });
 });
 

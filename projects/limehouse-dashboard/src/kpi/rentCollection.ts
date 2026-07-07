@@ -146,20 +146,20 @@ export function buildDuePerMonth(
 }
 
 // `duePerMonth` is the set of (lease, month) pairs where rent was owed —
-// i.e. the denominator ("totalLeasesDue"). `payments` is the set of actual
-// payment transactions already filtered to TransactionType === "Payment"
-// and matched to the month they were applied to. Kept as two separate
+// i.e. the denominator ("totalLeasesDue"). `balances` is each lease's
+// remaining balance as of the 3rd/10th (see resolveLeaseBalancesPerMonth).
+// REBUILT 2026-07-07: a lease counts as paid-by-3rd/10th once its balance as
+// of that date is $200 or less (LATE_BALANCE_THRESHOLD), not only when it's
+// paid in full — see the constant's comment for why. Kept as two separate
 // plain-array inputs (rather than this function reaching into Buildium
 // client types directly) so it's testable with small fixed fixtures.
 export function summarizeMonthlyCollectionRates(
   duePerMonth: Array<{ leaseId: string; month: string }>,
-  payments: LeasePaymentForMonth[]
+  balances: LeaseBalanceForMonth[]
 ): MonthlyCollectionRate[] {
-  const paymentByLeaseMonth = new Map<string, string>(); // "leaseId|month" -> paymentDate
-  for (const p of payments) {
-    if (p.paymentDate) {
-      paymentByLeaseMonth.set(`${p.leaseId}|${p.month}`, p.paymentDate);
-    }
+  const balanceByLeaseMonth = new Map<string, LeaseBalanceForMonth>();
+  for (const b of balances) {
+    balanceByLeaseMonth.set(`${b.leaseId}|${b.month}`, b);
   }
 
   const byMonth = new Map<string, { total: number; byThird: number; byTenth: number }>();
@@ -168,12 +168,15 @@ export function summarizeMonthlyCollectionRates(
     const bucket = byMonth.get(due.month) ?? { total: 0, byThird: 0, byTenth: 0 };
     bucket.total += 1;
 
-    const paymentDate = paymentByLeaseMonth.get(`${due.leaseId}|${due.month}`);
-    if (paymentDate) {
-      const dayOfMonth = Number(paymentDate.slice(8, 10));
-      if (dayOfMonth <= 3) bucket.byThird += 1;
-      if (dayOfMonth <= 10) bucket.byTenth += 1;
-    }
+    // No balance record at all means Buildium never posted a charge for
+    // this lease this month — treated as fully unpaid (an unknown amount
+    // owed), same as the old "no matching payment record" behavior.
+    const balance = balanceByLeaseMonth.get(`${due.leaseId}|${due.month}`);
+    const balanceByThird = balance ? balance.balanceByThird : Infinity;
+    const balanceByTenth = balance ? balance.balanceByTenth : Infinity;
+
+    if (balanceByThird <= LATE_BALANCE_THRESHOLD) bucket.byThird += 1;
+    if (balanceByTenth <= LATE_BALANCE_THRESHOLD) bucket.byTenth += 1;
 
     byMonth.set(due.month, bucket);
   }
@@ -240,6 +243,40 @@ export function summarizeMonthlyCollectionRates(
 // against the vendor site shows a lease with a reversal behaving oddly.
 export const RENT_INCOME_GL_ACCOUNT_ID = 3;
 const ZERO_EPSILON = 0.005; // guards against floating-point residue after repeated subtraction, not a real-money threshold
+
+// ADDED 2026-07-07, per Jason directly: "Rent By 3rd/10th" isn't "did this
+// lease pay in full" — it's "is this lease still meaningfully behind."
+// Jason has been tracking this by hand since Aug 2025 (3rd) / Sep 2025
+// (10th) and only counts a lease as late once the amount still owed as of
+// the cutoff exceeds $200 — a tenant short $20-$75 isn't "late" for this
+// metric. Confirmed against his real spreadsheet: our old fully-paid-or-not
+// check was flagging 8-20 MORE leases as late than his real counts every
+// month, and the gap was almost entirely on the 3rd-day figure (the 10th-day
+// figure already lined up closely) — consistent with small balances
+// clearing between day 3 and day 10.
+export const LATE_BALANCE_THRESHOLD = 200;
+
+// ADDED 2026-07-07, per Jason directly: a handful of INHERITED leases (taken
+// over from a previous management company) run on their own late-fee grace
+// period instead of Limehouse's standard "late after the 3rd" policy — e.g.
+// this one is genuinely not late until after the 5th. Buildium doesn't
+// expose this per-lease policy through its API at all (confirmed twice: no
+// field on the lease record, nothing on the recurring-transactions endpoint,
+// and Buildium's own docs describe it as a lease-level UI setting only —
+// see the "Late fee policy report" for the closest thing to an export).
+// Inferring it from historical late-fee CHARGE dates in the ledger was
+// tried and REJECTED 2026-07-07: an NSF-bounced payment re-triggers a late
+// fee charge dated whenever the bounce was processed, which has nothing to
+// do with the lease's real grace period and produced false positives for
+// several genuinely-standard leases. Until Jason finds a reliable source
+// (checking each lease's Late Fee Policy tab, or that report, by hand),
+// this is a small manually-confirmed list — same pattern as
+// DOOR_COUNT_ANCHORS_BY_YEAR in churn.ts. Add to it as more are confirmed.
+export const LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID: Record<string, number> = {
+  "2819658": 5, // 3631 Chase Court — confirmed live by Jason 2026-07-07
+};
+
+const DEFAULT_LATE_CUTOFF_DAY = 3;
 
 interface RentChargeUnit {
   month: string; // "YYYY-MM"
@@ -315,6 +352,85 @@ export function resolveRentPaymentDates(transactions: BuildiumLeaseTransaction[]
   return result;
 }
 
+// ============================================================================
+// REBUILT 2026-07-07, per Jason directly: replaces resolveRentPaymentDates'
+// role in the live pipeline (that function's binary "ever fully resolved"
+// answer isn't what the $200-late-threshold rule needs — see
+// LATE_BALANCE_THRESHOLD above). This answers "how much is still owed for
+// THIS month's charge, counting only credits dated on or before asOfDate" —
+// the same FIFO oldest-charge-first application, just capped at a point in
+// time instead of run to completion.
+//
+// CONFIRMED against a real NSF bounce (lease 2066996, 4513 Indies Court,
+// flagged live by Jason): tenant's July rent (charge, GL 3, +1790) was paid
+// in full on 7/1 (credit -1790), then that same payment bounced — Buildium
+// records the bounce as a "Reversed Payment" transaction whose Journal.Lines
+// mirror the original payment (here: +1790 on GL 3, dated 7/6). Because
+// extractRentLedgerUnits classifies any POSITIVE Rent Income line as a
+// charge regardless of TransactionType, the reversal is automatically
+// folded back into July's total charge amount (1790 + 1790 = 3580) — the
+// original 7/1 credit is still only enough to cover half of that, so the
+// balance as of any cutoff on/after 7/6 correctly reads $1790 owed again, no
+// special-casing needed. If a real replacement payment posts later (say
+// 7/8), it becomes a second credit and the balance as of any cutoff on/after
+// 7/8 correctly drops back to $0 — this is what lets a bounced-then-repaid
+// tenant end up "late" for a cutoff between the bounce and the repayment,
+// and "not late" for a cutoff after, matching Jason's own description:
+// "what may not have shown up on the 3rd, may show up on the 6th."
+function outstandingBalanceAsOf(
+  charges: RentChargeUnit[],
+  credits: RentCreditUnit[],
+  targetMonth: string,
+  asOfDate: string
+): number {
+  const eligibleCredits = credits.filter((c) => c.date <= asOfDate);
+
+  let creditIndex = 0;
+  let creditRemaining = eligibleCredits.length > 0 ? eligibleCredits[0].amount : 0;
+
+  for (const charge of charges) {
+    let remainingToCover = charge.amount;
+
+    while (remainingToCover > ZERO_EPSILON && creditIndex < eligibleCredits.length) {
+      const take = Math.min(remainingToCover, creditRemaining);
+      remainingToCover -= take;
+      creditRemaining -= take;
+
+      if (creditRemaining <= ZERO_EPSILON) {
+        creditIndex++;
+        creditRemaining = creditIndex < eligibleCredits.length ? eligibleCredits[creditIndex].amount : 0;
+      }
+    }
+
+    if (charge.month === targetMonth) {
+      return Math.max(0, remainingToCover);
+    }
+  }
+
+  return 0; // targetMonth had no charge on this lease at all — nothing to owe
+}
+
+export interface LeaseBalanceForMonth {
+  leaseId: string;
+  month: string; // "YYYY-MM"
+  balanceByThird: number; // amount still owed as of this lease's "by 3rd" cutoff (day 3, unless overridden — see LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID), oldest charge first
+  balanceByTenth: number; // amount still owed as of the 10th — always day 10, the grace-period override only ever affects the earlier cutoff
+}
+
+export function resolveLeaseBalancesPerMonth(leaseId: string, transactions: BuildiumLeaseTransaction[]): LeaseBalanceForMonth[] {
+  const { charges, credits } = extractRentLedgerUnits(transactions);
+  const thirdCutoffDay = LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID[leaseId] ?? DEFAULT_LATE_CUTOFF_DAY;
+  const thirdCutoffDayStr = String(thirdCutoffDay).padStart(2, "0");
+  return charges.map((charge) => ({
+    leaseId,
+    month: charge.month,
+    balanceByThird: outstandingBalanceAsOf(charges, credits, charge.month, `${charge.month}-${thirdCutoffDayStr}`),
+    balanceByTenth: outstandingBalanceAsOf(charges, credits, charge.month, `${charge.month}-10`),
+  }));
+}
+
+// SUPERSEDED 2026-07-07 in the live pipeline by resolveLeaseBalancesPerMonth
+// above — kept for reference/tests, not called from syncRoutes.ts anymore.
 // Drop-in replacement for the old earliestPaymentPerMonth's call shape, so
 // syncRoutes.ts only needs a one-line swap. Only returns rows for months
 // that actually had a charge on this lease (a month with no charge at all

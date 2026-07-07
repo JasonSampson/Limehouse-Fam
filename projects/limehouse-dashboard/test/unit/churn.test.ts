@@ -57,7 +57,7 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
 describe("buildPropertyManagementStarts", () => {
   it("uses a single owner's start date directly", () => {
     const owners = [owner({ ManagementAgreementStartDate: "2026-05-01", PropertyIds: [100] })];
-    const result = buildPropertyManagementStarts(owners, new Set(["100"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["100"]), []);
     expect(result.properties).toEqual([{ propertyId: "100", earliestStartDate: "2026-05-01" }]);
     expect(result.flaggedDisagreements).toEqual([]);
   });
@@ -67,7 +67,7 @@ describe("buildPropertyManagementStarts", () => {
       owner({ Id: 1, ManagementAgreementStartDate: "2024-01-01", PropertyIds: [200] }),
       owner({ Id: 2, ManagementAgreementStartDate: "2020-01-01", PropertyIds: [200] }), // earlier, added second
     ];
-    const result = buildPropertyManagementStarts(owners, new Set(["200"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["200"]), []);
     expect(result.properties).toEqual([{ propertyId: "200", earliestStartDate: "2020-01-01" }]);
   });
 
@@ -76,7 +76,7 @@ describe("buildPropertyManagementStarts", () => {
       owner({ Id: 1, ManagementAgreementStartDate: "2021-11-23", PropertyIds: [300] }),
       owner({ Id: 2, ManagementAgreementStartDate: "2024-12-03", PropertyIds: [300] }), // ~1106 days later, matches a real case found live
     ];
-    const result = buildPropertyManagementStarts(owners, new Set(["300"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["300"]), []);
     expect(result.flaggedDisagreements).toEqual([
       { propertyId: "300", earliestStartDate: "2021-11-23", latestStartDate: "2024-12-03", diffDays: 1106 },
     ]);
@@ -87,7 +87,7 @@ describe("buildPropertyManagementStarts", () => {
       owner({ Id: 1, ManagementAgreementStartDate: "2026-01-01", PropertyIds: [400] }),
       owner({ Id: 2, ManagementAgreementStartDate: "2026-01-20", PropertyIds: [400] }), // 19 days apart
     ];
-    const result = buildPropertyManagementStarts(owners, new Set(["400"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["400"]), []);
     expect(result.flaggedDisagreements).toEqual([]);
   });
 
@@ -96,27 +96,53 @@ describe("buildPropertyManagementStarts", () => {
       owner({ Id: 1, ManagementAgreementStartDate: "2026-01-01", PropertyIds: [500] }),
       owner({ Id: 2, ManagementAgreementStartDate: null, PropertyIds: [500] }),
     ];
-    const result = buildPropertyManagementStarts(owners, new Set(["500"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["500"]), []);
     expect(result.properties).toEqual([{ propertyId: "500", earliestStartDate: "2026-01-01" }]);
     expect(result.flaggedDisagreements).toEqual([]);
   });
 
   it("excludes a property not in the active-property set", () => {
     const owners = [owner({ ManagementAgreementStartDate: "2026-01-01", PropertyIds: [999] })];
-    const result = buildPropertyManagementStarts(owners, new Set(["100"])); // 999 not active
+    const result = buildPropertyManagementStarts(owners, new Set(["100"]), []); // 999 not active
     expect(result.properties).toEqual([]);
   });
 
   it("handles an owner with no PropertyIds at all (null) without throwing", () => {
     const owners = [owner({ ManagementAgreementStartDate: "2026-01-01", PropertyIds: null })];
-    const result = buildPropertyManagementStarts(owners, new Set(["100"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["100"]), []);
     expect(result.properties).toEqual([]);
   });
 
   it("attributes one owner's start date to every property they co-own", () => {
     const owners = [owner({ ManagementAgreementStartDate: "2026-01-01", PropertyIds: [1, 2, 3] })];
-    const result = buildPropertyManagementStarts(owners, new Set(["1", "2", "3"]));
+    const result = buildPropertyManagementStarts(owners, new Set(["1", "2", "3"]), []);
     expect(result.properties.map((p) => p.propertyId).sort()).toEqual(["1", "2", "3"]);
+  });
+
+  it("uses the earliest LEASE date as a floor when it's earlier than the management agreement date (re-signed agreement masking a long-standing door)", () => {
+    // Matches the real confirmed case: 1309 Sierra Drive — agreement re-signed
+    // 2026-01-01 but the earliest real lease started 2023-01-10.
+    const owners = [owner({ ManagementAgreementStartDate: "2026-01-01", PropertyIds: [600] })];
+    const leases = [
+      lease({ PropertyId: 600, LeaseFromDate: "2023-01-10" }),
+      lease({ PropertyId: 600, LeaseFromDate: "2024-05-01" }),
+    ];
+    const result = buildPropertyManagementStarts(owners, new Set(["600"]), leases);
+    expect(result.properties).toEqual([{ propertyId: "600", earliestStartDate: "2023-01-10" }]);
+  });
+
+  it("keeps the management agreement date when it's earlier than any lease on file", () => {
+    const owners = [owner({ ManagementAgreementStartDate: "2020-01-01", PropertyIds: [700] })];
+    const leases = [lease({ PropertyId: 700, LeaseFromDate: "2021-06-01" })];
+    const result = buildPropertyManagementStarts(owners, new Set(["700"]), leases);
+    expect(result.properties).toEqual([{ propertyId: "700", earliestStartDate: "2020-01-01" }]);
+  });
+
+  it("ignores leases belonging to a different property when computing the floor", () => {
+    const owners = [owner({ ManagementAgreementStartDate: "2026-01-01", PropertyIds: [800] })];
+    const leases = [lease({ PropertyId: 999, LeaseFromDate: "2019-01-01" })]; // different property, must not leak in
+    const result = buildPropertyManagementStarts(owners, new Set(["800"]), leases);
+    expect(result.properties).toEqual([{ propertyId: "800", earliestStartDate: "2026-01-01" }]);
   });
 });
 
@@ -143,16 +169,30 @@ describe("summarizeDoorsAdded", () => {
     });
   });
 
-  it("does not count a start date in the future as a door added yet", () => {
+  it("does not count a start date in the future toward the trailing 30/60/90/365 windows", () => {
     const properties = [{ propertyId: "1", earliestStartDate: "2026-08-01" }];
     const result = summarizeDoorsAdded(properties, asOf);
-    expect(result).toEqual({
-      doorsAdded30Days: 0,
-      doorsAdded60Days: 0,
-      doorsAdded90Days: 0,
-      doorsAdded365Days: 0,
-      doorsAddedYTD: 0,
-    });
+    expect(result.doorsAdded30Days).toBe(0);
+    expect(result.doorsAdded60Days).toBe(0);
+    expect(result.doorsAdded90Days).toBe(0);
+    expect(result.doorsAdded365Days).toBe(0);
+  });
+
+  // CHANGED 2026-07-07: a near-future agreement date within the CURRENT
+  // calendar year still counts toward YTD, even though it hasn't happened
+  // yet relative to the trailing windows above. Matches the real case: 1342
+  // Little Bay Ave, agreement dated 2026-07-10, which was being silently
+  // dropped from Doors Added YTD before this fix.
+  it("DOES count a future start date toward YTD as long as it's within the current calendar year", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2026-08-01" }];
+    const result = summarizeDoorsAdded(properties, asOf);
+    expect(result.doorsAddedYTD).toBe(1);
+  });
+
+  it("does not count a future start date toward YTD when it falls in a later calendar year", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2027-01-01" }];
+    const result = summarizeDoorsAdded(properties, asOf);
+    expect(result.doorsAddedYTD).toBe(0);
   });
 
   it("counts a start date exactly on the boundary (30 days ago) as included", () => {

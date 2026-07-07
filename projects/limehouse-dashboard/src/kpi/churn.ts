@@ -74,9 +74,24 @@ export interface PropertyManagementStartResult {
 // throughout this dashboard) — an owner record can reference a property
 // that's since gone inactive, and that should not count as a "door" for
 // this tile.
+//
+// CONFIRMED LIVE 2026-07-07, per Jason: ManagementAgreementStartDate gets
+// RESET when an owner re-signs a management agreement — e.g. an LLC
+// changing to the owner's personal name on the deed (a real case: 481
+// Rudder Road, managed for years, re-signed 2026-03-26 purely for the name
+// change) — even though the door was never actually lost or re-added.
+// Confirmed against 4 real properties (1309 Sierra Drive, 900 Southmoor
+// Drive, 481 Rudder Road, 1328 Conrad Lane) that all had a 2026 agreement
+// date but a real first lease from 2022 or 2023 — years earlier. A lease
+// can't exist before the door was under management, so the property's
+// EARLIEST lease start date is a hard floor on the true start date; this
+// now takes whichever of (earliest agreement date, earliest lease date) is
+// EARLIER, per Jason's own suggested check ("look at when the first tenant
+// was placed").
 export function buildPropertyManagementStarts(
   owners: BuildiumOwner[],
-  activePropertyIds: Set<string>
+  activePropertyIds: Set<string>,
+  allLeases: BuildiumLease[]
 ): PropertyManagementStartResult {
   const startDatesByProperty = new Map<string, string[]>();
 
@@ -94,20 +109,33 @@ export function buildPropertyManagementStarts(
     }
   }
 
+  const earliestLeaseFromByProperty = new Map<string, string>();
+  for (const lease of allLeases) {
+    if (!lease.LeaseFromDate) continue;
+    const key = String(lease.PropertyId);
+    const existing = earliestLeaseFromByProperty.get(key);
+    if (!existing || lease.LeaseFromDate < existing) {
+      earliestLeaseFromByProperty.set(key, lease.LeaseFromDate);
+    }
+  }
+
   const properties: PropertyManagementStart[] = [];
   const flaggedDisagreements: OwnerStartDateDisagreement[] = [];
 
   for (const [propertyId, dates] of startDatesByProperty.entries()) {
     const sorted = [...dates].sort();
-    const earliestStartDate = sorted[0];
+    const earliestAgreementDate = sorted[0];
     const latestStartDate = sorted[sorted.length - 1];
+    const earliestLeaseDate = earliestLeaseFromByProperty.get(propertyId);
+    const earliestStartDate =
+      earliestLeaseDate && earliestLeaseDate < earliestAgreementDate ? earliestLeaseDate : earliestAgreementDate;
 
     properties.push({ propertyId, earliestStartDate });
 
-    if (dates.length >= 2 && earliestStartDate !== latestStartDate) {
-      const diffDays = daysBetween(earliestStartDate, latestStartDate);
+    if (dates.length >= 2 && earliestAgreementDate !== latestStartDate) {
+      const diffDays = daysBetween(earliestAgreementDate, latestStartDate);
       if (diffDays > DISAGREEMENT_FLAG_THRESHOLD_DAYS) {
-        flaggedDisagreements.push({ propertyId, earliestStartDate, latestStartDate, diffDays });
+        flaggedDisagreements.push({ propertyId, earliestStartDate: earliestAgreementDate, latestStartDate, diffDays });
       }
     }
   }
@@ -171,6 +199,11 @@ export interface DoorsAddedSummary {
   // the same year-to-date framing for consistency — "since Jan 1" rather
   // than a rolling window, even though this specific field is still an
   // ESTIMATE (no real anchor for the gross added/lost split, only the net).
+  // CONFIRMED LIVE 2026-07-07: unlike the 30/60/90/365-day windows, YTD
+  // does NOT exclude a near-future agreement date — a real case (1342
+  // Little Bay Avenue, signed with a 2026-07-10 start a few days out) is a
+  // door Jason already counts as added this year, not a data gap. Same
+  // "already scheduled counts" precedent as the Renewal Rate rebuild.
   doorsAddedYTD: number;
 }
 
@@ -181,15 +214,20 @@ export function summarizeDoorsAdded(properties: PropertyManagementStart[], asOfD
   let doorsAdded365Days = 0;
   let doorsAddedYTD = 0;
   const startOfYear = `${asOfDate.getUTCFullYear()}-01-01`;
+  const startOfNextYear = `${asOfDate.getUTCFullYear() + 1}-01-01`;
 
   for (const p of properties) {
+    // Bounded on both ends: a near-future date still within THIS calendar
+    // year counts (see 1342 Little Bay Ave above), but a date in a later
+    // year must not.
+    if (p.earliestStartDate >= startOfYear && p.earliestStartDate < startOfNextYear) doorsAddedYTD++;
+
     const daysAgo = daysBetween(p.earliestStartDate, toDateString(asOfDate));
     if (daysAgo < 0) continue; // a start date in the future is a data gap, not a door added yet
     if (daysAgo <= 30) doorsAdded30Days++;
     if (daysAgo <= 60) doorsAdded60Days++;
     if (daysAgo <= 90) doorsAdded90Days++;
     if (daysAgo <= 365) doorsAdded365Days++;
-    if (p.earliestStartDate >= startOfYear) doorsAddedYTD++;
   }
 
   return { doorsAdded30Days, doorsAdded60Days, doorsAdded90Days, doorsAdded365Days, doorsAddedYTD };

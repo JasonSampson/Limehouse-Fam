@@ -348,7 +348,7 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
     const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
     const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
 
-    const { properties, flaggedDisagreements } = buildPropertyManagementStarts(owners, activePropertyIds);
+    const { properties, flaggedDisagreements } = buildPropertyManagementStarts(owners, activePropertyIds, allLeases);
     const doorsAdded = summarizeDoorsAdded(properties, new Date());
 
     if (flaggedDisagreements.length > 0) {
@@ -748,7 +748,7 @@ dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, async (
     const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
     const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
 
-    const { properties } = buildPropertyManagementStarts(owners, activePropertyIds);
+    const { properties } = buildPropertyManagementStarts(owners, activePropertyIds, allLeases);
     const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
 
     const rows = withPropertyAddress(netDoorsRows(properties, lossEstimates, new Date()), propertyAddressById(allProperties));

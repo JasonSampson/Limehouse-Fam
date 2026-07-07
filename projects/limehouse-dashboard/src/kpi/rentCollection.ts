@@ -238,7 +238,7 @@ export function summarizeMonthlyCollectionRates(
 // against a real reversed-payment fixture (none of the confirmed test
 // leases have one) — worth a dedicated live check if a future comparison
 // against the vendor site shows a lease with a reversal behaving oddly.
-const RENT_INCOME_GL_ACCOUNT_ID = 3;
+export const RENT_INCOME_GL_ACCOUNT_ID = 3;
 const ZERO_EPSILON = 0.005; // guards against floating-point residue after repeated subtraction, not a real-money threshold
 
 interface RentChargeUnit {

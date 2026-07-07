@@ -6,6 +6,7 @@ import {
   upcomingRenewals,
   averageTenancyMonths,
   summarizeRenewalRate,
+  mostRecentRentEffectiveDate,
   summarizeDelinquencyRate,
 } from "../../src/kpi/occupancy.js";
 import type { BuildiumLease, BuildiumUnit, LeaseBalance } from "../../src/buildium/client.js";
@@ -225,47 +226,90 @@ describe("averageTenancyMonths", () => {
 // successor-lease matches found when searching for one the obvious way).
 // VERIFIED LIVE against the real account: renewed=166, moved out=69,
 // rate=70.6% vs. vendor's 70.8%.
+describe("mostRecentRentEffectiveDate", () => {
+  it("returns the FirstOccurrenceDate of the Rent (GL account 3) line", () => {
+    expect(
+      mostRecentRentEffectiveDate([
+        { firstOccurrenceDate: "2025-08-01", lineGlAccountIds: [3] },
+        { firstOccurrenceDate: "2025-08-01", lineGlAccountIds: [958019] }, // Resident Benefits Package fee, not rent
+      ])
+    ).toBe("2025-08-01");
+  });
+
+  it("picks the LATEST Rent entry when a lease has more than one on file (e.g. a future rent increase already scheduled)", () => {
+    expect(
+      mostRecentRentEffectiveDate([
+        { firstOccurrenceDate: "2025-08-01", lineGlAccountIds: [3] },
+        { firstOccurrenceDate: "2026-08-01", lineGlAccountIds: [3] },
+      ])
+    ).toBe("2026-08-01");
+  });
+
+  it("returns null when there is no Rent (GL account 3) line at all", () => {
+    expect(mostRecentRentEffectiveDate([{ firstOccurrenceDate: "2025-08-01", lineGlAccountIds: [55] }])).toBeNull();
+  });
+
+  it("returns null for an empty list", () => {
+    expect(mostRecentRentEffectiveDate([])).toBeNull();
+  });
+});
+
 describe("summarizeRenewalRate", () => {
   const asOf = new Date("2026-07-05T00:00:00Z");
 
-  it("counts a non-Past lease with a term longer than 365 days, updated within the trailing 12 months, as renewed", () => {
-    const leases = [
-      lease({
-        LeaseStatus: "Active",
-        LeaseFromDate: "2024-01-01",
-        LeaseToDate: "2027-01-01", // 3-year total term — clearly extended past a normal 1-year term
-        LastUpdatedDateTime: "2026-03-01T00:00:00Z",
-      }),
-    ];
-    const result = summarizeRenewalRate(leases, asOf);
+  it("counts a non-Past lease as renewed when its Rent effective date falls within the trailing 12 months", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active", LeaseFromDate: "2024-01-01" })];
+    const rentDates = new Map([["1", "2026-03-01"]]);
+    const result = summarizeRenewalRate(leases, rentDates, asOf);
     expect(result.renewedCount).toBe(1);
     expect(result.movedOutCount).toBe(0);
   });
 
-  it("does NOT count a plain never-renewed 1-year lease as renewed, even if recently updated", () => {
-    const leases = [
-      lease({
-        LeaseStatus: "Active",
-        LeaseFromDate: "2026-01-01",
-        LeaseToDate: "2026-12-31", // 364 days — a normal single term, never extended
-        LastUpdatedDateTime: "2026-06-01T00:00:00Z",
-      }),
-    ];
-    const result = summarizeRenewalRate(leases, asOf);
+  it("does not count a non-Past lease as renewed if it has no Rent effective date on file", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active" })];
+    const result = summarizeRenewalRate(leases, new Map(), asOf);
     expect(result.renewedCount).toBe(0);
   });
 
-  it("does not count a non-Past lease as renewed if its LastUpdatedDateTime is outside the trailing 12 months", () => {
-    const leases = [
-      lease({
-        LeaseStatus: "Active",
-        LeaseFromDate: "2020-01-01",
-        LeaseToDate: "2027-01-01",
-        LastUpdatedDateTime: "2024-01-01T00:00:00Z", // stale — not a recent renewal
-      }),
-    ];
-    const result = summarizeRenewalRate(leases, asOf);
+  // CONFIRMED LIVE 2026-07-07: without this guard, a brand-new lease's very
+  // first rent charge (dated to move-in, not a renewal) was counted as
+  // renewed too — inflated renewedCount to 173 across the real portfolio
+  // vs. the vendor's real 138.
+  it("does not count a lease as renewed when its Rent effective date is just the original move-in charge, not a later change", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active", LeaseFromDate: "2026-03-01" })];
+    const rentDates = new Map([["1", "2026-03-01"]]); // same date as LeaseFromDate — day one, not a renewal
+    const result = summarizeRenewalRate(leases, rentDates, asOf);
     expect(result.renewedCount).toBe(0);
+  });
+
+  // CONFIRMED LIVE 2026-07-07: a mid-month move-in's recurring Rent entry
+  // is often dated to the start of the FOLLOWING month (the partial first
+  // month gets billed as a one-time proration instead) — a ~15-day gap
+  // that's still just day-one setup, not a renewal 6-12 months later.
+  it("does not count a lease as renewed when its Rent effective date is only a couple weeks after move-in (proration, not a renewal)", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active", LeaseFromDate: "2026-08-17" })];
+    const rentDates = new Map([["1", "2026-09-01"]]); // 15 days later — first full month, not a renewal
+    const result = summarizeRenewalRate(leases, rentDates, asOf);
+    expect(result.renewedCount).toBe(0);
+  });
+
+  it("does not count a non-Past lease as renewed if its Rent effective date is more than 12 months stale", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active", LeaseFromDate: "2020-01-01" })];
+    const rentDates = new Map([["1", "2024-01-01"]]); // stale — not a recent renewal
+    const result = summarizeRenewalRate(leases, rentDates, asOf);
+    expect(result.renewedCount).toBe(0);
+  });
+
+  // CONFIRMED LIVE 2026-07-07: the vendor counts an already-scheduled
+  // future rent increase as this year's renewal (properties routinely have
+  // next year's rent entered 2-3 months ahead of its effective date). All
+  // 35 real leases missing from our list vs. the vendor's real 138 had a
+  // future-dated rent effective date we were wrongly excluding.
+  it("counts a non-Past lease as renewed even when its Rent effective date is in the future (already scheduled ahead of time)", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active", LeaseFromDate: "2024-01-01" })];
+    const rentDates = new Map([["1", "2026-09-01"]]); // after asOf (2026-07-05) — scheduled ahead
+    const result = summarizeRenewalRate(leases, rentDates, asOf);
+    expect(result.renewedCount).toBe(1);
   });
 
   it("counts a Past lease with LeaseToDate in the trailing 12 months and a full term as moved out", () => {
@@ -276,7 +320,7 @@ describe("summarizeRenewalRate", () => {
         LeaseToDate: "2026-01-01", // 365 days, a completed normal term
       }),
     ];
-    const result = summarizeRenewalRate(leases, asOf);
+    const result = summarizeRenewalRate(leases, new Map(), asOf);
     expect(result.movedOutCount).toBe(1);
     expect(result.renewedCount).toBe(0);
   });
@@ -289,7 +333,7 @@ describe("summarizeRenewalRate", () => {
         LeaseToDate: "2026-03-01", // ~59 days — well under the 300-day floor, not a real renew-or-leave decision point
       }),
     ];
-    const result = summarizeRenewalRate(leases, asOf);
+    const result = summarizeRenewalRate(leases, new Map(), asOf);
     expect(result.movedOutCount).toBe(0);
   });
 
@@ -301,32 +345,20 @@ describe("summarizeRenewalRate", () => {
         LeaseToDate: "2024-01-01", // years ago, outside the window
       }),
     ];
-    const result = summarizeRenewalRate(leases, asOf);
+    const result = summarizeRenewalRate(leases, new Map(), asOf);
     expect(result.movedOutCount).toBe(0);
   });
 
-  it("excludes a lease with no LeaseFromDate or LeaseToDate (month-to-month / data gap)", () => {
-    const leases = [lease({ LeaseStatus: "Active", LeaseFromDate: null, LeaseToDate: null })];
-    const result = summarizeRenewalRate(leases, asOf);
+  it("excludes a Past lease with no LeaseFromDate or LeaseToDate (data gap)", () => {
+    const leases = [lease({ LeaseStatus: "Past", LeaseFromDate: null, LeaseToDate: null })];
+    const result = summarizeRenewalRate(leases, new Map(), asOf);
     expect(result).toEqual({ renewedCount: 0, movedOutCount: 0, renewalRatePercent: null });
   });
 
   it("computes the rate as renewed / (renewed + moved out)", () => {
     const leases = [
-      lease({
-        Id: 1,
-        LeaseStatus: "Active",
-        LeaseFromDate: "2024-01-01",
-        LeaseToDate: "2027-01-01",
-        LastUpdatedDateTime: "2026-03-01T00:00:00Z",
-      }), // renewed
-      lease({
-        Id: 2,
-        LeaseStatus: "Active",
-        LeaseFromDate: "2024-06-01",
-        LeaseToDate: "2027-06-01",
-        LastUpdatedDateTime: "2026-05-01T00:00:00Z",
-      }), // renewed
+      lease({ Id: 1, LeaseStatus: "Active", LeaseFromDate: "2024-01-01" }), // renewed
+      lease({ Id: 2, LeaseStatus: "Active", LeaseFromDate: "2024-01-01" }), // renewed
       lease({
         Id: 3,
         LeaseStatus: "Past",
@@ -334,12 +366,16 @@ describe("summarizeRenewalRate", () => {
         LeaseToDate: "2026-01-01",
       }), // moved out
     ];
-    const result = summarizeRenewalRate(leases, asOf);
+    const rentDates = new Map([
+      ["1", "2026-03-01"],
+      ["2", "2026-05-01"],
+    ]);
+    const result = summarizeRenewalRate(leases, rentDates, asOf);
     expect(result).toEqual({ renewedCount: 2, movedOutCount: 1, renewalRatePercent: 66.7 });
   });
 
   it("returns null renewalRatePercent (not 0 or NaN) when there is no trailing-12mo population at all", () => {
-    expect(summarizeRenewalRate([], asOf)).toEqual({ renewedCount: 0, movedOutCount: 0, renewalRatePercent: null });
+    expect(summarizeRenewalRate([], new Map(), asOf)).toEqual({ renewedCount: 0, movedOutCount: 0, renewalRatePercent: null });
   });
 });
 

@@ -115,6 +115,45 @@ export function buildPropertyManagementStarts(
   return { properties, flaggedDisagreements };
 }
 
+// ============================================================================
+// Net Doors — EXACT, year-to-date (added 2026-07-07 per Jason's real data).
+// CONFIRMED LIVE: the vendor's own "Net Doors" tile is labeled "trailing 12
+// months" but its own drill-down admits it's really a daily-snapshot diff
+// that only started ~2026-05-18 (its own "50 day(s) of coverage" note) —
+// it isn't a true 12-month figure either, so matching it exactly isn't a
+// meaningful target. Jason has his own real door counts (units under
+// management) as of January 1st each year, which lets Net Doors be an
+// EXACT calendar-year-to-date figure instead of an estimate: current total
+// doors minus the door count at the start of this year.
+const DOOR_COUNT_ANCHORS_BY_YEAR: Record<number, number> = {
+  2023: 137,
+  2024: 169,
+  2025: 222,
+  2026: 218,
+};
+
+export interface NetDoorsYTD {
+  netDoors: number;
+  sinceDate: string; // "YYYY-01-01"
+  doorsAtStartOfYear: number;
+  currentTotalDoors: number;
+}
+
+// Returns null when there's no known anchor for asOfDate's year (e.g. a
+// future year Jason hasn't given us a starting count for yet) — an honest
+// "no data" rather than guessing forward from the last known anchor.
+export function summarizeNetDoorsYTD(currentTotalDoors: number, asOfDate: Date): NetDoorsYTD | null {
+  const year = asOfDate.getUTCFullYear();
+  const doorsAtStartOfYear = DOOR_COUNT_ANCHORS_BY_YEAR[year];
+  if (doorsAtStartOfYear === undefined) return null;
+  return {
+    netDoors: currentTotalDoors - doorsAtStartOfYear,
+    sinceDate: `${year}-01-01`,
+    doorsAtStartOfYear,
+    currentTotalDoors,
+  };
+}
+
 export interface DoorsAddedSummary {
   doorsAdded30Days: number;
   doorsAdded60Days: number;
@@ -127,6 +166,12 @@ export interface DoorsAddedSummary {
   // two different time spans mixed into one number. This field gives
   // Doors Added its own matching 365-day window.
   doorsAdded365Days: number;
+  // ADDED 2026-07-07: Net Doors (Top of Mind) is now an EXACT year-to-date
+  // figure (see summarizeNetDoorsYTD above), so Doors Added/Lost switch to
+  // the same year-to-date framing for consistency — "since Jan 1" rather
+  // than a rolling window, even though this specific field is still an
+  // ESTIMATE (no real anchor for the gross added/lost split, only the net).
+  doorsAddedYTD: number;
 }
 
 export function summarizeDoorsAdded(properties: PropertyManagementStart[], asOfDate: Date): DoorsAddedSummary {
@@ -134,6 +179,8 @@ export function summarizeDoorsAdded(properties: PropertyManagementStart[], asOfD
   let doorsAdded60Days = 0;
   let doorsAdded90Days = 0;
   let doorsAdded365Days = 0;
+  let doorsAddedYTD = 0;
+  const startOfYear = `${asOfDate.getUTCFullYear()}-01-01`;
 
   for (const p of properties) {
     const daysAgo = daysBetween(p.earliestStartDate, toDateString(asOfDate));
@@ -142,9 +189,10 @@ export function summarizeDoorsAdded(properties: PropertyManagementStart[], asOfD
     if (daysAgo <= 60) doorsAdded60Days++;
     if (daysAgo <= 90) doorsAdded90Days++;
     if (daysAgo <= 365) doorsAdded365Days++;
+    if (p.earliestStartDate >= startOfYear) doorsAddedYTD++;
   }
 
-  return { doorsAdded30Days, doorsAdded60Days, doorsAdded90Days, doorsAdded365Days };
+  return { doorsAdded30Days, doorsAdded60Days, doorsAdded90Days, doorsAdded365Days, doorsAddedYTD };
 }
 
 // ============================================================================
@@ -196,6 +244,9 @@ export interface DoorsLostEstimateSummary {
   doorsLost31Days: number;
   doorsLost12Months: number;
   propertiesUndercounted: number; // inactive properties with no lease record to estimate from
+  // ADDED 2026-07-07 — see doorsAddedYTD above for why: same "since Jan 1"
+  // framing to match the now-exact Net Doors figure.
+  doorsLostYTD: number;
 }
 
 export function summarizeDoorsLostEstimate(
@@ -205,18 +256,22 @@ export function summarizeDoorsLostEstimate(
 ): DoorsLostEstimateSummary {
   let doorsLost31Days = 0;
   let doorsLost12Months = 0;
+  let doorsLostYTD = 0;
+  const startOfYear = `${asOfDate.getUTCFullYear()}-01-01`;
 
   for (const e of estimates) {
     const daysAgo = daysBetween(e.estimatedLossDate, toDateString(asOfDate));
     if (daysAgo < 0) continue; // an estimated loss date in the future is a data gap, not a loss yet
     if (daysAgo <= 31) doorsLost31Days++;
     if (daysAgo <= 365) doorsLost12Months++;
+    if (e.estimatedLossDate >= startOfYear) doorsLostYTD++;
   }
 
   return {
     doorsLost31Days,
     doorsLost12Months,
     propertiesUndercounted: totalInactiveProperties - estimates.length,
+    doorsLostYTD,
   };
 }
 

@@ -191,8 +191,17 @@ function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, 
             : couldNotLoadTile({ id: "occupancy", label: "Occupancy", sourceTags: ["BD"] })
         }
         ${
-          renewalRate
+          !renewalRate
+            ? couldNotLoadTile({ id: "renewal-rate", label: "Renewal Rate", sourceTags: ["BD"] })
+            : !renewalRate.synced
             ? tileHtml({
+                id: "renewal-rate",
+                label: "Renewal Rate",
+                sourceTags: ["BD"],
+                notConnected: true,
+                notConnectedReason: "Not connected yet",
+              })
+            : tileHtml({
                 id: "renewal-rate",
                 label: "Renewal Rate",
                 value: renewalRate.renewalRatePercent === null ? "—" : formatPercent(renewalRate.renewalRatePercent),
@@ -201,7 +210,6 @@ function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, 
                 live: true,
                 clickable: true,
               })
-            : couldNotLoadTile({ id: "renewal-rate", label: "Renewal Rate", sourceTags: ["BD"] })
         }
         ${renderNetDoorsTile(doors)}
       </div>
@@ -211,27 +219,28 @@ function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, 
 
 // Net Doors — CORRECTED 2026-07-04, window mismatch FIXED 2026-07-05: this
 // used to compare a 90-day "added" count against a 12-month "lost" count —
-// two different time spans subtracted into one number isn't meaningful.
-// Matches the vendor's "Doors Added vs Lost — 12 Months" metric now: BOTH
-// sides use the same trailing-12-month window (doorsAdded365Days is new,
-// added to DoorsAddedSummary in src/kpi/churn.ts specifically for this).
-// Matches the same window the Net Doors drill-down
-// (/api/dashboard/net-doors/properties) already uses.
+// REBUILT 2026-07-07: Net Doors is now EXACT, not an estimate-vs-estimate
+// subtraction — see summarizeNetDoorsYTD in src/kpi/churn.ts. Jason has his
+// own real door counts (units under management) as of Jan 1 each year;
+// Net Doors is simply today's real total minus that starting count. The
+// vendor's own equivalent tile is labeled "trailing 12 months" but its own
+// drill-down admits it's really a ~50-day daily-snapshot diff (its tool
+// only started snapshotting 2026-05-18), so it was never a fair target to
+// match exactly — this is a genuinely more accurate number instead.
 function renderNetDoorsTile(doors) {
   if (!doors) {
     return couldNotLoadTile({ id: "net-doors", label: "Net Doors", sourceTags: ["BD"] });
   }
-  const added = doors.doorsAdded?.doorsAdded365Days;
-  const lost = doors.doorsLostEstimated?.doorsLost12Months;
-  if (typeof added !== "number" || typeof lost !== "number") {
+  const ytd = doors.netDoorsYTD;
+  if (!ytd) {
     return tileHtml({ id: "net-doors", label: "Net Doors", sourceTags: ["BD"], notConnected: true });
   }
-  const net = added - lost;
+  const net = ytd.netDoors;
   return tileHtml({
     id: "net-doors",
     label: "Net Doors",
     value: `${net >= 0 ? "+" : ""}${net}`,
-    sub: `+${added} added (12mo) · −${lost} lost (12mo, est.)`,
+    sub: `${formatNumber(ytd.doorsAtStartOfYear)} on ${ytd.sinceDate} → ${formatNumber(ytd.currentTotalDoors)} today`,
     sourceTags: ["BD"],
     live: true,
     clickable: true,
@@ -521,8 +530,8 @@ function doorsTile({ doors, id, label }) {
       id,
       label,
       sourceTags: ["BD"],
-      value: doors.doorsAdded.doorsAdded30Days,
-      sub: `${doors.doorsAdded.doorsAdded60Days} in 60 days · ${doors.doorsAdded.doorsAdded90Days} in 90 days`,
+      value: doors.doorsAdded.doorsAddedYTD,
+      sub: `Year to date · ${doors.doorsAdded.doorsAdded30Days} in the last 30 days`,
       pending: "Reflects Buildium's records, which may lag a few days behind a real signing",
     });
   }
@@ -534,8 +543,8 @@ function doorsTile({ doors, id, label }) {
       id,
       label,
       sourceTags: ["BD"],
-      value: doors.doorsLostEstimated.doorsLost31Days,
-      sub: `${doors.doorsLostEstimated.doorsLost12Months} in the last 12 months`,
+      value: doors.doorsLostEstimated.doorsLostYTD,
+      sub: `Year to date (est.) · ${doors.doorsLostEstimated.doorsLost31Days} in the last 31 days`,
       pending: "Estimated from the last known lease date, not an exact deactivation date",
     });
   }
@@ -1053,9 +1062,10 @@ async function handleTileClick(tileId) {
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Outcome", render: (r) => (r.outcome === "renewed" ? "Renewed" : "Moved Out") },
-        { label: "Lease End", key: "leaseToDate" },
+        { label: "From", key: "fromDate" },
+        { label: "To", key: "toDate" },
       ],
-      emptyText: "No renewal/move-out activity in the trailing 12 months.",
+      emptyText: "No renewal/move-out activity in the trailing 12 months — trigger a Renewal Rate sync first if this looks wrong.",
     });
     return;
   }
@@ -1065,11 +1075,11 @@ async function handleTileClick(tileId) {
   if (tileId === "net-doors") {
     await simpleDrillDown({
       tileId,
-      title: "Net Doors — Added (12mo) vs Lost (12mo, estimated)",
+      title: "Net Doors — individual door changes are estimated; the tile total above is exact",
       url: "/api/dashboard/net-doors/properties",
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
-        { label: "Type", render: (r) => (r.type === "added" ? "Added" : "Lost (estimated)") },
+        { label: "Type", render: (r) => (r.type === "added" ? "Added (est.)" : "Lost (est.)") },
         { label: "Date", key: "date" },
       ],
       emptyText: "No door changes in the tracked windows.",

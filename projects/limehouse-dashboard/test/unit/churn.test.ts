@@ -4,6 +4,7 @@ import {
   summarizeDoorsAdded,
   estimatePropertyLossDates,
   summarizeDoorsLostEstimate,
+  summarizeNetDoorsYTD,
   netDoorsRows,
 } from "../../src/kpi/churn.js";
 import type { BuildiumOwner, BuildiumProperty, BuildiumLease } from "../../src/buildium/client.js";
@@ -138,13 +139,20 @@ describe("summarizeDoorsAdded", () => {
       doorsAdded60Days: 2,
       doorsAdded90Days: 3,
       doorsAdded365Days: 4,
+      doorsAddedYTD: 4, // properties 1-4 all have earliestStartDate >= 2026-01-01; property 5 (2024) doesn't
     });
   });
 
   it("does not count a start date in the future as a door added yet", () => {
     const properties = [{ propertyId: "1", earliestStartDate: "2026-08-01" }];
     const result = summarizeDoorsAdded(properties, asOf);
-    expect(result).toEqual({ doorsAdded30Days: 0, doorsAdded60Days: 0, doorsAdded90Days: 0, doorsAdded365Days: 0 });
+    expect(result).toEqual({
+      doorsAdded30Days: 0,
+      doorsAdded60Days: 0,
+      doorsAdded90Days: 0,
+      doorsAdded365Days: 0,
+      doorsAddedYTD: 0,
+    });
   });
 
   it("counts a start date exactly on the boundary (30 days ago) as included", () => {
@@ -159,7 +167,20 @@ describe("summarizeDoorsAdded", () => {
       doorsAdded60Days: 0,
       doorsAdded90Days: 0,
       doorsAdded365Days: 0,
+      doorsAddedYTD: 0,
     });
+  });
+
+  it("counts a start date exactly on Jan 1 of the current year as YTD (boundary inclusive)", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2026-01-01" }];
+    expect(summarizeDoorsAdded(properties, asOf).doorsAddedYTD).toBe(1);
+  });
+
+  it("excludes a start date from last calendar year from YTD, even if within the trailing 365 days", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2025-12-15" }]; // within 365 days of asOf, but last calendar year
+    const result = summarizeDoorsAdded(properties, asOf);
+    expect(result.doorsAdded365Days).toBe(1);
+    expect(result.doorsAddedYTD).toBe(0);
   });
 });
 
@@ -241,7 +262,41 @@ describe("summarizeDoorsLostEstimate", () => {
 
   it("returns all zeros and full undercount for no estimates at all", () => {
     const result = summarizeDoorsLostEstimate([], 3, asOf);
-    expect(result).toEqual({ doorsLost31Days: 0, doorsLost12Months: 0, propertiesUndercounted: 3 });
+    expect(result).toEqual({ doorsLost31Days: 0, doorsLost12Months: 0, propertiesUndercounted: 3, doorsLostYTD: 0 });
+  });
+
+  it("counts an estimated loss date this calendar year toward doorsLostYTD, excluding one from last year even if within the trailing 12 months", () => {
+    const estimates = [
+      { propertyId: "1", estimatedLossDate: "2026-02-01" }, // this year
+      { propertyId: "2", estimatedLossDate: "2025-12-01" }, // last year, within 365 days of asOf
+    ];
+    const result = summarizeDoorsLostEstimate(estimates, 2, asOf);
+    expect(result.doorsLostYTD).toBe(1);
+  });
+});
+
+// ADDED 2026-07-07: Net Doors as an EXACT year-to-date figure, using
+// Jason's own real door counts (units under management) as of Jan 1 each
+// year — see the file header comment on DOOR_COUNT_ANCHORS_BY_YEAR for why
+// (the vendor's own "trailing 12 months" Net Doors tile is really only a
+// ~50-day daily-snapshot diff per its own drill-down note, so it isn't a
+// meaningful target to reproduce).
+describe("summarizeNetDoorsYTD", () => {
+  it("computes net doors as current total minus the door count at the start of this year", () => {
+    const asOf = new Date("2026-07-07T00:00:00Z");
+    const result = summarizeNetDoorsYTD(234, asOf); // real anchor for 2026 is 218
+    expect(result).toEqual({ netDoors: 16, sinceDate: "2026-01-01", doorsAtStartOfYear: 218, currentTotalDoors: 234 });
+  });
+
+  it("returns a negative netDoors when the current total is below the year's starting count", () => {
+    const asOf = new Date("2025-06-01T00:00:00Z");
+    const result = summarizeNetDoorsYTD(200, asOf); // real anchor for 2025 is 222
+    expect(result?.netDoors).toBe(-22);
+  });
+
+  it("returns null when there's no known anchor for asOfDate's year", () => {
+    const asOf = new Date("2030-01-01T00:00:00Z");
+    expect(summarizeNetDoorsYTD(300, asOf)).toBeNull();
   });
 });
 

@@ -5,7 +5,9 @@ import {
   fetchProperties,
   fetchLeasesByStatus,
   fetchActiveLeases,
+  fetchAllLeases,
   fetchLeaseTransactions,
+  fetchLeaseRecurringTransactions,
   fetchActiveManagedUnits,
   fetchVendors,
   fetchBankAccounts,
@@ -29,7 +31,8 @@ import { resolvePeriod } from "../kpi/period.js";
 import { logError, logInfo } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
-import { summarizeOccupancy, summarizeDelinquencyRate } from "../kpi/occupancy.js";
+import { summarizeOccupancy, summarizeDelinquencyRate, summarizeRenewalRate, mostRecentRentEffectiveDate } from "../kpi/occupancy.js";
+import { renewalRateRows } from "../kpi/leaseRows.js";
 import { summarizeDaysOnMarket, summarizeShowingCompletionRate, fetchUnits } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
 import {
@@ -242,6 +245,63 @@ syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req
     res
       .status(502)
       .json({ error: "Security deposit withheld sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
+// Renewal Rate (Top of Mind tile + its drill-down). REBUILT 2026-07-07: per
+// Jason, the real "renewed" signal lives on each lease's Rent recurring-
+// charge schedule (Buildium UI: Tenants > Financials > Rent), not on the
+// lease record's own fields — see occupancy.ts's summarizeRenewalRate
+// comment for the full derivation and live verification. Checking this
+// means one /recurringtransactions call per non-Past lease (~200+), so —
+// same reasoning as security-deposit-withheld and rent-collection above —
+// this cannot run live on every Dashboard page load; it runs here as an
+// on-demand sync and caches {summary, rows} together so the drill-down and
+// the tile always agree. Sequential, not Promise.all, for the same
+// rate-limit reasons as those other syncs.
+syncRoutes.post("/api/sync/renewal-rate", requireLogin, async (_req, res) => {
+  const syncLogId = await startSyncRun("buildium", "renewal_rate_cache_refresh");
+  try {
+    const allLeases = await fetchAllLeases();
+    // CONFIRMED LIVE 2026-07-07: a lease that renewed (rent-schedule
+    // change) and has SINCE ended is still a real renewal — checking the
+    // rent signal only for non-Past leases missed these. So this also
+    // covers recently-ended Past leases (LeaseToDate within the last ~400
+    // days — a safe superset of the 365-day renewal window plus the
+    // 300-day moved-out term floor), not just Active/Future ones.
+    const recentCutoff = new Date();
+    recentCutoff.setUTCDate(recentCutoff.getUTCDate() - 400);
+    const recentCutoffStr = recentCutoff.toISOString().slice(0, 10);
+    const leasesToCheck = allLeases.filter(
+      (l) => l.LeaseStatus !== "Past" || (l.LeaseToDate !== null && l.LeaseToDate >= recentCutoffStr)
+    );
+
+    const rentEffectiveDateByLeaseId = new Map<string, string>();
+    for (const lease of leasesToCheck) {
+      const recurring = await fetchLeaseRecurringTransactions(String(lease.Id));
+      const rentDate = mostRecentRentEffectiveDate(
+        recurring.map((r) => ({ firstOccurrenceDate: r.FirstOccurrenceDate, lineGlAccountIds: r.Lines.map((l) => l.GLAccountId) }))
+      );
+      if (rentDate) rentEffectiveDateByLeaseId.set(String(lease.Id), rentDate);
+    }
+
+    const now = new Date();
+    const summary = summarizeRenewalRate(allLeases, rentEffectiveDateByLeaseId, now);
+    const rows = renewalRateRows(allLeases, rentEffectiveDateByLeaseId, now);
+
+    await upsertCachedMetric("renewal_rate", "portfolio", "buildium", { summary, rows });
+
+    await completeSyncRun(syncLogId, leasesToCheck.length);
+    logInfo("Renewal rate sync completed", { syncLogId, ...summary });
+    res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("renewal_rate", "portfolio", "buildium", message);
+    await failSyncRun(syncLogId, message);
+    logError("Renewal rate sync failed", { syncLogId, error: message });
+    res
+      .status(502)
+      .json({ error: "Renewal rate sync failed. Last known-good data is still being served.", detail: message });
   }
 });
 

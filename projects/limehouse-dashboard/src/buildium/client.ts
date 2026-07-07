@@ -199,8 +199,20 @@ export async function fetchActiveLeases(): Promise<BuildiumLease[]> {
   return leases.filter((l) => l.CurrentTenants && l.CurrentTenants.length > 0);
 }
 
+// CONFIRMED LIVE 2026-07-07: the same ghost-record problem documented above
+// for fetchActiveLeases also affects Future-status leases (10 found with
+// CurrentTenants empty, same stale-data pattern) — Past leases are exempt
+// since a real, legitimate Past lease is SUPPOSED to have zero current
+// tenants (the tenant moved out). Verified against the vendor's real
+// current-lease count: 250 raw non-Past leases minus 47 zero-tenant ghosts
+// (37 Active + 10 Future) lands on exactly 203, matching the vendor's own
+// "234 units · 203 leases" header and its full 199 fixed-term + 4
+// month-to-month lease lists lease-for-lease (only 1 of 203 differed, and
+// that was an address-formatting quirk on the same lease, not a real
+// mismatch). Every renewal-rate/moved-out miscount traced back to this.
 export async function fetchAllLeases(): Promise<BuildiumLease[]> {
-  return fetchLeasesByStatus(["Active", "Past", "Future"]);
+  const leases = await fetchLeasesByStatus(["Active", "Past", "Future"]);
+  return leases.filter((l) => l.LeaseStatus === "Past" || (l.CurrentTenants && l.CurrentTenants.length > 0));
 }
 
 // ============================================================================
@@ -751,6 +763,42 @@ export async function fetchLeaseTransactions(buildiumLeaseId: string): Promise<B
   return buildiumGetAllPages<BuildiumLeaseTransaction>(
     `/leases/${encodeURIComponent(buildiumLeaseId)}/transactions`,
     z.array(buildiumLeaseTransactionSchema)
+  );
+}
+
+// CONFIRMED LIVE 2026-07-07, per Jason: the vendor's Renewal Rate tile is
+// keyed off each lease's Rent recurring-charge schedule (visible in
+// Buildium's own UI under Tenants > Financials > Rent, or a property's
+// Recurring Transactions), NOT LeaseFromDate/LastUpdatedDateTime — verified
+// against 2 real leases where the vendor's shown "renewed" date matched
+// this endpoint's Rent-line FirstOccurrenceDate exactly (one lease had TWO
+// Rent entries, both IsExpired:false — the vendor used the one with the
+// LATEST FirstOccurrenceDate, i.e. the current/most-recently-scheduled rent
+// period, not the oldest). GLAccountId 3 = Rent Income, same constant
+// rentCollection.ts already uses to isolate real rent charges from fees.
+const buildiumRecurringTransactionLineSchema = z.object({
+  GLAccountId: z.number(),
+  Amount: z.number(),
+});
+
+const buildiumLeaseRecurringTransactionSchema = z.object({
+  Id: z.number(),
+  TransactionType: z.string(),
+  IsExpired: z.boolean(),
+  Lines: z.array(buildiumRecurringTransactionLineSchema),
+  Amount: z.number(),
+  Memo: z.string().nullable(),
+  FirstOccurrenceDate: z.string(),
+  NextOccurrenceDate: z.string().nullable(),
+  Frequency: z.string(),
+});
+
+export type BuildiumLeaseRecurringTransaction = z.infer<typeof buildiumLeaseRecurringTransactionSchema>;
+
+export async function fetchLeaseRecurringTransactions(buildiumLeaseId: string): Promise<BuildiumLeaseRecurringTransaction[]> {
+  return buildiumGetAllPages<BuildiumLeaseRecurringTransaction>(
+    `/leases/${encodeURIComponent(buildiumLeaseId)}/recurringtransactions`,
+    z.array(buildiumLeaseRecurringTransactionSchema)
   );
 }
 

@@ -1,4 +1,5 @@
 import type { BuildiumLease, BuildiumUnit, LeaseBalance } from "../buildium/client.js";
+import { RENT_INCOME_GL_ACCOUNT_ID } from "./rentCollection.js";
 
 // Occupancy / lease-mix calculations. These are STRUCTURAL metrics (per the
 // project brief's flow vs. structural distinction) — they always reflect
@@ -187,38 +188,53 @@ function daysBetweenDates(fromDateStr: string, toDateStr: string): number {
 //      ZERO matches across all 574 real leases — because a genuine
 //      renewal does NOT create a new lease record at all.
 //
-// THE REAL MECHANISM, confirmed live: a renewal extends LeaseToDate IN
-// PLACE on the SAME lease record. Evidence: 132 of 240 real Active leases
-// were originally created 2018-2021 (per CreatedDateTime) yet still show
-// LeaseStatus="Active" today, with LeaseToDate 2026-2060 and a
-// LastUpdatedDateTime from within the last few months — a lease can only
-// still be "Active" years after a 1-year term started if its end date
-// keeps getting pushed forward.
+// SUPERSEDED 2026-07-07 — the LastUpdatedDateTime+term-length heuristic
+// below was a plausible reverse-engineered guess (see the two dead ends
+// documented above it, which are still real and still true), but it was
+// WRONG about the actual mechanism. Per Jason directly: Buildium tracks
+// each lease's real renewal date on its RENT SCHEDULE — visible in
+// Buildium's own UI at Tenants > Financials > Rent, or a property's
+// Recurring Transactions — not on the lease record's own fields at all.
+//
+// CONFIRMED LIVE 2026-07-07 against 2 real leases: fetching
+// /leases/{id}/recurringtransactions and finding the recurring charge line
+// against GL account 3 (Rent Income) with the LATEST FirstOccurrenceDate
+// reproduced the vendor's own shown "renewed" date EXACTLY on both —
+// including one lease with two Rent entries on file (both IsExpired:false;
+// the vendor used the newer one, not the older), and one lease with a
+// rent increase already scheduled for a future date the vendor still
+// counted as this year's renewal. See mostRecentRentEffectiveDate below.
 //
 // THE FORMULA:
-//   RENEWED = a lease that is NOT currently Past (tenant hasn't left), was
-//   last updated within the trailing 12 months (LastUpdatedDateTime), AND
-//   has a total term (LeaseFromDate to LeaseToDate) longer than 365 days —
-//   a plain, never-renewed lease has a term of ~365/366 days; anything
-//   detectably longer than that means the end date was pushed out at
-//   least once, and doing so recently is the renewal event itself.
+//   RENEWED = a lease that is NOT currently Past (tenant hasn't left) AND
+//   whose most recent Rent-line effective date (mostRecentRentEffectiveDate)
+//   falls within the trailing 12 months.
 //   MOVED OUT = a Past lease whose LeaseToDate falls in the trailing 12
 //   months AND whose original term was at least 300 days — this excludes
 //   early-terminated/broken leases (evictions, short-term exceptions) that
 //   never reached a real "renew or leave" decision point, so they don't
-//   silently drag the rate down as if they were a declined renewal.
+//   silently drag the rate down as if they were a declined renewal. Kept
+//   as-is from the earlier formula — moved-out leases have no forward rent
+//   schedule to check, so LeaseToDate is still the only real signal.
 //   RATE = renewed / (renewed + moved out).
-//
-// VERIFIED against this account's real leases (2026-07-05): renewed=166,
-// moved out=69, rate=70.6% — vendor shows 70.8%. Numerator alone (166) is
-// close to but not identical to the vendor's stated 138; the overall RATE
-// matching this closely (within 0.2 points) on a formula with no free
-// parameters tuned to hit that number is treated as strong confirmation
-// this is the right mechanism, not a coincidence — some residual gap is
-// expected for an inferred metric where the exact trailing-12-month anchor
-// day or minimum-term threshold may differ slightly from the vendor's own
-// (undocumented) implementation.
 const RENEWAL_MIN_MOVE_OUT_TERM_DAYS = 300;
+
+// One entry per recurring-transaction line Buildium returns for a lease —
+// deliberately a plain, decoupled shape (not BuildiumLeaseRecurringTransaction
+// directly) so this stays pure/testable, same pattern as delinquency.ts's
+// TransactionForAging.
+export interface RentScheduleEntry {
+  firstOccurrenceDate: string;
+  lineGlAccountIds: number[];
+}
+
+export function mostRecentRentEffectiveDate(entries: RentScheduleEntry[]): string | null {
+  const rentEntryDates = entries
+    .filter((e) => e.lineGlAccountIds.includes(RENT_INCOME_GL_ACCOUNT_ID))
+    .map((e) => e.firstOccurrenceDate);
+  if (rentEntryDates.length === 0) return null;
+  return rentEntryDates.reduce((latest, d) => (d > latest ? d : latest));
+}
 
 export interface RenewalRateSummary {
   renewedCount: number;
@@ -226,7 +242,11 @@ export interface RenewalRateSummary {
   renewalRatePercent: number | null; // null when there's no trailing-12mo population to compute a rate from
 }
 
-export function summarizeRenewalRate(allLeases: BuildiumLease[], asOfDate: Date): RenewalRateSummary {
+export function summarizeRenewalRate(
+  allLeases: BuildiumLease[],
+  rentEffectiveDateByLeaseId: Map<string, string>,
+  asOfDate: Date
+): RenewalRateSummary {
   const today = asOfDate.toISOString().slice(0, 10);
   const oneYearAgo = new Date(asOfDate);
   oneYearAgo.setUTCDate(oneYearAgo.getUTCDate() - 365);
@@ -235,19 +255,52 @@ export function summarizeRenewalRate(allLeases: BuildiumLease[], asOfDate: Date)
   let renewedCount = 0;
   let movedOutCount = 0;
 
+  // ATTEMPTED 2026-07-07, REVERTED: tried reclassifying a Past lease as
+  // renewed when another lease exists on the same unit starting shortly
+  // after (a "seamless successor," to catch cases like a lease renewed via
+  // a brand-new record instead of extending the old one in place). At a
+  // 45-day gap threshold this looked right on 2 hand-checked examples, but
+  // at full portfolio scale it matched unrelated leases across different
+  // years on the same property (e.g. pairing one lease's 2025 end date
+  // with a completely different, later lease's 2026 start that the vendor
+  // separately already counted as its own renewal) — renewedCount jumped
+  // to 171 and movedOutCount collapsed to 35, both clearly wrong. A bare
+  // day-count gap isn't a reliable signal at this scale without also
+  // matching on the underlying tenant, which Buildium's lease record
+  // doesn't expose in a form this account's data supports. Reverted to the
+  // simpler, well-supported term-length floor below — confirmed accurate
+  // on the renewed side (137 vs. the vendor's real 138) even though the
+  // moved-out side remains this floor-based approximation.
   for (const lease of allLeases) {
-    if (!lease.LeaseFromDate || !lease.LeaseToDate) continue; // month-to-month or data gap — no term to evaluate
-    const termDays = daysBetweenDates(lease.LeaseFromDate, lease.LeaseToDate);
-
     if (lease.LeaseStatus !== "Past") {
-      if (!lease.LastUpdatedDateTime) continue;
-      const updatedDate = lease.LastUpdatedDateTime.slice(0, 10);
-      if (updatedDate < oneYearAgoStr || updatedDate > today) continue;
-      if (termDays > 365) renewedCount++;
-    } else {
-      if (lease.LeaseToDate < oneYearAgoStr || lease.LeaseToDate > today) continue;
-      if (termDays >= RENEWAL_MIN_MOVE_OUT_TERM_DAYS) movedOutCount++;
+      const rentDate = rentEffectiveDateByLeaseId.get(String(lease.Id));
+      if (!rentDate) continue;
+      // A brand-new lease's very first rent charge ALSO creates a Rent
+      // recurring-transaction entry dated to move-in — that's not a
+      // renewal, it's day one. A simple "later than LeaseFromDate" check
+      // isn't enough: a lease starting mid-month (e.g. LeaseFromDate
+      // 2026-08-17) often has its recurring Rent entry's
+      // FirstOccurrenceDate rounded to the start of the FOLLOWING month
+      // (2026-09-01, since the partial first month is prorated as a
+      // one-time charge, not part of the recurring schedule) — a ~2-week
+      // gap that "later than" alone can't tell apart from a real renewal.
+      // Requiring at least 180 days between move-in and the rent-effective
+      // date safely clears any proration quirk while still catching every
+      // real renewal (which is always close to a year out).
+      if (lease.LeaseFromDate && daysBetweenDates(lease.LeaseFromDate, rentDate) < 180) continue;
+      // No upper bound here (unlike the moved-out side below) — CONFIRMED
+      // LIVE 2026-07-07: the vendor counts a rent increase already
+      // scheduled ahead of time (e.g. entered 2-3 months in advance of its
+      // effective date) as this year's renewal even though the date is
+      // still in the future.
+      if (rentDate < oneYearAgoStr) continue;
+      renewedCount++;
+      continue;
     }
+    if (!lease.LeaseFromDate || !lease.LeaseToDate) continue;
+    const termDays = daysBetweenDates(lease.LeaseFromDate, lease.LeaseToDate);
+    if (lease.LeaseToDate < oneYearAgoStr || lease.LeaseToDate > today) continue;
+    if (termDays >= RENEWAL_MIN_MOVE_OUT_TERM_DAYS) movedOutCount++;
   }
 
   const denominator = renewedCount + movedOutCount;

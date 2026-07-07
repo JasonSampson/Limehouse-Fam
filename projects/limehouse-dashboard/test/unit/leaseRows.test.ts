@@ -156,44 +156,59 @@ describe("vacantUnitDaysRows / averageDaysVacant", () => {
 describe("renewalRateRows", () => {
   const asOf = new Date("2026-07-05T00:00:00Z");
 
-  it("includes a renewed lease (non-Past, term > 365 days, updated in trailing 12mo)", () => {
-    const leases = [
-      lease({
-        Id: 1,
-        LeaseStatus: "Active",
-        LeaseFromDate: "2024-01-01",
-        LeaseToDate: "2027-01-01",
-        LastUpdatedDateTime: "2026-03-01T00:00:00Z",
-      }),
-    ];
-    const rows = renewalRateRows(leases, asOf);
+  it("includes a renewed lease (non-Past, Rent effective date within trailing 12mo), with fromDate set to that Rent date", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Active", LeaseToDate: "2027-01-01" })];
+    const rentDates = new Map([["1", "2026-03-01"]]);
+    const rows = renewalRateRows(leases, rentDates, asOf);
     expect(rows).toHaveLength(1);
     expect(rows[0].outcome).toBe("renewed");
     expect(rows[0].leaseId).toBe("1");
+    expect(rows[0].fromDate).toBe("2026-03-01");
+    expect(rows[0].toDate).toBe("2027-01-01");
   });
 
-  it("includes a moved-out lease (Past, LeaseToDate in trailing 12mo, full term)", () => {
+  it("includes a moved-out lease (Past, LeaseToDate in trailing 12mo, full term), with fromDate set to the lease's real LeaseFromDate", () => {
     const leases = [
       lease({ Id: 2, LeaseStatus: "Past", LeaseFromDate: "2025-01-01", LeaseToDate: "2026-01-01" }),
     ];
-    const rows = renewalRateRows(leases, asOf);
+    const rows = renewalRateRows(leases, new Map(), asOf);
     expect(rows).toHaveLength(1);
     expect(rows[0].outcome).toBe("moved_out");
+    expect(rows[0].fromDate).toBe("2025-01-01");
   });
 
-  it("excludes a lease that doesn't meet either classification", () => {
-    const leases = [
-      lease({ Id: 3, LeaseStatus: "Active", LeaseFromDate: "2026-01-01", LeaseToDate: "2026-12-31", LastUpdatedDateTime: "2026-06-01T00:00:00Z" }), // plain 1yr, not renewed
-    ];
-    expect(renewalRateRows(leases, asOf)).toEqual([]);
+
+  it("excludes a non-Past lease with no Rent effective date on file", () => {
+    const leases = [lease({ Id: 3, LeaseStatus: "Active" })];
+    expect(renewalRateRows(leases, new Map(), asOf)).toEqual([]);
   });
 
-  it("sorts rows by leaseToDate, most recent first", () => {
+  it("excludes a lease whose Rent effective date is just the original move-in charge, not a later renewal", () => {
+    const leases = [lease({ Id: 4, LeaseStatus: "Active", LeaseFromDate: "2026-03-01" })];
+    const rentDates = new Map([["4", "2026-03-01"]]); // same date as LeaseFromDate — day one, not a renewal
+    expect(renewalRateRows(leases, rentDates, asOf)).toEqual([]);
+  });
+
+  it("excludes a lease whose Rent effective date is only a couple weeks after move-in (proration, not a renewal)", () => {
+    const leases = [lease({ Id: 6, LeaseStatus: "Active", LeaseFromDate: "2026-08-17" })];
+    const rentDates = new Map([["6", "2026-09-01"]]); // 15 days later — first full month, not a renewal
+    expect(renewalRateRows(leases, rentDates, asOf)).toEqual([]);
+  });
+
+  it("includes a renewed lease even when its Rent effective date is in the future (already scheduled ahead of time)", () => {
+    const leases = [lease({ Id: 5, LeaseStatus: "Active", LeaseToDate: "2027-08-31" })];
+    const rentDates = new Map([["5", "2026-09-01"]]); // after asOf (2026-07-05) — scheduled ahead
+    const rows = renewalRateRows(leases, rentDates, asOf);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].fromDate).toBe("2026-09-01");
+  });
+
+  it("sorts rows by toDate, most recent first", () => {
     const leases = [
       lease({ Id: 1, LeaseStatus: "Past", LeaseFromDate: "2025-01-01", LeaseToDate: "2026-01-01" }),
       lease({ Id: 2, LeaseStatus: "Past", LeaseFromDate: "2025-03-01", LeaseToDate: "2026-03-01" }),
     ];
-    const rows = renewalRateRows(leases, asOf);
+    const rows = renewalRateRows(leases, new Map(), asOf);
     expect(rows.map((r) => r.leaseId)).toEqual(["2", "1"]);
   });
 });

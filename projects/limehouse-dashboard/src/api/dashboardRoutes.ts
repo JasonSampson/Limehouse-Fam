@@ -25,7 +25,6 @@ import {
   summarizeLeaseMix,
   upcomingRenewals,
   averageTenancyMonths,
-  summarizeRenewalRate,
 } from "../kpi/occupancy.js";
 import { summarizePropertyHealthFromReporting } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
@@ -34,6 +33,7 @@ import {
   summarizeDoorsAdded,
   estimatePropertyLossDates,
   summarizeDoorsLostEstimate,
+  summarizeNetDoorsYTD,
   netDoorsRows,
 } from "../kpi/churn.js";
 import {
@@ -47,7 +47,7 @@ import {
   vacantUnitRows,
   vacantUnitDaysRows,
   averageDaysVacant,
-  renewalRateRows,
+  type RenewalRateRow,
 } from "../kpi/leaseRows.js";
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
@@ -220,31 +220,47 @@ dashboardRoutes.get("/api/dashboard/renewals", requireLogin, async (req, res) =>
 // Renewal Rate (top-of-mind tile) — REBUILT 2026-07-05: "% of leases that
 // renewed instead of moving out, over the trailing 12 months," replacing
 // the old "% of active leases coming up for renewal in the next 60 days"
-// definition. See summarizeRenewalRate in src/kpi/occupancy.ts for the
-// full derivation, why the obvious approaches didn't work, and the real-
-// data verification (166 renewed / 69 moved out = 70.6% vs. vendor's
-// 70.8%). Needs ALL leases (Active/Past/Future), not just Active — the
-// "moved out" half of the population is specifically Past leases.
+// definition. REBUILT AGAIN 2026-07-07: the "renewed" signal now comes
+// from each lease's Rent recurring-charge schedule (see
+// summarizeRenewalRate in src/kpi/occupancy.ts for the full derivation),
+// which needs one Buildium call per non-Past lease — same rate-limit
+// concern as Rent Collection/Security Deposit Withheld, so this reads a
+// cache populated by POST /api/sync/renewal-rate instead of computing live.
 dashboardRoutes.get("/api/dashboard/renewal-rate", requireLogin, async (_req, res) => {
   try {
-    const allLeases = await fetchAllLeases();
-    res.json(summarizeRenewalRate(allLeases, new Date()));
+    const cached = await getCachedMetric("renewal_rate", "portfolio");
+    if (!cached || cached.value === null) {
+      // 200 + synced:false, not a 503 — matches the same "not connected
+      // yet" convention as the Total Calls/Outbound Texts tiles (a real
+      // feed exists, it just hasn't been synced yet), so the frontend can
+      // show the dashed "Not connected yet" tile instead of "Couldn't load".
+      res.json({ synced: false });
+      return;
+    }
+    const { summary } = cached.value as { summary: unknown; rows: unknown };
+    res.json({ ...(summary as object), synced: true, stale: !isCacheFresh(cached), cachedAt: cached.fetchedAt, lastError: cached.lastError });
   } catch (err) {
     logError("GET /api/dashboard/renewal-rate failed", { error: String(err) });
-    res.status(502).json({ error: "Failed to load renewal rate data from Buildium." });
+    res.status(502).json({ error: "Failed to load cached renewal rate data." });
   }
 });
 
 // Renewal Rate drill-down — the renewed/moved-out row list behind the
-// percentage above.
+// percentage above. Reads the same cache as /api/dashboard/renewal-rate so
+// the tile and its drill-down can never disagree.
 dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, async (_req, res) => {
   try {
-    const [allLeases, properties] = await Promise.all([fetchAllLeases(), fetchProperties()]);
-    const rows = withPropertyAddress(renewalRateRows(allLeases, new Date()), propertyAddressById(properties));
-    res.json(rows);
+    const cached = await getCachedMetric("renewal_rate", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json([]);
+      return;
+    }
+    const { rows } = cached.value as { summary: unknown; rows: RenewalRateRow[] };
+    const properties = await fetchProperties();
+    res.json(withPropertyAddress(rows, propertyAddressById(properties)));
   } catch (err) {
     logError("GET /api/dashboard/renewal-rate/leases failed", { error: String(err) });
-    res.status(502).json({ error: "Failed to load renewal rate lease data from Buildium." });
+    res.status(502).json({ error: "Failed to load cached renewal rate lease data." });
   }
 });
 
@@ -322,10 +338,11 @@ dashboardRoutes.get("/api/dashboard/property-health", requireLogin, async (req, 
 // last 12 months — matches Oracle's numbers exactly.
 dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
   try {
-    const [allProperties, allLeases, owners] = await Promise.all([
+    const [allProperties, allLeases, owners, managedUnits] = await Promise.all([
       fetchProperties(),
       fetchAllLeases(),
       fetchOwners(),
+      fetchActiveManagedUnits(),
     ]);
     const activeProperties = allProperties.filter((p) => p.IsActive === true);
     const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
@@ -344,6 +361,13 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
     const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
     const doorsLostEstimated = summarizeDoorsLostEstimate(lossEstimates, inactiveProperties.length, new Date());
 
+    // Net Doors (Top of Mind) — EXACT, using Jason's own real door counts
+    // as of Jan 1 each year, not the lease-history estimate above. See
+    // summarizeNetDoorsYTD in churn.ts for why: the vendor's own "Net
+    // Doors" is labeled trailing-12-months but is really only a ~50-day
+    // daily-snapshot diff, so it isn't a meaningful target to chase either.
+    const netDoorsYTD = summarizeNetDoorsYTD(managedUnits.length, new Date());
+
     res.json({
       doorsAdded,
       doorsAddedFlaggedDisagreements: flaggedDisagreements,
@@ -353,6 +377,7 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
         note:
           "Estimated from the most recent lease end date on each currently-inactive property, not a real deactivation date — likely undercounts properties that never had a Buildium lease on file (see propertiesUndercounted).",
       },
+      netDoorsYTD,
     });
   } catch (err) {
     logError("GET /api/dashboard/doors failed", { error: String(err) });

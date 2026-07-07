@@ -192,24 +192,34 @@ export function averageDaysVacant(rows: VacantUnitDaysRow[]): number | null {
   return Math.round(known.reduce((sum, d) => sum + d, 0) / known.length);
 }
 
-// Renewal Rate drill-down — ADDED 2026-07-05 alongside the top-of-mind
-// Renewal Rate rebuild (see summarizeRenewalRate in occupancy.ts for the
-// full formula this mirrors row-by-row, and why it's built this way).
-// Reuses the exact same renewed/moved-out classification so the drill-down
-// list and the tile's percentage can never disagree with each other.
+// Renewal Rate drill-down — ADDED 2026-07-05, REBUILT 2026-07-07 alongside
+// the top-of-mind Renewal Rate rebuild (see summarizeRenewalRate in
+// occupancy.ts for the full formula this mirrors row-by-row, and why it's
+// built this way). Reuses the exact same renewed/moved-out classification
+// so the drill-down list and the tile's percentage can never disagree.
+//
+// fromDate now means different things per outcome, matching what the
+// vendor's own drill-down actually shows: for a renewed lease it's the
+// Rent recurring-charge's effective date (when THIS renewal took effect),
+// NOT the lease's original move-in date — for a moved-out lease there's no
+// rent-schedule concept to check anymore, so it falls back to the lease's
+// real LeaseFromDate.
 export interface RenewalRateRow {
   leaseId: string;
   propertyId: string;
   unitNumber: string | null;
   outcome: "renewed" | "moved_out";
-  leaseFromDate: string | null;
-  leaseToDate: string | null;
-  lastUpdatedDateTime: string | null;
+  fromDate: string | null;
+  toDate: string | null;
 }
 
 const RENEWAL_MIN_MOVE_OUT_TERM_DAYS = 300;
 
-export function renewalRateRows(allLeases: BuildiumLease[], asOfDate: Date): RenewalRateRow[] {
+export function renewalRateRows(
+  allLeases: BuildiumLease[],
+  rentEffectiveDateByLeaseId: Map<string, string>,
+  asOfDate: Date
+): RenewalRateRow[] {
   const today = asOfDate.toISOString().slice(0, 10);
   const oneYearAgo = new Date(asOfDate);
   oneYearAgo.setUTCDate(oneYearAgo.getUTCDate() - 365);
@@ -217,38 +227,48 @@ export function renewalRateRows(allLeases: BuildiumLease[], asOfDate: Date): Ren
 
   const rows: RenewalRateRow[] = [];
 
+  // ATTEMPTED 2026-07-07, REVERTED — see summarizeRenewalRate in
+  // occupancy.ts for the full story: tried reclassifying a Past lease as
+  // renewed based on a same-unit successor lease starting within 45 days,
+  // but at full portfolio scale this matched unrelated leases across
+  // different years and badly overcounted. Reverted to the simpler,
+  // well-supported term-length floor below.
   for (const lease of allLeases) {
+    if (lease.LeaseStatus !== "Past") {
+      const rentDate = rentEffectiveDateByLeaseId.get(String(lease.Id));
+      if (!rentDate) continue;
+      // A brand-new lease's very first rent charge ALSO creates a Rent
+      // recurring-transaction entry dated to move-in — that's not a
+      // renewal, it's day one. Requiring at least 180 days between move-in
+      // and the rent-effective date safely clears any proration quirk
+      // while still catching every real renewal.
+      if (lease.LeaseFromDate && Math.round((new Date(rentDate).getTime() - new Date(lease.LeaseFromDate).getTime()) / (1000 * 60 * 60 * 24)) < 180)
+        continue;
+      // No upper bound — already-scheduled future rent increases still
+      // count as this year's renewal.
+      if (rentDate < oneYearAgoStr) continue;
+      rows.push({
+        ...baseRow(lease),
+        outcome: "renewed",
+        fromDate: rentDate,
+        toDate: lease.LeaseToDate,
+      });
+      continue;
+    }
     if (!lease.LeaseFromDate || !lease.LeaseToDate) continue;
     const termDays = Math.round(
       (new Date(lease.LeaseToDate).getTime() - new Date(lease.LeaseFromDate).getTime()) / (1000 * 60 * 60 * 24)
     );
-
-    if (lease.LeaseStatus !== "Past") {
-      if (!lease.LastUpdatedDateTime) continue;
-      const updatedDate = lease.LastUpdatedDateTime.slice(0, 10);
-      if (updatedDate < oneYearAgoStr || updatedDate > today) continue;
-      if (termDays > 365) {
-        rows.push({
-          ...baseRow(lease),
-          outcome: "renewed",
-          leaseFromDate: lease.LeaseFromDate,
-          leaseToDate: lease.LeaseToDate,
-          lastUpdatedDateTime: lease.LastUpdatedDateTime,
-        });
-      }
-    } else {
-      if (lease.LeaseToDate < oneYearAgoStr || lease.LeaseToDate > today) continue;
-      if (termDays >= RENEWAL_MIN_MOVE_OUT_TERM_DAYS) {
-        rows.push({
-          ...baseRow(lease),
-          outcome: "moved_out",
-          leaseFromDate: lease.LeaseFromDate,
-          leaseToDate: lease.LeaseToDate,
-          lastUpdatedDateTime: lease.LastUpdatedDateTime ?? null,
-        });
-      }
+    if (lease.LeaseToDate < oneYearAgoStr || lease.LeaseToDate > today) continue;
+    if (termDays >= RENEWAL_MIN_MOVE_OUT_TERM_DAYS) {
+      rows.push({
+        ...baseRow(lease),
+        outcome: "moved_out",
+        fromDate: lease.LeaseFromDate,
+        toDate: lease.LeaseToDate,
+      });
     }
   }
 
-  return rows.sort((a, b) => (b.leaseToDate ?? "").localeCompare(a.leaseToDate ?? ""));
+  return rows.sort((a, b) => (b.toDate ?? "").localeCompare(a.toDate ?? ""));
 }

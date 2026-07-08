@@ -2,3 +2,7 @@ node_modules/
 dist/
 .env
 *.log
+
+# Throwaway local dev helper — signs a real session JWT for manual browser
+# testing. Must never land in git history.
+scripts/_temp_preview_login.mjs

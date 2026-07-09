@@ -654,6 +654,7 @@ function doorsTile({ doors, id, label }) {
       value: doors.doorsAdded.doorsAddedYTD,
       sub: `Year to date · ${doors.doorsAdded.doorsAdded30Days} in the last 30 days`,
       pending: "Reflects Buildium's records, which may lag a few days behind a real signing",
+      clickable: true,
     });
   }
   if (id === "doors-lost") {
@@ -1204,6 +1205,35 @@ async function handleTileClick(tileId) {
         { label: "Date", key: "date" },
       ],
       emptyText: "No door changes in the tracked windows.",
+    });
+    return;
+  }
+
+  // Doors Added — ADDED 2026-07-09, matching the vendor's own "Doors
+  // added" drill-down format (header, count line, note box, Property/Doors
+  // columns). Scoped to the SAME year-to-date window as the tile's own
+  // number (doorsAddedYTD) — NOT the vendor's trailing-12-month window,
+  // which their own note admits is really just a day-over-day snapshot
+  // diff with only a few weeks of real history behind it (their note says
+  // as much: "the trailing-12-month baseline will be reached once
+  // snapshots have accumulated for a full year"). Ours is a real, exact
+  // figure from day one instead.
+  const DOORS_ADDED_NOTE =
+    "For each property, we use Buildium's real management-agreement start date (or the property's earliest lease date, if that's actually earlier — some agreements get re-signed years later without the door ever changing hands). A property counts as \"added\" if that start date falls within this calendar year. This is an exact figure, not an estimate.";
+
+  if (tileId === "doors-added") {
+    const year = new Date().getFullYear();
+    await simpleDrillDown({
+      tileId,
+      title: "Doors added (year to date)",
+      subtitle: (rows) => `${rows.length} doors across ${rows.length} properties (since Jan 1, ${year})`,
+      note: DOORS_ADDED_NOTE,
+      url: "/api/dashboard/doors-added/properties",
+      columns: [
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Doors", key: "doors" },
+      ],
+      emptyText: "No doors added so far this year.",
     });
     return;
   }

@@ -36,6 +36,7 @@ import {
   summarizeNetDoorsYTD,
   summarizeTotalUnitsYoY,
   netDoorsRows,
+  doorsAddedRows,
 } from "../kpi/churn.js";
 import {
   rentLeaseRows,
@@ -821,5 +822,25 @@ dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, async (
   } catch (err) {
     logError("GET /api/dashboard/net-doors/properties failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load net doors data from Buildium." });
+  }
+});
+
+// Doors Added drill-down: same year-to-date window as the Doors Added tile
+// itself (doorsAddedYTD) — see doorsAddedRows in churn.ts for why this is
+// scoped to YTD rather than the vendor's trailing-12-month daily-snapshot
+// approach.
+dashboardRoutes.get("/api/dashboard/doors-added/properties", requireLogin, async (_req, res) => {
+  try {
+    const [allProperties, allLeases, owners] = await Promise.all([fetchProperties(), fetchAllLeases(), fetchOwners()]);
+    const activeProperties = allProperties.filter((p) => p.IsActive === true);
+    const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
+
+    const { properties } = buildPropertyManagementStarts(owners, activePropertyIds, allLeases);
+
+    const rows = withPropertyAddress(doorsAddedRows(properties, new Date()), propertyAddressById(allProperties));
+    res.json(rows);
+  } catch (err) {
+    logError("GET /api/dashboard/doors-added/properties failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load doors-added data from Buildium." });
   }
 });

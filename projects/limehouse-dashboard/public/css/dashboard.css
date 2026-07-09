@@ -290,7 +290,7 @@ main {
 .tile-yoy.down { color: var(--red); }
 
 .tile-pending {
-  font-size: 12px;
+  font-size: 10px;
   color: var(--yellow);
   margin-top: 2px;
 }

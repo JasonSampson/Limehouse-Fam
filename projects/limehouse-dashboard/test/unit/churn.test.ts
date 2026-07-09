@@ -7,6 +7,7 @@ import {
   summarizeNetDoorsYTD,
   summarizeTotalUnitsYoY,
   netDoorsRows,
+  doorsAddedRows,
 } from "../../src/kpi/churn.js";
 import type { BuildiumOwner, BuildiumProperty, BuildiumLease } from "../../src/buildium/client.js";
 
@@ -222,6 +223,47 @@ describe("summarizeDoorsAdded", () => {
     const result = summarizeDoorsAdded(properties, asOf);
     expect(result.doorsAdded365Days).toBe(1);
     expect(result.doorsAddedYTD).toBe(0);
+  });
+});
+
+// Doors Added drill-down rows — ADDED 2026-07-09, matching the vendor's
+// own "Doors added" drill-down (Property/Doors columns), scoped to the
+// SAME year-to-date window as doorsAddedYTD so the drill-down list always
+// matches the tile's own number.
+describe("doorsAddedRows", () => {
+  const asOf = new Date("2026-07-09T00:00:00Z");
+
+  it("includes a property whose start date falls within this calendar year, doors always 1", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2026-03-15" }];
+    expect(doorsAddedRows(properties, asOf)).toEqual([{ propertyId: "1", date: "2026-03-15", doors: 1 }]);
+  });
+
+  it("excludes a property whose start date is from last calendar year, even if within the trailing 365 days", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2025-12-15" }];
+    expect(doorsAddedRows(properties, asOf)).toEqual([]);
+  });
+
+  it("includes a start date exactly on Jan 1 of the current year (boundary inclusive)", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2026-01-01" }];
+    expect(doorsAddedRows(properties, asOf)).toHaveLength(1);
+  });
+
+  it("includes an already-scheduled near-future start date still within this calendar year", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2026-12-31" }];
+    expect(doorsAddedRows(properties, asOf)).toHaveLength(1);
+  });
+
+  it("excludes a start date in a future calendar year", () => {
+    const properties = [{ propertyId: "1", earliestStartDate: "2027-01-01" }];
+    expect(doorsAddedRows(properties, asOf)).toEqual([]);
+  });
+
+  it("sorts rows by date, most recent first", () => {
+    const properties = [
+      { propertyId: "1", earliestStartDate: "2026-02-01" },
+      { propertyId: "2", earliestStartDate: "2026-05-01" },
+    ];
+    expect(doorsAddedRows(properties, asOf).map((r) => r.propertyId)).toEqual(["2", "1"]);
   });
 });
 

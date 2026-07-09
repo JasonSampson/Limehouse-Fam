@@ -126,7 +126,7 @@ function tileHtml(opts) {
   const subHtml = sub && !notConnected ? `<div class="tile-sub">${sub}</div>` : "";
   const yoyHtml =
     yoy && !notConnected ? `<div class="tile-yoy ${yoy.direction}">${yoy.text}</div>` : "";
-  const pendingHtml = pending && !notConnected ? `<div class="tile-pending">⏳ ${pending}</div>` : "";
+  const pendingHtml = pending && !notConnected ? `<div class="tile-pending">${pending}</div>` : "";
   const sparklineHtmlStr =
     sparkline && !notConnected && typeof sparklineHtml === "function"
       ? sparklineHtml(sparkline.values, sparkline.color)

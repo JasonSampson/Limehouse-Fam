@@ -269,6 +269,30 @@ export function summarizeDoorsAdded(properties: PropertyManagementStart[], asOfD
   return { doorsAdded30Days, doorsAdded60Days, doorsAdded90Days, doorsAdded365Days, doorsAddedYTD };
 }
 
+// Doors Added drill-down rows — ADDED 2026-07-09, matching the vendor's own
+// "Doors added" drill-down format (header, count line, Property/Doors
+// columns). Scoped to the SAME year-to-date window as doorsAddedYTD above
+// (not the vendor's trailing-12-month daily-snapshot diff — see this
+// file's Net Doors comment for why that isn't a meaningful target to
+// copy), so the drill-down list always matches the tile's own number.
+// `doors: 1` per row — this dashboard's door-count model is one door per
+// qualifying property (same convention doorsAddedYTD itself already uses),
+// not a per-property unit breakdown.
+export interface DoorsAddedRow {
+  propertyId: string;
+  date: string; // "YYYY-MM-DD" — earliestStartDate
+  doors: number;
+}
+
+export function doorsAddedRows(properties: PropertyManagementStart[], asOfDate: Date): DoorsAddedRow[] {
+  const startOfYear = `${asOfDate.getUTCFullYear()}-01-01`;
+  const startOfNextYear = `${asOfDate.getUTCFullYear() + 1}-01-01`;
+  return properties
+    .filter((p) => p.earliestStartDate >= startOfYear && p.earliestStartDate < startOfNextYear)
+    .map((p) => ({ propertyId: p.propertyId, date: p.earliestStartDate, doors: 1 }))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
 // ============================================================================
 // Doors Lost (ESTIMATED) — see file header for the full derivation and its
 // two documented limitations.

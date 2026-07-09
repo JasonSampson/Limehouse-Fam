@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "late-rent-notices-dev",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam\\projects\\late-rent-notices && npm run dev"],
+      "port": 3000
+    },
+    {
+      "name": "limehouse-dashboard-dev",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-dashboard\\projects\\limehouse-dashboard && npm run dev"],
+      "port": 3100
+    },
+    {
+      "name": "limehouse-dashboard-preview",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PORT=3102 && cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-dashboard\\projects\\limehouse-dashboard && npm run dev"],
+      "port": 3102
+    },
+    {
+      "name": "limona-dev",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-limona\\projects\\limona && npm run dev"],
+      "port": 3200
+    }
+  ]
+}

@@ -1,7 +1,6 @@
 import type { PoolClient } from "pg";
 import { loadEnv } from "../config/env.js";
-import { fetchLeaseOutstandingBalance } from "../buildium/client.js";
-import { getDeMinimisThreshold, getEstimatedCourtCosts, getEstimatedAttorneyFees } from "./config.js";
+import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "./config.js";
 import { calculateLateness } from "./lateness.js";
 import {
   fetchAndClassifyLeaseCharges,
@@ -11,9 +10,22 @@ import {
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
 import { sendGraphMail } from "../email/graphMailer.js";
 import { generateNoticePdf } from "./generateNoticePdf.js";
+import { renderNoticeBodyToHtml } from "./noticeBodyFormatting.js";
+import { checkLiveBalanceAndVoidIfStale } from "./staleDraftCheck.js";
 import { writeAuditLog } from "./auditLog.js";
 import { startTrace } from "./trace.js";
 import { logInfo } from "./appLogger.js";
+
+// Joins tenant names into one readable list for a single combined notice
+// email ("Jane Doe", "Jane Doe and John Doe", "Jane Doe, John Doe, and Mary
+// Doe"). Jason confirmed one combined email to every tenant on the lease is
+// fine, in place of a separate email per tenant.
+export function formatTenantNameList(names: string[]): string {
+  if (names.length === 0) return "Tenant";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
 
 export class SendBlockedError extends Error {
   constructor(message: string, public readonly reason: string) {
@@ -107,39 +119,26 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   );
   const lease = leaseResult.rows[0];
 
-  // Step 1: stale-draft protection. Live balance, not the cached draft figure.
-  const liveBalance = await fetchLeaseOutstandingBalance(lease.buildium_lease_id);
-  const { amount: deMinimisThreshold } = await getDeMinimisThreshold(client);
+  // Step 1: stale-draft protection. Live balance, not the cached draft
+  // figure. Shared with noticeRoutes.ts's review-page route (see
+  // staleDraftCheck.ts) — same check, run at a different moment.
+  const staleCheck = await checkLiveBalanceAndVoidIfStale(client, {
+    noticeId: params.noticeId,
+    leaseId: notice.lease_id,
+    buildiumLeaseId: lease.buildium_lease_id,
+    actorType: params.sentAsFallback ? "fallback_decision_maker" : "pm",
+    actorId: String(params.sendingPmId),
+    triggerDescription: "before send (stale-draft check)",
+    legalBasis: "stale_draft_protection",
+    trace,
+  });
 
-  if (liveBalance.balance <= deMinimisThreshold) {
-    await client.query(
-      `UPDATE notices SET status = 'voided', voided_at = now(),
-         voided_reason = 'Tenant paid down below de minimis threshold before send (stale-draft check).',
-         amount_due_at_send = $1
-       WHERE id = $2`,
-      [liveBalance.balance, params.noticeId]
-    );
-
-    await writeAuditLog(client, {
-      companyId: "limehouse-pm",
-      instanceId: "late-rent-notices",
-      decisionId: `notice-${params.noticeId}`,
-      actorType: params.sentAsFallback ? "fallback_decision_maker" : "pm",
-      actorId: String(params.sendingPmId),
-      eventType: "notice.voided",
-      eventSummary: `Notice ${params.noticeId} voided at send time: balance dropped to ${formatCurrency(liveBalance.balance)}, below threshold.`,
-      eventData: { liveBalance: liveBalance.balance, deMinimisThreshold },
-      contextSnapshot: { noticeId: params.noticeId, leaseId: notice.lease_id },
-      privacyCategory: "Aggregation",
-      regulationTags: ["VRLTA"],
-      riskLevel: "medium",
-      legalBasis: "stale_draft_protection",
-      retentionPolicy: "retain_7_years_post_tenancy",
-      trace,
-    });
-
+  if (staleCheck.voided) {
     return { sent: false, voided: true };
   }
+
+  const liveBalance = { balance: staleCheck.liveBalance };
+  const deMinimisThreshold = staleCheck.deMinimisThreshold;
 
   // Step 1b: live itemized charge breakdown, re-fetched and re-classified
   // at send time (same "never trust the draft-time snapshot" principle as
@@ -245,69 +244,73 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   const { amount: courtCosts } = await getEstimatedCourtCosts(client);
   const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
 
-  let allSucceeded = true;
-  for (const toRecipient of toRecipients) {
-    const mergeFields: MergeFields = {
-      tenant_name: toRecipient.full_name ?? "Tenant",
-      unit_label: lease.unit_label,
-      amount_due: formatCurrency(liveBalance.balance),
-      days_late: String(daysLate),
-      due_date: dueDate.toISOString().slice(0, 10),
-      notice_date: new Date().toISOString().slice(0, 10),
-      property_address: lease.property_address,
-      pm_name: lease.assigned_pm_name,
-      // Real computed itemized amounts (migration 0038 / notice_line_items),
-      // classified fresh above at send time — same bucketSums object for
-      // every recipient's email, since the itemization doesn't vary by
-      // tenant/co-signer, only tenant_name does.
-      rent_amount_due: formatCurrency(bucketSums.rent),
-      late_fee_amount_due: formatCurrency(bucketSums.late_fee),
-      misc_amount_due: formatCurrency(bucketSums.other),
-      // Fixed estimates (migrations 0040/0041), same on every notice — NOT
-      // derived from bucketSums/notice_line_items. total is a plain sum,
-      // computed here, not stored/re-derived anywhere else.
-      court_costs_amount: formatCurrency(courtCosts),
-      attorney_fees_amount: formatCurrency(attorneyFees),
-      total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
-    };
+  // One combined email to every "to" recipient on the lease, rather than a
+  // separate email per tenant — Jason confirmed this is fine, and Graph
+  // sendMail already supports multiple "to" addresses on one message.
+  // tenant_name becomes a joined list ("Jane Doe and John Doe") so
+  // roommates/co-signers all see themselves named, not just one tenant.
+  const mergeFields: MergeFields = {
+    tenant_name: formatTenantNameList(toRecipients.map((r) => r.full_name ?? "Tenant")),
+    unit_label: lease.unit_label,
+    amount_due: formatCurrency(liveBalance.balance),
+    days_late: String(daysLate),
+    due_date: dueDate.toISOString().slice(0, 10),
+    notice_date: new Date().toISOString().slice(0, 10),
+    property_address: lease.property_address,
+    pm_name: lease.assigned_pm_name,
+    // Real computed itemized amounts (migration 0038 / notice_line_items),
+    // classified fresh above at send time.
+    rent_amount_due: formatCurrency(bucketSums.rent),
+    late_fee_amount_due: formatCurrency(bucketSums.late_fee),
+    misc_amount_due: formatCurrency(bucketSums.other),
+    // Fixed estimates (migrations 0040/0041), same on every notice — NOT
+    // derived from bucketSums/notice_line_items. total is a plain sum,
+    // computed here, not stored/re-derived anywhere else.
+    court_costs_amount: formatCurrency(courtCosts),
+    attorney_fees_amount: formatCurrency(attorneyFees),
+    total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
+  };
 
-    // Subject is a plain-text email header, not HTML — must not be escaped
-    // (see renderTemplate's escapeForHtml doc comment), while the body
-    // becomes bodyHtml and needs the default HTML-escaping.
-    const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
-    const bodyHtml = renderTemplate(template.body_markdown, mergeFields).replace(/\n/g, "<br>");
+  // Subject is a plain-text email header, not HTML — must not be escaped
+  // (see renderTemplate's escapeForHtml doc comment), while the body
+  // becomes bodyHtml and needs the default HTML-escaping.
+  const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
+  // escapeForHtml: false — renderNoticeBodyToHtml does its own escaping
+  // pass (same reasoning as generateNoticePdf.ts's buildNoticePrintHtml:
+  // using the default here would escape merge field values twice). This
+  // also reflows INITIAL_BODY_MARKDOWN's source-file hard-wrapped lines
+  // into real paragraphs instead of turning every line break into a
+  // visible <br>, which used to split sentences mid-way through.
+  const renderedBody = renderTemplate(template.body_markdown, mergeFields, { escapeForHtml: false });
+  const bodyHtml = renderNoticeBodyToHtml(renderedBody);
 
-    // Print-formatted PDF copy of the same notice, matching the attorney's
-    // original paper form layout, attached so the tenant (and Jason, if this
-    // ends up in court) has something that can be printed as a physical
-    // exhibit — see generateNoticePdf.ts. Built from the SAME mergeFields as
-    // the email body above; the wording is never re-typed, only reformatted.
-    const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
+  // Print-formatted PDF copy of the same notice, matching the attorney's
+  // original paper form layout, attached so the tenant (and Jason, if this
+  // ends up in court) has something that can be printed as a physical
+  // exhibit — see generateNoticePdf.ts. Built from the SAME mergeFields as
+  // the email body above; the wording is never re-typed, only reformatted.
+  const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
 
-    const result = await sendGraphMail({
-      subject,
-      bodyHtml,
-      toRecipients: [{ email: toRecipient.email_address }],
-      ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
-      attachments: [
-        {
-          name: `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
-          contentType: "application/pdf",
-          contentBytes: noticePdf,
-        },
-      ],
-    });
+  const result = await sendGraphMail({
+    subject,
+    bodyHtml,
+    toRecipients: toRecipients.map((r) => ({ email: r.email_address })),
+    ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
+    attachments: [
+      {
+        name: `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
+        contentType: "application/pdf",
+        contentBytes: noticePdf,
+      },
+    ],
+  });
 
-    await client.query(
-      "UPDATE notice_recipients SET delivery_status = $1, bounced_at = $2 WHERE id = $3",
-      [result.success ? "sent" : "bounced", result.success ? null : new Date(), toRecipient.id]
-    );
+  await client.query(
+    "UPDATE notice_recipients SET delivery_status = $1, bounced_at = $2 WHERE notice_id = $3 AND recipient_type = 'to'",
+    [result.success ? "sent" : "bounced", result.success ? null : new Date(), params.noticeId]
+  );
 
-    if (!result.success) {
-      allSucceeded = false;
-    }
-  }
-
+  const allSucceeded = result.success;
   const finalDeliveryStatus = allSucceeded ? "sent" : "bounced";
 
   await client.query(

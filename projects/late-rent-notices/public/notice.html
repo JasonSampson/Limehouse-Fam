@@ -82,32 +82,42 @@
             </thead>
             <tbody>${rows}</tbody>
           </table>
-          <p class="field-hint">Itemized as of the ${notice.lineItems.snapshotStage === "send" ? "send" : "draft"} snapshot.</p>
+          <p class="field-hint">${
+            notice.lineItems.snapshotStage === "live"
+              ? "Live — re-checked against Buildium just now, not the original draft figure."
+              : `Itemized as of the ${notice.lineItems.snapshotStage === "send" ? "send" : "draft"} snapshot.`
+          }</p>
         `;
       }
 
+      // One combined email/PDF goes to every "to" recipient on the lease
+      // (roommates/co-signers all named together, e.g. "Jane Doe and John
+      // Doe") — not a separate preview per tenant.
       function renderLetterPreview(notice) {
-        if (!notice.recipients || !notice.recipients.length) {
+        if (!notice.toRecipients || !notice.toRecipients.length) {
           return `<div class="alert alert-warn">No recipients found for this notice — there's nothing to preview.</div>`;
         }
-        return notice.recipients
-          .map((r, idx) => {
-            const frameId = `letter-frame-${idx}`;
-            return `
-              <div class="card" style="margin-bottom: 12px;">
-                <p class="field-hint" style="margin-top:0;">To: ${escapeHtml(r.tenantName)} &lt;${escapeHtml(r.emailAddress)}&gt;</p>
-                <p style="font-weight:600; margin: 4px 0 10px;">${escapeHtml(r.subject)}</p>
-                <iframe
-                  id="${frameId}"
-                  title="Notice preview for ${escapeHtml(r.tenantName)}"
-                  sandbox="allow-same-origin"
-                  referrerpolicy="no-referrer"
-                  style="width:100%; min-height:220px; border:1px solid var(--gray-border); border-radius: 6px; background:#fff;"
-                ></iframe>
-              </div>
-            `;
-          })
-          .join("");
+        const toLine = notice.toRecipients.map((r) => `${escapeHtml(r.tenantName)} &lt;${escapeHtml(r.emailAddress)}&gt;`).join("; ");
+        const pdfUrl = `/api/notices/${notice.id}/pdf`;
+        return `
+          <div class="card" style="margin-bottom: 12px;">
+            <p class="field-hint" style="margin-top:0;">To: ${toLine}</p>
+            <p style="font-weight:600; margin: 4px 0 10px;">${escapeHtml(notice.subject)}</p>
+            <p style="margin: 0 0 10px;">
+              <a href="${pdfUrl}" target="_blank" rel="noopener" class="btn">
+                View / Download PDF (this is what gets attached to the email and can be printed for court)
+              </a>
+            </p>
+            <p class="field-hint" style="margin: 0 0 4px;">Email preview (same wording, plain formatting for the inbox):</p>
+            <iframe
+              id="letter-frame"
+              title="Notice preview"
+              sandbox="allow-same-origin"
+              referrerpolicy="no-referrer"
+              style="width:100%; min-height:220px; border:1px solid var(--gray-border); border-radius: 6px; background:#fff;"
+            ></iframe>
+          </div>
+        `;
       }
 
       // The iframe's content is set via the frame's own document, not innerHTML
@@ -123,17 +133,15 @@
       // makes the frame a fully opaque cross-origin document and
       // contentDocument returns null even to this same-page script.
       function paintLetterPreviews(notice) {
-        if (!notice.recipients) return;
-        notice.recipients.forEach((r, idx) => {
-          const frame = document.getElementById(`letter-frame-${idx}`);
-          if (!frame) return;
-          const doc = frame.contentDocument;
-          doc.open();
-          doc.write(
-            `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;margin:0;padding:4px;color:#1f2421;}</style></head><body>${r.bodyHtml}</body></html>`
-          );
-          doc.close();
-        });
+        if (!notice.bodyHtml) return;
+        const frame = document.getElementById("letter-frame");
+        if (!frame) return;
+        const doc = frame.contentDocument;
+        doc.open();
+        doc.write(
+          `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;margin:0;padding:4px;color:#1f2421;}</style></head><body>${notice.bodyHtml}</body></html>`
+        );
+        doc.close();
       }
 
       function renderNotice(notice) {
@@ -141,12 +149,17 @@
           <p><a href="/index.html">&larr; Back to dashboard</a></p>
           <h1>${escapeHtml(notice.propertyName)} — Unit ${escapeHtml(notice.unitLabel)}</h1>
           <p class="subtitle">Notice #${notice.id} &middot; ${statusBadge(notice)}</p>
+          ${
+            notice.status === "voided" && notice.voidedReason
+              ? `<div class="alert alert-info">${escapeHtml(notice.voidedReason)}</div>`
+              : ""
+          }
 
           <div class="card">
             <h2 style="margin-top:0;">Amount &amp; timing</h2>
             <table class="ledger-table">
-              <tr><td>Amount due (at draft time)</td><td>${fmtMoney(notice.amountDueAtDraft)}</td></tr>
-              <tr><td>Days late (at draft time)</td><td>${notice.daysLateAtDraft}</td></tr>
+              <tr><td>${notice.status === "draft" ? "Amount due (live, as of right now)" : "Amount due (at draft time)"}</td><td>${fmtMoney(notice.amountDueAtDraft)}</td></tr>
+              <tr><td>${notice.status === "draft" ? "Days late (live)" : "Days late (at draft time)"}</td><td>${notice.daysLateAtDraft}</td></tr>
               ${notice.amountDueAtSend != null ? `<tr><td>Amount due (at send time)</td><td>${fmtMoney(notice.amountDueAtSend)}</td></tr>` : ""}
               <tr><td>Drafted</td><td>${fmtDateTime(notice.draftedAt)}</td></tr>
               ${notice.sentAt ? `<tr><td>Sent</td><td>${fmtDateTime(notice.sentAt)}</td></tr>` : ""}

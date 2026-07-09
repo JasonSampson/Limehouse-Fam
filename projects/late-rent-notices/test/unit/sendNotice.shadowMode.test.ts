@@ -118,9 +118,13 @@ function makeFakeClient(): PoolClient {
     if (sql.includes("FROM notice_recipients")) {
       return { rows: recipientRows };
     }
-    // UPDATE notices / notice_recipients — real code doesn't read the
-    // result of these, so an empty row set is fine.
-    return { rows: [] };
+    // UPDATE notices / notice_recipients. rowCount: 1 matches real pg
+    // behavior for an UPDATE that actually affects the target row —
+    // checkLiveBalanceAndVoidIfStale (staleDraftCheck.ts) reads rowCount to
+    // confirm the void write actually happened (it can legitimately be 0 if
+    // RLS blocks the write for a read-only role), so the mock needs to
+    // report it, not just an empty row set.
+    return { rows: [], rowCount: 1 };
   });
 
   return { query } as unknown as PoolClient;

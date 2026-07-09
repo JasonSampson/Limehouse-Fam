@@ -11,6 +11,11 @@ import { startTrace } from "../lib/trace.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
 import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../lib/config.js";
 import { generateNoticePdf, NoticeBodyParseError, ChromeNotFoundError } from "../lib/generateNoticePdf.js";
+import { formatTenantNameList } from "../lib/sendNotice.js";
+import { renderNoticeBodyToHtml } from "../lib/noticeBodyFormatting.js";
+import { checkLiveBalanceAndVoidIfStale } from "../lib/staleDraftCheck.js";
+import { fetchAndClassifyLeaseCharges, UnclassifiedChargeBlockedError } from "../lib/noticeLineItems.js";
+import { calculateLateness } from "../lib/lateness.js";
 
 export const noticeRoutes = Router();
 noticeRoutes.use(requireSession);
@@ -24,12 +29,21 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
   const session = req.session!;
   const notices = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
+      // status = 'voided' is excluded here (never sent — a notice can only
+      // ever be voided while still 'draft', see the ck_notices_status /
+      // ck_notices_voided_reason_required constraints and
+      // staleDraftCheck.ts). A draft that turned out to already be paid
+      // and got auto-canceled before anyone acted on it isn't a real event
+      // worth cluttering this list with — per Jason's explicit request.
+      // 'draft' (still needs review) and 'sent'/'bounced' (real history)
+      // still show.
       `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
               l.unit_label, p.name AS property_name
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
        JOIN properties p ON p.id = l.property_id
+       WHERE n.status != 'voided'
        ORDER BY n.drafted_at DESC`
     );
     return result.rows;
@@ -66,7 +80,10 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
   const lateNoNotice = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
       `SELECT lc.id AS late_cycle_id, lc.lease_id, lc.due_date, lc.opened_at,
-              l.unit_label, p.name AS property_name
+              l.unit_label, l.property_id, p.name AS property_name,
+              NOT EXISTS (
+                SELECT 1 FROM pm_property_assignments ppa WHERE ppa.property_id = l.property_id
+              ) AS needs_pm_assignment
        FROM late_cycles lc
        JOIN leases l ON l.id = lc.lease_id
        JOIN properties p ON p.id = l.property_id
@@ -123,6 +140,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       days_late_at_draft: number;
       amount_due_at_send: string | null;
       days_late_at_send: number | null;
+      voided_reason: string | null;
       letter_template_id: number;
       assigned_pm_id: number;
       drafted_at: Date;
@@ -130,14 +148,17 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       delivery_status: string;
       ledger_verified: boolean;
       unit_label: string;
+      buildium_lease_id: string;
+      rent_due_day: number;
+      grace_period_days: number;
       property_name: string;
       property_address: string;
       assigned_pm_name: string;
     }>(
       `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
-              n.amount_due_at_send, n.days_late_at_send, n.letter_template_id,
+              n.amount_due_at_send, n.days_late_at_send, n.voided_reason, n.letter_template_id,
               n.assigned_pm_id, n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
-              l.unit_label,
+              l.unit_label, l.buildium_lease_id, l.rent_due_day, l.grace_period_days,
               p.name AS property_name,
               (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
               pm.display_name AS assigned_pm_name
@@ -152,6 +173,75 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       return null;
     }
     const notice = noticeResult.rows[0];
+
+    // Live re-check: a draft notice's numbers are re-verified against
+    // Buildium the moment the page loads, not just at the moment of Send —
+    // per Jason's report of a notice showing a stale total for a lease that
+    // had been paid off that same day, and new same-day charges not
+    // appearing either. A sent/voided/bounced notice is never touched here
+    // — that stays a permanent historical record of what actually happened.
+    // Same field shape as lineItemsResult.rows below (snake_case) so
+    // downstream code (sumBucket, the response's lineItems.items map) works
+    // unchanged regardless of which source populated `lineItems`.
+    let liveLineItems: null | {
+      bucket: string;
+      gl_account_name: string;
+      description: string | null;
+      amount: string;
+      charge_date: string | null;
+    }[] = null;
+    let liveDueDate: Date | null = null;
+    let liveNoticeDate: Date | null = null;
+
+    if (notice.status === "draft") {
+      const staleCheck = await checkLiveBalanceAndVoidIfStale(client, {
+        noticeId: notice.id,
+        leaseId: notice.lease_id,
+        buildiumLeaseId: notice.buildium_lease_id,
+        actorType: "system",
+        actorId: "notice_review_page_load",
+        triggerDescription: "when the notice was opened for review",
+        legalBasis: "stale_draft_protection",
+        trace: startTrace(),
+      });
+
+      if (staleCheck.voided) {
+        notice.status = "voided";
+        notice.amount_due_at_send = String(staleCheck.liveBalance);
+        notice.voided_reason = `Tenant paid down below de minimis threshold when the notice was opened for review.`;
+      } else {
+        let classifiedBalance;
+        try {
+          classifiedBalance = await fetchAndClassifyLeaseCharges(notice.buildium_lease_id);
+        } catch (err) {
+          if (err instanceof UnclassifiedChargeBlockedError) {
+            return {
+              liveCheckError:
+                "Could not safely calculate this notice's live total: some current charges couldn't be classified. Check with Jason before sending.",
+            };
+          }
+          throw err;
+        }
+        const { dueDate, daysLate } = calculateLateness({
+          rentDueDay: notice.rent_due_day,
+          gracePeriodDays: notice.grace_period_days,
+          balance: staleCheck.liveBalance,
+          today: new Date(),
+          deMinimisThreshold: staleCheck.deMinimisThreshold,
+        });
+        notice.amount_due_at_draft = String(staleCheck.liveBalance);
+        notice.days_late_at_draft = daysLate;
+        liveDueDate = dueDate;
+        liveNoticeDate = new Date();
+        liveLineItems = classifiedBalance.positiveLines.map((line) => ({
+          bucket: line.bucket,
+          gl_account_name: line.glAccountName,
+          description: line.description,
+          amount: String(line.amount),
+          charge_date: line.chargeDate,
+        }));
+      }
+    }
 
     const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
       "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
@@ -195,14 +285,20 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       [noticeId]
     );
     const lineItemStage = lineItemsResult.rows.some((r) => r.snapshot_stage === "send") ? "send" : "draft";
-    const lineItems = lineItemsResult.rows.filter((r) => r.snapshot_stage === lineItemStage);
+    // liveLineItems (set above) replaces the stored snapshot for a draft
+    // notice that just passed its live re-check — the live classification is
+    // more current than whatever was stored when the notice was drafted,
+    // possibly days ago. A sent/voided/bounced notice always keeps its
+    // stored, frozen snapshot (liveLineItems stays null in that case).
+    const lineItems = liveLineItems ?? lineItemsResult.rows.filter((r) => r.snapshot_stage === lineItemStage);
 
     // Amount/days-late used for the preview: the "send" snapshot if this
-    // notice has already been sent, otherwise the "draft" snapshot — same
-    // precedence sendNotice.ts's own columns follow.
+    // notice has already been sent, otherwise the "draft" snapshot (which,
+    // for a still-open draft, was just refreshed to the live figure above)
+    // — same precedence sendNotice.ts's own columns follow.
     const amountDue = notice.amount_due_at_send ?? notice.amount_due_at_draft;
     const daysLate = notice.days_late_at_send ?? notice.days_late_at_draft;
-    const dueDateSource = notice.sent_at ?? notice.drafted_at;
+    const dueDateSource = liveDueDate ?? notice.sent_at ?? notice.drafted_at;
 
     // Bucket sums for the itemized merge fields — same buckets
     // glClassification.ts writes to notice_line_items with ('rent' |
@@ -225,37 +321,33 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
     const { amount: courtCosts } = await getEstimatedCourtCosts(client);
     const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
 
-    // Rendered once per "to" recipient, same as sendNotice.ts — roommates
-    // each see their own name in the body, even though CC'd staff don't get
-    // their own copy of the merge fields.
-    const renderedRecipients = toRecipients.map((toRecipient) => {
-      const mergeFields: MergeFields = {
-        tenant_name: toRecipient.full_name ?? "Tenant",
-        unit_label: notice.unit_label,
-        amount_due: formatCurrency(Number(amountDue)),
-        days_late: String(daysLate),
-        due_date: dueDateSource.toISOString().slice(0, 10),
-        notice_date: (notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
-        property_address: notice.property_address,
-        pm_name: notice.assigned_pm_name,
-        rent_amount_due: formatCurrency(sumBucket("rent")),
-        late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
-        misc_amount_due: formatCurrency(sumBucket("other")),
-        court_costs_amount: formatCurrency(courtCosts),
-        attorney_fees_amount: formatCurrency(attorneyFees),
-        total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
-      };
-
-      return {
-        tenantName: mergeFields.tenant_name,
-        emailAddress: toRecipient.email_address,
-        deliveryStatus: toRecipient.delivery_status,
-        // escapeForHtml split matches sendNotice.ts exactly: subject is a
-        // plain-text header, body becomes bodyHtml.
-        subject: renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false }),
-        bodyHtml: renderTemplate(template.body_markdown, mergeFields).replace(/\n/g, "<br>"),
-      };
-    });
+    // One combined render for every "to" recipient on the lease, matching
+    // sendNotice.ts's single-email-to-all-tenants design — tenant_name is a
+    // joined list ("Jane Doe and John Doe"), not one render per tenant.
+    const mergeFields: MergeFields = {
+      tenant_name: formatTenantNameList(toRecipients.map((r) => r.full_name ?? "Tenant")),
+      unit_label: notice.unit_label,
+      amount_due: formatCurrency(Number(amountDue)),
+      days_late: String(daysLate),
+      due_date: dueDateSource.toISOString().slice(0, 10),
+      notice_date: (liveNoticeDate ?? notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
+      property_address: notice.property_address,
+      pm_name: notice.assigned_pm_name,
+      rent_amount_due: formatCurrency(sumBucket("rent")),
+      late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
+      misc_amount_due: formatCurrency(sumBucket("other")),
+      court_costs_amount: formatCurrency(courtCosts),
+      attorney_fees_amount: formatCurrency(attorneyFees),
+      total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
+    };
+    // escapeForHtml split matches sendNotice.ts exactly: subject is a
+    // plain-text header, body becomes bodyHtml.
+    const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
+    // Same escapeForHtml: false + renderNoticeBodyToHtml pairing sendNotice.ts
+    // uses — this preview must match what actually gets sent exactly,
+    // including paragraph reflow (not a literal <br> per source line break).
+    const renderedBody = renderTemplate(template.body_markdown, mergeFields, { escapeForHtml: false });
+    const bodyHtml = renderNoticeBodyToHtml(renderedBody);
 
     return {
       id: notice.id,
@@ -269,12 +361,16 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       daysLateAtDraft: notice.days_late_at_draft,
       amountDueAtSend: notice.amount_due_at_send,
       daysLateAtSend: notice.days_late_at_send,
+      voidedReason: notice.voided_reason,
       draftedAt: notice.drafted_at,
       sentAt: notice.sent_at,
       deliveryStatus: notice.delivery_status,
       ledgerVerified: notice.ledger_verified,
+      // "live" (not "draft"/"send") tells the PM these numbers were just
+      // re-checked against Buildium this instant, not read from whatever
+      // was true when the notice was originally drafted.
       lineItems: {
-        snapshotStage: lineItemStage,
+        snapshotStage: liveLineItems !== null ? "live" : lineItemStage,
         items: lineItems.map((li) => ({
           bucket: li.bucket,
           glAccountName: li.gl_account_name,
@@ -284,15 +380,26 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
         })),
       },
       ccRecipients: ccRecipients.map((r) => ({ emailAddress: r.email_address, deliveryStatus: r.delivery_status })),
-      // One rendered subject/body per "to" recipient (usually one, more if
-      // there are roommates) — this IS what sendNotice.ts would send, not
-      // an approximation of it.
-      recipients: renderedRecipients,
+      // Every "to" recipient on this lease (usually one, more if there are
+      // roommates/co-signers) — all of them get the ONE combined email/PDF
+      // below, matching sendNotice.ts's single-email-to-all-tenants design.
+      toRecipients: toRecipients.map((r) => ({
+        tenantName: r.full_name ?? "Tenant",
+        emailAddress: r.email_address,
+        deliveryStatus: r.delivery_status,
+      })),
+      // This IS what sendNotice.ts would send, not an approximation of it.
+      subject,
+      bodyHtml,
     };
   });
 
   if (!detail) {
     res.status(404).json({ error: "Notice not found or not visible to you." });
+    return;
+  }
+  if ("liveCheckError" in detail) {
+    res.status(500).json({ error: detail.liveCheckError });
     return;
   }
   res.json({ notice: detail });
@@ -309,10 +416,10 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
 // Same withPmScope/RLS visibility as every other route here — a PM can only
 // generate a PDF for a notice actually visible to them.
 //
-// A notice can have more than one "to" recipient (roommates/co-signers),
-// each seeing their own name in the body — ?recipient=<email> selects which
-// one to render; omitted defaults to the first "to" recipient, matching the
-// order the detail route's `recipients` array already returns.
+// A notice can have more than one "to" recipient (roommates/co-signers) —
+// this PDF combines all of them into one tenant_name line (matching
+// sendNotice.ts's single-email-to-all-tenants design), not one PDF per
+// recipient.
 noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
   const session = req.session!;
   const noticeId = Number(req.params.id);
@@ -320,13 +427,13 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
     res.status(400).json({ error: "Invalid notice id." });
     return;
   }
-  const requestedRecipientEmail =
-    typeof req.query.recipient === "string" ? req.query.recipient : undefined;
 
   try {
     const built = await withPmScope(session.pmUserId, async (client) => {
       const noticeResult = await client.query<{
         id: number;
+        lease_id: number;
+        status: string;
         amount_due_at_draft: string;
         days_late_at_draft: number;
         amount_due_at_send: string | null;
@@ -335,13 +442,16 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
         drafted_at: Date;
         sent_at: Date | null;
         unit_label: string;
+        buildium_lease_id: string;
+        rent_due_day: number;
+        grace_period_days: number;
         property_address: string;
         assigned_pm_name: string;
       }>(
-        `SELECT n.id, n.amount_due_at_draft, n.days_late_at_draft,
+        `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
                 n.amount_due_at_send, n.days_late_at_send, n.letter_template_id,
                 n.drafted_at, n.sent_at,
-                l.unit_label,
+                l.unit_label, l.buildium_lease_id, l.rent_due_day, l.grace_period_days,
                 (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
                 pm.display_name AS assigned_pm_name
          FROM notices n
@@ -355,6 +465,44 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
         return null;
       }
       const notice = noticeResult.rows[0];
+
+      // Same live re-check as the detail route above — the PDF must match
+      // what that page just showed, not fall back to a stale snapshot the
+      // moment someone clicks "View / Download PDF".
+      let liveLineItems: null | { bucket: string; amount: string }[] = null;
+      let liveDueDate: Date | null = null;
+      let liveNoticeDate: Date | null = null;
+
+      if (notice.status === "draft") {
+        const staleCheck = await checkLiveBalanceAndVoidIfStale(client, {
+          noticeId: notice.id,
+          leaseId: notice.lease_id,
+          buildiumLeaseId: notice.buildium_lease_id,
+          actorType: "system",
+          actorId: "notice_pdf_page_load",
+          triggerDescription: "when the notice PDF was opened for review",
+          legalBasis: "stale_draft_protection",
+          trace: startTrace(),
+        });
+
+        if (staleCheck.voided) {
+          return { voidedWhileGenerating: true as const };
+        }
+
+        const classifiedBalance = await fetchAndClassifyLeaseCharges(notice.buildium_lease_id);
+        const { dueDate, daysLate } = calculateLateness({
+          rentDueDay: notice.rent_due_day,
+          gracePeriodDays: notice.grace_period_days,
+          balance: staleCheck.liveBalance,
+          today: new Date(),
+          deMinimisThreshold: staleCheck.deMinimisThreshold,
+        });
+        notice.amount_due_at_draft = String(staleCheck.liveBalance);
+        notice.days_late_at_draft = daysLate;
+        liveDueDate = dueDate;
+        liveNoticeDate = new Date();
+        liveLineItems = classifiedBalance.positiveLines.map((line) => ({ bucket: line.bucket, amount: String(line.amount) }));
+      }
 
       const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
         "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
@@ -373,36 +521,30 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
       if (recipientsResult.rows.length === 0) {
         return { notFoundReason: "no_to_recipients" as const };
       }
-      const toRecipient = requestedRecipientEmail
-        ? recipientsResult.rows.find((r) => r.email_address === requestedRecipientEmail)
-        : recipientsResult.rows[0];
-      if (!toRecipient) {
-        return { notFoundReason: "recipient_not_found" as const };
-      }
 
       const lineItemsResult = await client.query<{ snapshot_stage: string; bucket: string; amount: string }>(
         `SELECT snapshot_stage, bucket, amount FROM notice_line_items WHERE notice_id = $1`,
         [noticeId]
       );
       const lineItemStage = lineItemsResult.rows.some((r) => r.snapshot_stage === "send") ? "send" : "draft";
-      const lineItems = lineItemsResult.rows.filter((r) => r.snapshot_stage === lineItemStage);
+      const lineItems = liveLineItems ?? lineItemsResult.rows.filter((r) => r.snapshot_stage === lineItemStage);
       const sumBucket = (bucket: string) =>
         lineItems.filter((li) => li.bucket === bucket).reduce((sum, li) => sum + Number(li.amount), 0);
 
       const amountDue = notice.amount_due_at_send ?? notice.amount_due_at_draft;
       const daysLate = notice.days_late_at_send ?? notice.days_late_at_draft;
-      const dueDateSource = notice.sent_at ?? notice.drafted_at;
+      const dueDateSource = liveDueDate ?? notice.sent_at ?? notice.drafted_at;
 
       const { amount: courtCosts } = await getEstimatedCourtCosts(client);
       const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
 
       const mergeFields: MergeFields = {
-        tenant_name: toRecipient.full_name ?? "Tenant",
+        tenant_name: formatTenantNameList(recipientsResult.rows.map((r) => r.full_name ?? "Tenant")),
         unit_label: notice.unit_label,
         amount_due: formatCurrency(Number(amountDue)),
         days_late: String(daysLate),
         due_date: dueDateSource.toISOString().slice(0, 10),
-        notice_date: (notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
+        notice_date: (liveNoticeDate ?? notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
         property_address: notice.property_address,
         pm_name: notice.assigned_pm_name,
         rent_amount_due: formatCurrency(sumBucket("rent")),
@@ -421,7 +563,13 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
       return;
     }
     if ("notFoundReason" in built) {
-      res.status(404).json({ error: "No matching recipient found for this notice." });
+      res.status(404).json({ error: "This notice has no tenant recipients to generate a PDF for." });
+      return;
+    }
+    if ("voidedWhileGenerating" in built) {
+      res
+        .status(409)
+        .json({ error: "This notice was just canceled — the tenant's balance is now paid down below the threshold. Refresh the page to see the update." });
       return;
     }
 
@@ -431,6 +579,13 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.send(pdf);
   } catch (err) {
+    if (err instanceof UnclassifiedChargeBlockedError) {
+      console.error("notice PDF generation failed: unclassified live charge", err.message);
+      res
+        .status(500)
+        .json({ error: "Could not safely calculate this notice's live total: some current charges couldn't be classified. Check with Jason before sending." });
+      return;
+    }
     if (err instanceof NoticeBodyParseError) {
       console.error("notice PDF generation failed: body parse error", err.message);
       res.status(500).json({ error: "Could not generate the PDF: the notice text didn't match the expected layout. Check with Jason before sending." });

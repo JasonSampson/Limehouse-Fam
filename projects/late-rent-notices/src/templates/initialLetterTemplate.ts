@@ -65,18 +65,36 @@
 // testing this rendered output end-to-end, then Judge's review — has passed.
 // It is safe to load in shadow mode, where Send is a no-op.
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
-export const INITIAL_TEMPLATE_VERSION = 3;
+export const INITIAL_TEMPLATE_VERSION = 4;
 
 export const INITIAL_SUBJECT_LINE =
   "NOTICE OF DEFAULT — FAILURE TO PAY RENT — {{unit_label}}";
 
+// v4 change from v3: the header block was restructured to match the actual
+// table layout in the attorney's original document, which the earlier
+// version got wrong. The original's header is a 3-row, 2-column table with
+// the tenant's info on the left and Limehouse's name/address on the right,
+// line for line (verified directly against the source .docx's raw XML —
+// see generateNoticePdf.ts's parser for the corresponding table-building
+// logic). v3 instead squashed TO and FROM onto one line and invented two
+// labeled lines ("Property:" / "Date of Notice:") that do not exist
+// anywhere in the original document. v4 fixes both: property_address and
+// unit_label now fill the two blank lines under "TO:" (mirroring the two
+// address lines under "FROM:" in the original), and the separate "Date of
+// Notice:" line is removed — the date already appears in the body, both in
+// the "TOTAL DUE LANDLORD AS OF {{notice_date}}" line and the certification
+// paragraph, exactly as it does in the original (which has no standalone
+// date line either). No substantive wording changed; Mason re-reviewed only
+// the header restructuring, not the already-approved body clauses.
 export const INITIAL_BODY_MARKDOWN = `
 **NOTICE OF DEFAULT – FAILURE TO PAY RENT**
 
-TO: {{tenant_name}} / FROM: Limehouse Property Management, 6056 Providence Rd, Suite 200, Virginia Beach, VA 23464
-
-Property: {{property_address}}, {{unit_label}}
-Date of Notice: {{notice_date}}
+TO: {{tenant_name}}
+{{property_address}}
+{{unit_label}}
+FROM: Limehouse Property Management
+6056 Providence Rd, Suite 200
+Virginia Beach, VA 23464
 
 In accordance with 55.1-1245, Code of Virginia, you are hereby notified that
 you are in default in the payment of rent, late charges and miscellaneous

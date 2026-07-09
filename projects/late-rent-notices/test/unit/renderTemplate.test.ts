@@ -111,10 +111,10 @@ describe("renderTemplate — subject-line-not-escaped behavior (escapeForHtml: f
   });
 });
 
-describe("renderTemplate — full initial notice letter (v3, actual attorney-sourced template)", () => {
+describe("renderTemplate — full initial notice letter (v4, actual attorney-sourced template)", () => {
   it("is the expected template key/version this test suite is pinned against", () => {
     expect(INITIAL_TEMPLATE_KEY).toBe("14_day_pay_or_quit");
-    expect(INITIAL_TEMPLATE_VERSION).toBe(3);
+    expect(INITIAL_TEMPLATE_VERSION).toBe(4);
   });
 
   it("renders the full body with realistic tenant data and contains every populated field's value", () => {

@@ -30,6 +30,7 @@ import { loadEnv } from "../config/env.js";
 import type { MergeFields } from "../templates/renderTemplate.js";
 import { renderTemplate } from "../templates/renderTemplate.js";
 import { INITIAL_BODY_MARKDOWN } from "../templates/initialLetterTemplate.js";
+import { escapeHtml, boldMarkdownToHtml, groupLinesIntoParagraphs, paragraphsToHtml } from "./noticeBodyFormatting.js";
 
 // Common install locations for Chrome/Chromium/Edge, checked in order, used
 // only when CHROME_EXECUTABLE_PATH isn't set. Windows dev path is listed
@@ -69,24 +70,6 @@ function resolveChromeExecutablePath(): string {
   return found;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Converts **bold** markdown spans (the only markdown construct used in
-// INITIAL_BODY_MARKDOWN) into <strong> tags, on already-HTML-escaped text.
-// Safe because escapeHtml() above never produces a literal "**" sequence
-// (it only touches & < > " '), so this can run as a second pass without
-// double-escaping or accidentally matching escaped entities.
-function boldMarkdownToHtml(escapedText: string): string {
-  return escapedText.replace(/\*\*(.+?)\*\*/gs, "<strong>$1</strong>");
-}
-
 // Splits the rendered (post-merge-field) plain-text notice body into the
 // three visual regions the attorney form uses tables for, plus the
 // paragraphs before/between/after them. This is a structural split of
@@ -95,9 +78,9 @@ function boldMarkdownToHtml(escapedText: string): string {
 // or paraphrase a single word of the wording itself.
 //
 // Matched against the literal line structure of INITIAL_BODY_MARKDOWN (see
-// that file): the "TO: ... / FROM: ..." header line, the "ITEMIZED CHARGES:"
-// heading followed by 4 fixed lines, and the "Court Costs:" heading-less
-// block of 3 fixed lines. If a future template version reorders or renames
+// that file): the six-line "TO:"/"FROM:" header block, the "ITEMIZED
+// CHARGES:" heading followed by 4 fixed lines, and the "Court Costs:"
+// heading-less block of 3 fixed lines. If a future template version reorders or renames
 // these lines, this function will throw NoticeBodyParseError rather than
 // silently mis-render a legal document — a loud failure here is much safer
 // than a PDF that quietly drops a dollar figure.
@@ -109,9 +92,15 @@ export class NoticeBodyParseError extends Error {
 }
 
 interface ParsedNoticeBody {
-  toLine: string; // "TO: {name} / FROM: Limehouse Property Management, {address}"
-  propertyLine: string; // "Property: {address}, {unit}"
-  dateLine: string; // "Date of Notice: {date}"
+  // Header block: a 3-row, 2-column table in the original document —
+  // tenant info on the left, Limehouse's name/address on the right, line
+  // for line. See buildPrintHtml for how these six lines become that table.
+  toName: string; // "TO: {tenant_name}"
+  toPropertyAddress: string; // "{property_address}"
+  toUnitLabel: string; // "{unit_label}"
+  fromName: string; // "FROM: Limehouse Property Management"
+  fromAddressLine1: string; // "6056 Providence Rd, Suite 200"
+  fromAddressLine2: string; // "Virginia Beach, VA 23464"
   beforeItemized: string[]; // paragraphs between the header and "ITEMIZED CHARGES:"
   itemized: { rentLine: string; lateFeeLine: string; miscLine: string; totalLine: string };
   betweenTables: string[]; // paragraphs between the itemized table and the fees lines
@@ -119,53 +108,16 @@ interface ParsedNoticeBody {
   afterFees: string[]; // paragraphs after the fees block through the signature
 }
 
-// Regroups a slice of lines back into logical paragraphs, joining wrapped
-// lines (no blank line between them) into one flowing string and starting a
-// new paragraph at each blank line. INITIAL_BODY_MARKDOWN wraps its prose at
-// a fixed column width for source-file readability — e.g. the bolded
-// "**YOU MAY AVOID..." warning spans 4 separate `\n`-terminated lines with
-// no blank line between them, all as ONE paragraph in the original document.
-// Splitting naively on every "\n" (as an earlier version of this function
-// did) breaks that one paragraph into 4 separate <p> tags, which both
-// changes the visual paragraph structure and prevents the **bold** regex
-// below from ever matching, since the opening ** and closing ** end up in
-// different strings entirely.
-//
-// Wrapped prose lines join with a plain space (so the browser reflows them
-// naturally, same as any paragraph). The one exception is the closing
-// signature block ("BY: {{pm_name}} (Authorized Agent)" / "Limehouse
-// Property Management") — two short field-like lines, not wrapped prose —
-// which join with the \x00 sentinel below instead, converted to a real
-// line break (<br>) by paragraphsToHtml so the signature keeps its original
-// two-line shape instead of running together as one sentence.
-const SIGNATURE_LINE_BREAK = "\x00";
-
-function groupLinesIntoParagraphs(lines: string[]): string[] {
-  const paragraphs: string[] = [];
-  let current: string[] = [];
-  const flush = () => {
-    if (current.length === 0) return;
-    const joiner = current[0].startsWith("BY:") ? SIGNATURE_LINE_BREAK : " ";
-    paragraphs.push(current.join(joiner));
-    current = [];
-  };
-  for (const line of lines) {
-    if (line.trim().length === 0) {
-      flush();
-      continue;
-    }
-    current.push(line.trim());
-  }
-  flush();
-  return paragraphs;
-}
-
+// groupLinesIntoParagraphs (shared with the email path — see
+// noticeBodyFormatting.ts) joins INITIAL_BODY_MARKDOWN's source-file
+// hard-wrapped lines back into real paragraphs before this module further
+// splits some of those paragraph slices into the printed-form's table
+// regions below.
 function parseNoticeBody(renderedBody: string): ParsedNoticeBody {
   const lines = renderedBody.split("\n");
 
   const toLineIdx = lines.findIndex((l) => l.trimStart().startsWith("TO:"));
-  const propertyLineIdx = lines.findIndex((l) => l.trimStart().startsWith("Property:"));
-  const dateLineIdx = lines.findIndex((l) => l.trimStart().startsWith("Date of Notice:"));
+  const fromLineIdx = lines.findIndex((l) => l.trimStart().startsWith("FROM:"));
   const itemizedHeadingIdx = lines.findIndex((l) => l.includes("ITEMIZED CHARGES:"));
   const rentLineIdx = lines.findIndex((l) => l.trimStart().startsWith("Rent for the Month"));
   const lateFeeLineIdx = lines.findIndex((l) => l.trimStart().startsWith("Late Charges for Month"));
@@ -177,8 +129,7 @@ function parseNoticeBody(renderedBody: string): ParsedNoticeBody {
 
   const requiredIndexes: Record<string, number> = {
     toLine: toLineIdx,
-    propertyLine: propertyLineIdx,
-    dateLine: dateLineIdx,
+    fromLine: fromLineIdx,
     itemizedHeading: itemizedHeadingIdx,
     rentLine: rentLineIdx,
     lateFeeLine: lateFeeLineIdx,
@@ -193,15 +144,27 @@ function parseNoticeBody(renderedBody: string): ParsedNoticeBody {
       throw new NoticeBodyParseError(`expected line "${name}" not found in rendered notice body`);
     }
   }
+  // The header is exactly six lines: TO:, property address, unit label,
+  // FROM:, address line 1, address line 2 — in that fixed order. If a
+  // future template edit changes that shape, fail loudly rather than
+  // silently misplacing a line into the wrong table cell.
+  if (fromLineIdx !== toLineIdx + 3) {
+    throw new NoticeBodyParseError(
+      `expected exactly 2 lines (property address, unit label) between "TO:" and "FROM:", found ${fromLineIdx - toLineIdx - 1}`
+    );
+  }
 
-  const beforeItemized = groupLinesIntoParagraphs(lines.slice(dateLineIdx + 1, itemizedHeadingIdx));
+  const beforeItemized = groupLinesIntoParagraphs(lines.slice(fromLineIdx + 3, itemizedHeadingIdx));
   const betweenTables = groupLinesIntoParagraphs(lines.slice(totalDueLineIdx + 1, courtCostsLineIdx));
   const afterFees = groupLinesIntoParagraphs(lines.slice(totalFeesLineIdx + 1));
 
   return {
-    toLine: lines[toLineIdx].trim(),
-    propertyLine: lines[propertyLineIdx].trim(),
-    dateLine: lines[dateLineIdx].trim(),
+    toName: lines[toLineIdx].trim(),
+    toPropertyAddress: lines[toLineIdx + 1].trim(),
+    toUnitLabel: lines[toLineIdx + 2].trim(),
+    fromName: lines[fromLineIdx].trim(),
+    fromAddressLine1: lines[fromLineIdx + 1].trim(),
+    fromAddressLine2: lines[fromLineIdx + 2].trim(),
     beforeItemized,
     itemized: {
       rentLine: lines[rentLineIdx].trim(),
@@ -232,15 +195,6 @@ function splitLabelValue(line: string): { label: string; value: string } {
   return { label: line.slice(0, idx + 1).trim(), value: line.slice(idx + 1).trim() };
 }
 
-function paragraphsToHtml(paragraphs: string[]): string {
-  return paragraphs
-    .map((p) => {
-      const html = boldMarkdownToHtml(escapeHtml(p)).replaceAll(SIGNATURE_LINE_BREAK, "<br>");
-      return `<p>${html}</p>`;
-    })
-    .join("\n");
-}
-
 function tableGridCell(text: string): string {
   return `<td>${boldMarkdownToHtml(escapeHtml(text))}</td>`;
 }
@@ -250,12 +204,6 @@ function tableGridCell(text: string): string {
 // 1px solid black border on all sides, no shading, via a single shared CSS
 // class rather than per-cell inline borders.
 function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
-  // "TO: {name} / FROM: Limehouse Property Management, {address}" splits
-  // into the header table's two rows (TO / FROM), matching the original
-  // document's two-row-by-two-column header block.
-  const [toPart, fromPart] = parsed.toLine.split(" / FROM: ");
-  const toName = toPart.replace(/^TO:\s*/, "");
-
   const itemizedRent = splitLabelValue(parsed.itemized.rentLine);
   const itemizedLateFee = splitLabelValue(parsed.itemized.lateFeeLine);
   const itemizedMisc = splitLabelValue(parsed.itemized.miscLine);
@@ -299,10 +247,27 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
   }
   table.grid {
     width: 100%;
+    /* table-layout: fixed + the 50%/50% column widths below reproduce the
+       original document's own table grid exactly: every one of its three
+       tables defines two EQUAL-width gridCols (5231/5231, 5219/5219,
+       5189/5189 dxa — verified directly against that document's raw XML).
+       Without this, the browser's default auto layout sizes each column by
+       its content, so the wide label column crushes the dollar-amount
+       column down to barely its own text width — the $ figure ends up
+       jammed against the divider line instead of having the same visual
+       breathing room the original's even 50/50 split gives it. */
+    table-layout: fixed;
     border-collapse: collapse;
-    margin: 3pt 0;
+    /* No gap above (the original document always butts a table directly up
+       against whatever introduces it — a heading or a sentence ending in a
+       colon — with no blank line first). A full blank-line gap BELOW,
+       though: the original inserts an actual empty paragraph after every
+       one of its three tables before the next paragraph resumes, which
+       reads as a real line break, not the ~3pt sliver this used to have. */
+    margin: 0 0 12pt 0;
   }
   table.grid td {
+    width: 50%;
     border: 1px solid #000;
     padding: 0pt 5pt;
     vertical-align: top;
@@ -321,20 +286,9 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
   <h1 class="notice-heading">NOTICE OF DEFAULT &ndash; FAILURE TO PAY RENT</h1>
 
   <table class="grid">
-    <tr>
-      <td>TO:</td>
-      <td>${boldMarkdownToHtml(escapeHtml(toName))}</td>
-    </tr>
-    <tr>
-      <td>FROM:</td>
-      <td>${boldMarkdownToHtml(escapeHtml(fromPart ?? ""))}</td>
-    </tr>
-    <tr>
-      <td colspan="2">${boldMarkdownToHtml(escapeHtml(parsed.propertyLine))}</td>
-    </tr>
-    <tr>
-      <td colspan="2">${boldMarkdownToHtml(escapeHtml(parsed.dateLine))}</td>
-    </tr>
+    <tr>${tableGridCell(parsed.toName)}${tableGridCell(parsed.fromName)}</tr>
+    <tr>${tableGridCell(parsed.toPropertyAddress)}${tableGridCell(parsed.fromAddressLine1)}</tr>
+    <tr>${tableGridCell(parsed.toUnitLabel)}${tableGridCell(parsed.fromAddressLine2)}</tr>
   </table>
 
   ${paragraphsToHtml(parsed.beforeItemized)}

@@ -99,12 +99,34 @@ async function loadDashboard() {
   const owners = unwrap(ownersResult);
   const rentAndDeposit = unwrap(rentAndDepositResult);
   const delinquencyAging = unwrap(delinquencyAgingResult);
-  // /api/dashboard/financials/rent-collection returns { months, cachedAt,
-  // stale, lastError } (see dashboardRoutes.ts), not a bare array — unwrap
-  // it here once so every renderer below can keep treating rentCollection
-  // as a plain array of monthly rows, same as before.
+  // /api/dashboard/financials/rent-collection returns { months, yearly,
+  // sameMonthLastYear, cachedAt, stale, lastError } (see dashboardRoutes.ts).
+  // ADDED 2026-07-09: `months` is now a WIDER window (back ~2 years) AND
+  // includes the still-in-progress CURRENT month — its own by-3rd/10th/
+  // month-end figures are already correct at every point in the month (a
+  // live rolling number before each cutoff passes, the true final number
+  // once it does; see the note on this route in dashboardRoutes.ts for why).
+  //
+  // Two different slices of the same array serve two different purposes:
+  // `rentCollection` (chart + sparklines) explicitly excludes the current
+  // month, so the 12-MONTH CHART keeps showing only complete months,
+  // unchanged from before. `rentCollectionLatest` (the Rent By 3rd/10th
+  // TILES) uses the true latest entry, current month included, so those
+  // tiles show the most up-to-date number available rather than a stale
+  // one — see renderFinancials for the "(so far)" qualifier that keeps
+  // this honest about not-yet-passed cutoffs.
   const rentCollectionResponse = unwrap(rentCollectionResult);
-  const rentCollection = rentCollectionResponse ? rentCollectionResponse.months : null;
+  const rentCollectionFull = rentCollectionResponse ? rentCollectionResponse.months : null;
+  const now = new Date();
+  const currentMonthStr = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const todayDayOfMonth = now.getUTCDate();
+  const rentCollectionComplete = rentCollectionFull ? rentCollectionFull.filter((m) => m.month !== currentMonthStr) : null;
+  const rentCollection = rentCollectionComplete ? rentCollectionComplete.slice(-12) : null;
+  const rentCollectionLatest =
+    rentCollectionFull && rentCollectionFull.length > 0 ? rentCollectionFull[rentCollectionFull.length - 1] : null;
+  const isLatestMonthCurrent = rentCollectionLatest ? rentCollectionLatest.month === currentMonthStr : false;
+  const rentCollectionYearly = rentCollectionResponse ? rentCollectionResponse.yearly : null;
+  const rentCollectionSameMonthLastYear = rentCollectionResponse ? rentCollectionResponse.sameMonthLastYear : null;
   const propertyHealth = unwrap(propertyHealthResult);
   const doors = unwrap(doorsResult);
   const avgTenancy = unwrap(avgTenancyResult);
@@ -125,7 +147,7 @@ async function loadDashboard() {
 
   content.innerHTML = `
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
-    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection })}
+    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
     ${renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, daysOnMarket })}
@@ -265,14 +287,25 @@ function couldNotLoadTile({ id, label, sourceTags }) {
 // FINANCIALS
 // ---------------------------------------------------------------------
 
-function renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection }) {
-  // "Rent By 3rd" / "Rent By 10th" tiles show the most recent month's
-  // collection rate from the same 12-month series the chart below plots —
-  // there's no separate single-value endpoint for just this month, so the
-  // latest entry in rentCollection (sorted oldest-to-newest by the API) is
-  // this month's figure.
-  const latestMonth =
-    rentCollection && rentCollection.length > 0 ? rentCollection[rentCollection.length - 1] : null;
+function renderFinancials({
+  rentAndDeposit,
+  delinquencyAging,
+  rentCollection,
+  rentCollectionLatest,
+  isLatestMonthCurrent,
+  todayDayOfMonth,
+  rentCollectionYearly,
+  rentCollectionSameMonthLastYear,
+}) {
+  // "Rent By 3rd" / "Rent By 10th" tiles show the MOST CURRENT figure
+  // available — which, as of 2026-07-09, can be the still-in-progress
+  // current month (see the note in loadDashboard for why that's not
+  // stale/misleading data). If today hasn't reached a tile's own cutoff
+  // day yet, that tile's sub-label says "(so far)" so it's honest about
+  // being a live, still-moving number rather than a locked-in final one.
+  const latestMonth = rentCollectionLatest;
+  const thirdSoFar = isLatestMonthCurrent && todayDayOfMonth < 3;
+  const tenthSoFar = isLatestMonthCurrent && todayDayOfMonth < 10;
 
   const rentByThirdTrend = trendFromRentCollection(rentCollection, "paidByThirdPercent");
   const rentByTenthTrend = trendFromRentCollection(rentCollection, "paidByTenthPercent");
@@ -287,7 +320,7 @@ function renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection }) 
                 id: "rent-by-3rd",
                 label: "Rent By 3rd",
                 value: formatPercent(latestMonth.paidByThirdPercent),
-                sub: `${formatNumber(latestMonth.paidByThirdCount)} of ${formatNumber(latestMonth.totalLeasesDue)} leases`,
+                sub: `${formatNumber(latestMonth.paidByThirdCount)} of ${formatNumber(latestMonth.totalLeasesDue)} leases${thirdSoFar ? " (so far)" : ""}`,
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -301,7 +334,7 @@ function renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection }) 
                 id: "rent-by-10th",
                 label: "Rent By 10th",
                 value: formatPercent(latestMonth.paidByTenthPercent),
-                sub: `${formatNumber(latestMonth.paidByTenthCount)} of ${formatNumber(latestMonth.totalLeasesDue)} leases`,
+                sub: `${formatNumber(latestMonth.paidByTenthCount)} of ${formatNumber(latestMonth.totalLeasesDue)} leases${tenthSoFar ? " (so far)" : ""}`,
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -362,7 +395,14 @@ function renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection }) 
               : ""
           }
         </div>
-        ${renderRentCollectionChart(rentCollection)}
+        <div class="rent-collection-layout">
+          <div class="rent-collection-chart-col">
+            ${renderRentCollectionChart(rentCollection)}
+          </div>
+          <div class="rent-collection-side-col">
+            ${renderRentCollectionSidePanels(rentCollectionSameMonthLastYear, isLatestMonthCurrent ? rentCollectionLatest : null, rentCollectionYearly)}
+          </div>
+        </div>
       </div>
       <div class="chart-card">
         <p class="chart-card-title">Delinquency Aging</p>
@@ -394,6 +434,69 @@ function renderRentCollectionChart(rentCollection) {
     ],
     yFormat: (v) => `${v}%`,
   });
+}
+
+// ADDED 2026-07-09, per Jason directly: small panels to the right of the
+// existing 12-month chart — same-calendar-month-last-year, a LIVE current-
+// month-so-far rolling number next to it, and a by-year rollup list below.
+// All three use a DIFFERENT metric than the chart next to them (rent
+// collected by the end of the month, not by the 3rd/10th — see
+// paidByMonthEndPercent in rentCollection.ts), so each value is labeled
+// with its own month/year rather than assumed obvious from context.
+//
+// `currentMonthRow` is a plain MonthlyCollectionRate — the same shape as
+// every other row in the `months` array — passed in as null by the caller
+// unless the latest available month actually IS the current in-progress
+// one (see loadDashboard's isLatestMonthCurrent). Its paidByMonthEndPercent
+// is already a live "as of today" figure for an in-progress month with no
+// special-casing needed (see the note on resolveLeaseBalancesPerMonth in
+// rentCollection.ts for why that degeneration happens automatically).
+function renderRentCollectionSidePanels(sameMonthLastYear, currentMonthRow, yearly) {
+  const sameMonthHtml = sameMonthLastYear
+    ? `<div class="rc-side-stat">
+        <p class="rc-side-stat-label">${formatMonthLabel(sameMonthLastYear.lastYearMonth)}</p>
+        <p class="rc-side-stat-value">${formatPercent(sameMonthLastYear.lastYearPercent)}</p>
+      </div>`
+    : `<div class="rc-side-stat rc-side-stat-empty">
+        <p class="rc-side-stat-label">Same month last year</p>
+        <p class="rc-side-stat-value">—</p>
+      </div>`;
+
+  const currentMonthHtml =
+    currentMonthRow && currentMonthRow.totalLeasesDue > 0
+      ? `<div class="rc-side-stat">
+          <p class="rc-side-stat-label">${formatMonthLabel(currentMonthRow.month)} (so far)</p>
+          <p class="rc-side-stat-value">${formatPercent(currentMonthRow.paidByMonthEndPercent)}</p>
+        </div>`
+      : `<div class="rc-side-stat rc-side-stat-empty">
+          <p class="rc-side-stat-label">This month (so far)</p>
+          <p class="rc-side-stat-value">—</p>
+        </div>`;
+
+  // Shows the month right alongside the year (e.g. "Jun 2026" rather than a
+  // bare "2026") using the LAST month actually included in that year's
+  // rollup — for a complete past year this reads as "Dec 2025," for the
+  // current year it makes the year-to-date-ness obvious at a glance.
+  const yearlyRowsHtml =
+    yearly && yearly.length > 0
+      ? yearly
+          .map(
+            (y) =>
+              `<div class="rc-yearly-row"><span>${formatMonthLabel(y.lastMonth)}</span><span>${formatPercent(y.paidByMonthEndPercent)}</span></div>`
+          )
+          .join("")
+      : `<p class="rc-side-stat-empty-text">No yearly history yet</p>`;
+
+  return `
+    <div class="rc-side-stat-row">
+      ${sameMonthHtml}
+      ${currentMonthHtml}
+    </div>
+    <div class="rc-yearly-list">
+      <p class="rc-side-panel-title">By Year (Month End)</p>
+      ${yearlyRowsHtml}
+    </div>
+  `;
 }
 
 // Delinquency Aging: styled as horizontal filled progress-bar rows (not a

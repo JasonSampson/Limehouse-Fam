@@ -356,6 +356,109 @@ main {
   vertical-align: middle;
 }
 
+/* ADDED 2026-07-09: side panels next to the Rent Collection chart —
+   same-month-last-year callout + a by-year rollup list, both using the
+   "collected by month end" metric rather than the chart's own by-3rd/10th. */
+.rent-collection-layout {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.rent-collection-chart-col {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rent-collection-side-col {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rc-side-stat-row {
+  display: flex;
+  gap: 10px;
+}
+
+.rc-side-stat-row > .rc-side-stat {
+  flex: 1;
+  min-width: 0;
+}
+
+.rc-side-stat {
+  background: var(--bg-subtle, #f5f6f4);
+  border-radius: 6px;
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.rc-side-stat-empty {
+  opacity: 0.6;
+}
+
+.rc-side-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 4px;
+}
+
+.rc-side-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.rc-yearly-list {
+  background: var(--bg-subtle, #f5f6f4);
+  border-radius: 6px;
+  padding: 10px 12px;
+  flex: 1;
+}
+
+.rc-side-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  margin: 0 0 8px;
+}
+
+.rc-yearly-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-subtle, #e2e4e0);
+}
+
+.rc-yearly-row:first-of-type {
+  border-top: none;
+}
+
+.rc-side-stat-empty-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .rent-collection-layout {
+    flex-direction: column;
+  }
+
+  .rent-collection-side-col {
+    flex: 0 0 auto;
+    flex-direction: row;
+  }
+
+  .rent-collection-side-col > * {
+    flex: 1;
+  }
+}
+
 .chart-canvas-wrap {
   position: relative;
   width: 100%;

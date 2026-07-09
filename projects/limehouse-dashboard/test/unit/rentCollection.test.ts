@@ -10,10 +10,15 @@ import {
   extractDepositDisposition,
   summarizeSecurityDepositWithheld,
   last12Months,
+  monthsSinceYearsAgo,
+  lastDayOfMonth,
+  summarizeYearlyCollectionRates,
+  findSameMonthLastYear,
   excludeCurrentInProgressMonth,
   buildDuePerMonth,
   type LeasePaymentForMonth,
   type LeaseBalanceForMonth,
+  type MonthlyCollectionRate,
   type PastLeaseDeposit,
   type LeaseDepositDisposition,
 } from "../../src/kpi/rentCollection.js";
@@ -117,7 +122,7 @@ describe("summarizeRentAndDeposit", () => {
 });
 
 function balance(overrides: Partial<LeaseBalanceForMonth>): LeaseBalanceForMonth {
-  return { leaseId: "1", month: "2026-06", balanceByThird: 0, balanceByTenth: 0, ...overrides };
+  return { leaseId: "1", month: "2026-06", balanceByThird: 0, balanceByTenth: 0, balanceByMonthEnd: 0, ...overrides };
 }
 
 describe("summarizeMonthlyCollectionRates", () => {
@@ -129,10 +134,10 @@ describe("summarizeMonthlyCollectionRates", () => {
       { leaseId: "4", month: "2026-06" },
     ];
     const balances: LeaseBalanceForMonth[] = [
-      balance({ leaseId: "1", balanceByThird: 0, balanceByTenth: 0 }), // clear by 3rd and by 10th
-      balance({ leaseId: "2", balanceByThird: 1200, balanceByTenth: 0 }), // clear by 10th only
-      balance({ leaseId: "3", balanceByThird: 1200, balanceByTenth: 1200 }), // still owes as of both
-      balance({ leaseId: "4", balanceByThird: 1200, balanceByTenth: 1200 }), // unpaid
+      balance({ leaseId: "1", balanceByThird: 0, balanceByTenth: 0, balanceByMonthEnd: 0 }), // clear by 3rd, 10th, and month end
+      balance({ leaseId: "2", balanceByThird: 1200, balanceByTenth: 0, balanceByMonthEnd: 0 }), // clear by 10th and month end only
+      balance({ leaseId: "3", balanceByThird: 1200, balanceByTenth: 1200, balanceByMonthEnd: 0 }), // still owes as of 3rd/10th, pays by month end
+      balance({ leaseId: "4", balanceByThird: 1200, balanceByTenth: 1200, balanceByMonthEnd: 1200 }), // never pays, even by month end
     ];
     const result = summarizeMonthlyCollectionRates(duePerMonth, balances);
     expect(result).toEqual([
@@ -143,6 +148,8 @@ describe("summarizeMonthlyCollectionRates", () => {
         paidByThirdPercent: 25,
         paidByTenthCount: 2,
         paidByTenthPercent: 50,
+        paidByMonthEndCount: 3,
+        paidByMonthEndPercent: 75,
       },
     ]);
   });
@@ -199,6 +206,29 @@ describe("last12Months", () => {
       "2026-06",
       "2026-07",
     ]);
+  });
+});
+
+describe("monthsSinceYearsAgo", () => {
+  it("returns every month from January of (asOf's year minus yearsBack) through asOf's own month, oldest first", () => {
+    const result = monthsSinceYearsAgo(new Date("2026-07-03T00:00:00Z"), 2);
+    expect(result[0]).toBe("2024-01");
+    expect(result[result.length - 1]).toBe("2026-07");
+    expect(result).toHaveLength(31); // Jan 2024 through Jul 2026 inclusive = 24 + 7 = 31 months
+  });
+
+  it("is a superset of last12Months for the same asOf date", () => {
+    const asOf = new Date("2026-07-03T00:00:00Z");
+    const wide = monthsSinceYearsAgo(asOf, 2);
+    const narrow = last12Months(asOf);
+    for (const m of narrow) {
+      expect(wide).toContain(m);
+    }
+  });
+
+  it("yearsBack of 0 returns just the current calendar year so far", () => {
+    const result = monthsSinceYearsAgo(new Date("2026-03-15T00:00:00Z"), 0);
+    expect(result).toEqual(["2026-01", "2026-02", "2026-03"]);
   });
 });
 
@@ -414,13 +444,13 @@ describe("resolveLeaseBalancesPerMonth", () => {
       txn({ Id: 2, Date: "2026-06-01", TransactionType: "Payment", TotalAmount: -1500, glLines: [[RENT_INCOME, "Rent Income", -1500]] }),
     ];
     const result = resolveLeaseBalancesPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 0, balanceByTenth: 0 }]);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 0, balanceByTenth: 0, balanceByMonthEnd: 0 }]);
   });
 
   it("reports the full charge as owed at both cutoffs when nothing has been paid", () => {
     const transactions = [txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500, glLines: [[RENT_INCOME, "Rent Income", 1500]] })];
     const result = resolveLeaseBalancesPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 1500, balanceByTenth: 1500 }]);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 1500, balanceByTenth: 1500, balanceByMonthEnd: 1500 }]);
   });
 
   it("reports the remaining balance owed after a partial payment, not just paid/unpaid", () => {
@@ -431,7 +461,7 @@ describe("resolveLeaseBalancesPerMonth", () => {
       txn({ Id: 2, Date: "2026-06-02", TransactionType: "Payment", TotalAmount: -1450, glLines: [[RENT_INCOME, "Rent Income", -1450]] }),
     ];
     const result = resolveLeaseBalancesPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 50, balanceByTenth: 50 }]);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 50, balanceByTenth: 50, balanceByMonthEnd: 50 }]);
   });
 
   it("date boundary: a credit dated exactly on the 3rd/10th counts toward that cutoff (inclusive)", () => {
@@ -441,7 +471,7 @@ describe("resolveLeaseBalancesPerMonth", () => {
       txn({ Id: 3, Date: "2026-06-10", TransactionType: "Payment", TotalAmount: -400, glLines: [[RENT_INCOME, "Rent Income", -400]] }),
     ];
     const result = resolveLeaseBalancesPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 400, balanceByTenth: 0 }]);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 400, balanceByTenth: 0, balanceByMonthEnd: 0 }]);
   });
 
   it("balance owed shrinks as later credits (dated after the 3rd but by the 10th) come in", () => {
@@ -450,7 +480,30 @@ describe("resolveLeaseBalancesPerMonth", () => {
       txn({ Id: 2, Date: "2026-06-07", TransactionType: "Payment", TotalAmount: -1000, glLines: [[RENT_INCOME, "Rent Income", -1000]] }),
     ];
     const result = resolveLeaseBalancesPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 1000, balanceByTenth: 0 }]);
+    expect(result).toEqual([{ leaseId: "10", month: "2026-06", balanceByThird: 1000, balanceByTenth: 0, balanceByMonthEnd: 0 }]);
+  });
+
+  // ADDED 2026-07-09, per Jason directly: the key insight behind why the
+  // sync no longer excludes the still-in-progress current month at all
+  // (see syncRoutes.ts). A cutoff that hasn't happened yet (e.g. asking for
+  // "balance by the 10th" while today is only the 7th) can only ever see
+  // whatever credits actually exist in Buildium's real data — and Buildium
+  // never has transactions dated in the future. So balanceByTenth and
+  // balanceByMonthEnd here AUTOMATICALLY equal "balance as of the last
+  // known transaction" (i.e. as of today, once synced) with zero special-
+  // casing needed — a genuinely live, correct, rolling number for free.
+  it("a cutoff with no data beyond it yet naturally reads as a live 'balance as of today' figure — no special-casing needed", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-07-01", TransactionType: "Charge", TotalAmount: 1790, glLines: [[RENT_INCOME, "Rent Income", 1790]] }),
+      txn({ Id: 2, Date: "2026-07-07", TransactionType: "Payment", TotalAmount: -1690, glLines: [[RENT_INCOME, "Rent Income", -1690]] }),
+      // No transactions dated after 7/7 exist yet — exactly what Buildium's
+      // real data looks like for an in-progress month synced before it ends.
+    ];
+    const result = resolveLeaseBalancesPerMonth("10", transactions);
+    // balanceByTenth and balanceByMonthEnd both "want" a cutoff (7/10, 7/31)
+    // that hasn't happened yet — since no credits exist past 7/7 regardless,
+    // they land on the exact same answer as "balance today" would.
+    expect(result).toEqual([{ leaseId: "10", month: "2026-07", balanceByThird: 1790, balanceByTenth: 100, balanceByMonthEnd: 100 }]);
   });
 
   // Real case flagged live by Jason: lease 2066996, 4513 Indies Court.
@@ -468,7 +521,7 @@ describe("resolveLeaseBalancesPerMonth", () => {
       txn({ Id: 3, Date: "2026-07-06", TransactionType: "Reversed Payment", TotalAmount: 1885.95, glLines: [[RENT_INCOME, "Rent Income", 1790]] }),
     ];
     const result = resolveLeaseBalancesPerMonth("2066996", transactions);
-    expect(result).toEqual([{ leaseId: "2066996", month: "2026-07", balanceByThird: 1790, balanceByTenth: 1790 }]);
+    expect(result).toEqual([{ leaseId: "2066996", month: "2026-07", balanceByThird: 1790, balanceByTenth: 1790, balanceByMonthEnd: 1790 }]);
   });
 
   // Same real bounce, but with a hypothetical real replacement payment
@@ -486,7 +539,7 @@ describe("resolveLeaseBalancesPerMonth", () => {
       txn({ Id: 4, Date: "2026-07-08", TransactionType: "Payment", TotalAmount: -1790, glLines: [[RENT_INCOME, "Rent Income", -1790]] }),
     ];
     const result = resolveLeaseBalancesPerMonth("2066996", transactions);
-    expect(result).toEqual([{ leaseId: "2066996", month: "2026-07", balanceByThird: 1790, balanceByTenth: 0 }]);
+    expect(result).toEqual([{ leaseId: "2066996", month: "2026-07", balanceByThird: 1790, balanceByTenth: 0, balanceByMonthEnd: 0 }]);
   });
 
   // Real case confirmed live by Jason 2026-07-07: lease 2819658, 3631 Chase
@@ -502,7 +555,7 @@ describe("resolveLeaseBalancesPerMonth", () => {
       // Paid on the 5th: a standard lease would still show this as owed as
       // of the 3rd, but 2819658's real cutoff is the 5th, so this should
       // already read as paid ($0) for balanceByThird.
-      expect(result).toEqual([{ leaseId: "2819658", month: "2026-06", balanceByThird: 0, balanceByTenth: 0 }]);
+      expect(result).toEqual([{ leaseId: "2819658", month: "2026-06", balanceByThird: 0, balanceByTenth: 0, balanceByMonthEnd: 0 }]);
     });
 
     it("still shows a balance owed if paid AFTER the overridden 5th-day cutoff", () => {
@@ -528,6 +581,137 @@ describe("resolveLeaseBalancesPerMonth", () => {
       expect(Object.keys(LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID)).toEqual(["2819658"]);
       expect(LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID["2819658"]).toBe(5);
     });
+  });
+});
+
+describe("lastDayOfMonth", () => {
+  it("handles a 31-day month", () => {
+    expect(lastDayOfMonth("2026-07")).toBe("2026-07-31");
+  });
+
+  it("handles a 30-day month", () => {
+    expect(lastDayOfMonth("2026-06")).toBe("2026-06-30");
+  });
+
+  it("handles February in a leap year", () => {
+    expect(lastDayOfMonth("2024-02")).toBe("2024-02-29");
+  });
+
+  it("handles February in a non-leap year", () => {
+    expect(lastDayOfMonth("2026-02")).toBe("2026-02-28");
+  });
+
+  it("handles December correctly (year-boundary edge case)", () => {
+    expect(lastDayOfMonth("2025-12")).toBe("2025-12-31");
+  });
+});
+
+// ============================================================================
+// summarizeYearlyCollectionRates / findSameMonthLastYear — ADDED 2026-07-09
+// for the new "Rent Collected by Month End" side panels next to the
+// existing 12-month chart.
+// ============================================================================
+function monthlyRate(overrides: Partial<MonthlyCollectionRate>): MonthlyCollectionRate {
+  return {
+    month: "2026-01",
+    totalLeasesDue: 0,
+    paidByThirdCount: 0,
+    paidByThirdPercent: 0,
+    paidByTenthCount: 0,
+    paidByTenthPercent: 0,
+    paidByMonthEndCount: 0,
+    paidByMonthEndPercent: 0,
+    ...overrides,
+  };
+}
+
+describe("summarizeYearlyCollectionRates", () => {
+  it("rolls monthly by-month-end figures up to one ratio-of-sums percentage per year", () => {
+    const months = [
+      monthlyRate({ month: "2025-11", totalLeasesDue: 150, paidByMonthEndCount: 148 }),
+      monthlyRate({ month: "2025-12", totalLeasesDue: 160, paidByMonthEndCount: 159 }),
+      monthlyRate({ month: "2026-01", totalLeasesDue: 165, paidByMonthEndCount: 160 }),
+    ];
+    const result = summarizeYearlyCollectionRates(months);
+    expect(result).toEqual([
+      { year: "2026", totalLeasesDue: 165, paidByMonthEndCount: 160, paidByMonthEndPercent: 97, monthsIncluded: 1, lastMonth: "2026-01" },
+      { year: "2025", totalLeasesDue: 310, paidByMonthEndCount: 307, paidByMonthEndPercent: 99, monthsIncluded: 2, lastMonth: "2025-12" },
+    ]);
+  });
+
+  it("uses a ratio of SUMS, not an average of monthly percentages — a big month should outweigh a small one", () => {
+    // Month A: 10 leases, all 10 paid (100%). Month B: 200 leases, only 100 paid (50%).
+    // A naive average of percentages would say (100+50)/2 = 75%. The correct
+    // portfolio-wide answer, weighting by how many leases each month actually
+    // had, is (10+100)/(10+200) = 52.4%.
+    const months = [
+      monthlyRate({ month: "2026-01", totalLeasesDue: 10, paidByMonthEndCount: 10 }),
+      monthlyRate({ month: "2026-02", totalLeasesDue: 200, paidByMonthEndCount: 100 }),
+    ];
+    const result = summarizeYearlyCollectionRates(months);
+    expect(result[0].paidByMonthEndPercent).toBe(52.4);
+  });
+
+  it("sorts most recent year first", () => {
+    const months = [
+      monthlyRate({ month: "2023-06" }),
+      monthlyRate({ month: "2025-06" }),
+      monthlyRate({ month: "2024-06" }),
+    ];
+    const result = summarizeYearlyCollectionRates(months);
+    expect(result.map((r) => r.year)).toEqual(["2025", "2024", "2023"]);
+  });
+
+  it("returns an empty array for no months at all", () => {
+    expect(summarizeYearlyCollectionRates([])).toEqual([]);
+  });
+
+  it("reports monthsIncluded so a partial current year can be told apart from a complete one", () => {
+    const months = [monthlyRate({ month: "2026-01" }), monthlyRate({ month: "2026-02" })];
+    const result = summarizeYearlyCollectionRates(months);
+    expect(result[0].monthsIncluded).toBe(2); // year-to-date, not a full 12
+  });
+
+  // ADDED 2026-07-09, per Jason directly: the side panel shows the month
+  // next to the year (e.g. "Jun 2026" rather than a bare "2026"), so this
+  // needs the actual LATEST month, not just a count.
+  it("reports lastMonth as the most recent month actually included, even if the input isn't sorted", () => {
+    const months = [
+      monthlyRate({ month: "2026-03" }),
+      monthlyRate({ month: "2026-01" }), // out of order on purpose
+      monthlyRate({ month: "2026-02" }),
+    ];
+    const result = summarizeYearlyCollectionRates(months);
+    expect(result[0].lastMonth).toBe("2026-03");
+  });
+
+  it("a complete past year's lastMonth is December", () => {
+    const months = [monthlyRate({ month: "2025-01" }), monthlyRate({ month: "2025-12" }), monthlyRate({ month: "2025-06" })];
+    const result = summarizeYearlyCollectionRates(months);
+    expect(result[0].lastMonth).toBe("2025-12");
+  });
+});
+
+describe("findSameMonthLastYear", () => {
+  it("finds the same calendar month one year earlier", () => {
+    const months = [
+      monthlyRate({ month: "2025-06", paidByMonthEndPercent: 99.8 }),
+      monthlyRate({ month: "2026-06", paidByMonthEndPercent: 95.2 }),
+    ];
+    const result = findSameMonthLastYear(months, "2026-06");
+    expect(result).toEqual({ month: "2026-06", lastYearMonth: "2025-06", lastYearPercent: 99.8 });
+  });
+
+  it("returns null when last year's same month isn't in the data at all", () => {
+    const months = [monthlyRate({ month: "2026-06", paidByMonthEndPercent: 95.2 })];
+    const result = findSameMonthLastYear(months, "2026-06");
+    expect(result).toBeNull();
+  });
+
+  it("handles January correctly (year rolls back, not just the month number)", () => {
+    const months = [monthlyRate({ month: "2025-01", paidByMonthEndPercent: 88 })];
+    const result = findSameMonthLastYear(months, "2026-01");
+    expect(result).toEqual({ month: "2026-01", lastYearMonth: "2025-01", lastYearPercent: 88 });
   });
 });
 

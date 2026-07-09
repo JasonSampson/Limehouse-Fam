@@ -80,6 +80,16 @@ export interface MonthlyCollectionRate {
   paidByThirdPercent: number;
   paidByTenthCount: number;
   paidByTenthPercent: number;
+  // ADDED 2026-07-09, per Jason directly: a THIRD cutoff — the last
+  // calendar day of the month — for the new "Rent Collected by Month End"
+  // side panels next to the existing chart. Same $200-balance-threshold
+  // methodology as paidByThird/paidByTenth above, just a later cutoff date.
+  // Deliberately does NOT apply LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID — that
+  // override exists for the EARLY cutoff only (a grace period through the
+  // 5th instead of the 3rd); by month's end any such grace period has
+  // already passed for every lease, so there's nothing to override here.
+  paidByMonthEndCount: number;
+  paidByMonthEndPercent: number;
 }
 
 export interface LeasePaymentForMonth {
@@ -95,6 +105,29 @@ export function last12Months(asOf: Date): string[] {
   for (let i = 11; i >= 0; i--) {
     const d = new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth() - i, 1));
     months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+  }
+  return months;
+}
+
+// ADDED 2026-07-09, per Jason directly: the new "Rent Collected by Month
+// End" side panels (a same-month-last-year callout and a by-year list)
+// need more history than the trailing-12-month window last12Months gives
+// the existing chart — a full prior year for the same-month comparison,
+// plus multiple complete years for the yearly rollup. Returns every month
+// from January of (asOf's year minus yearsBack) through asOf's own month,
+// oldest first — a SUPERSET of last12Months, not a replacement. The
+// existing chart keeps using only the most recent 12 of whatever this
+// produces (see renderRentCollectionChart's slice in dashboard.js), so its
+// own behavior is unchanged even though the underlying sync now fetches a
+// wider window.
+export function monthsSinceYearsAgo(asOf: Date, yearsBack: number): string[] {
+  const months: string[] = [];
+  const startYear = asOf.getUTCFullYear() - yearsBack;
+  const cursor = new Date(Date.UTC(startYear, 0, 1));
+  const end = new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), 1));
+  while (cursor.getTime() <= end.getTime()) {
+    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
   return months;
 }
@@ -162,10 +195,10 @@ export function summarizeMonthlyCollectionRates(
     balanceByLeaseMonth.set(`${b.leaseId}|${b.month}`, b);
   }
 
-  const byMonth = new Map<string, { total: number; byThird: number; byTenth: number }>();
+  const byMonth = new Map<string, { total: number; byThird: number; byTenth: number; byMonthEnd: number }>();
 
   for (const due of duePerMonth) {
-    const bucket = byMonth.get(due.month) ?? { total: 0, byThird: 0, byTenth: 0 };
+    const bucket = byMonth.get(due.month) ?? { total: 0, byThird: 0, byTenth: 0, byMonthEnd: 0 };
     bucket.total += 1;
 
     // No balance record at all means Buildium never posted a charge for
@@ -174,23 +207,98 @@ export function summarizeMonthlyCollectionRates(
     const balance = balanceByLeaseMonth.get(`${due.leaseId}|${due.month}`);
     const balanceByThird = balance ? balance.balanceByThird : Infinity;
     const balanceByTenth = balance ? balance.balanceByTenth : Infinity;
+    const balanceByMonthEnd = balance ? balance.balanceByMonthEnd : Infinity;
 
     if (balanceByThird <= LATE_BALANCE_THRESHOLD) bucket.byThird += 1;
     if (balanceByTenth <= LATE_BALANCE_THRESHOLD) bucket.byTenth += 1;
+    if (balanceByMonthEnd <= LATE_BALANCE_THRESHOLD) bucket.byMonthEnd += 1;
 
     byMonth.set(due.month, bucket);
   }
 
   return [...byMonth.entries()]
-    .map(([month, { total, byThird, byTenth }]) => ({
+    .map(([month, { total, byThird, byTenth, byMonthEnd }]) => ({
       month,
       totalLeasesDue: total,
       paidByThirdCount: byThird,
       paidByThirdPercent: total > 0 ? roundPercent((byThird / total) * 100) : 0,
       paidByTenthCount: byTenth,
       paidByTenthPercent: total > 0 ? roundPercent((byTenth / total) * 100) : 0,
+      paidByMonthEndCount: byMonthEnd,
+      paidByMonthEndPercent: total > 0 ? roundPercent((byMonthEnd / total) * 100) : 0,
     }))
     .sort((a, b) => a.month.localeCompare(b.month));
+}
+
+// ============================================================================
+// ADDED 2026-07-09, per Jason directly: the "Rent Collected by Month End"
+// side panels next to the existing 12-month chart. Two pieces — a by-year
+// rollup list, and a same-calendar-month-last-year callout — both built
+// from the SAME wider monthly dataset summarizeMonthlyCollectionRates
+// already produces once fed a wider month window (see monthsSinceYearsAgo
+// above), not a separate calculation.
+// ============================================================================
+
+export interface YearlyCollectionRate {
+  year: string; // "YYYY"
+  totalLeasesDue: number;
+  paidByMonthEndCount: number;
+  paidByMonthEndPercent: number;
+  monthsIncluded: number; // 12 for a complete past year; fewer for the current year, which is naturally year-to-date since the current in-progress month is already excluded upstream
+  lastMonth: string; // "YYYY-MM" — the most recent month included in this year's rollup. ADDED 2026-07-09 per Jason directly, so the side panel can show e.g. "Jun 2026" instead of a bare "2026" for a year-to-date figure.
+}
+
+// Rolls the by-month-end figure up to one number per calendar year, e.g.
+// "2025: 99.3%". A ratio of SUMS across the year's months (total
+// paid-by-month-end lease-months over total due lease-months), not an
+// average of each month's percentage — this portfolio has grown from
+// ~137 to ~200+ leases across the window this can cover, and averaging
+// percentages would let an early, smaller month count exactly as much as
+// a later, bigger one, which isn't the right answer for "how did the
+// whole year go."
+export function summarizeYearlyCollectionRates(months: MonthlyCollectionRate[]): YearlyCollectionRate[] {
+  const byYear = new Map<string, { total: number; paid: number; monthsIncluded: number; lastMonth: string }>();
+
+  for (const m of months) {
+    const year = m.month.slice(0, 4);
+    const bucket = byYear.get(year) ?? { total: 0, paid: 0, monthsIncluded: 0, lastMonth: m.month };
+    bucket.total += m.totalLeasesDue;
+    bucket.paid += m.paidByMonthEndCount;
+    bucket.monthsIncluded += 1;
+    if (m.month > bucket.lastMonth) bucket.lastMonth = m.month;
+    byYear.set(year, bucket);
+  }
+
+  return [...byYear.entries()]
+    .map(([year, { total, paid, monthsIncluded, lastMonth }]) => ({
+      year,
+      totalLeasesDue: total,
+      paidByMonthEndCount: paid,
+      paidByMonthEndPercent: total > 0 ? roundPercent((paid / total) * 100) : 0,
+      monthsIncluded,
+      lastMonth,
+    }))
+    .sort((a, b) => b.year.localeCompare(a.year)); // most recent year first, matching Jason's own example ("2025 99.3%, 2024 99.8%")
+}
+
+export interface SameMonthLastYear {
+  month: string; // this year's month, e.g. "2026-06"
+  lastYearMonth: string; // e.g. "2025-06"
+  lastYearPercent: number;
+}
+
+// For whatever the latest available month is (normally the dashboard's own
+// most-recently-fully-elapsed month), looks up the SAME calendar month one
+// year earlier and returns its paid-by-month-end percent — e.g. latestMonth
+// "2026-06" looks up "2025-06". Returns null if that earlier month isn't
+// present in the data at all, either because the sync's window doesn't
+// reach back that far or no lease had a charge that month.
+export function findSameMonthLastYear(months: MonthlyCollectionRate[], latestMonth: string): SameMonthLastYear | null {
+  const [year, mm] = latestMonth.split("-");
+  const lastYearMonth = `${Number(year) - 1}-${mm}`;
+  const match = months.find((m) => m.month === lastYearMonth);
+  if (!match) return null;
+  return { month: latestMonth, lastYearMonth, lastYearPercent: match.paidByMonthEndPercent };
 }
 
 // ============================================================================
@@ -410,11 +518,22 @@ function outstandingBalanceAsOf(
   return 0; // targetMonth had no charge on this lease at all — nothing to owe
 }
 
+// Last calendar day of a "YYYY-MM" month, as "YYYY-MM-DD" — day 0 of the
+// NEXT month is always the last day of THIS month, a standard trick for
+// getting a correct answer across 28/29/30/31-day months (including leap
+// Februaries) without a lookup table.
+export function lastDayOfMonth(month: string): string {
+  const [year, mon] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+  return `${month}-${String(lastDay).padStart(2, "0")}`;
+}
+
 export interface LeaseBalanceForMonth {
   leaseId: string;
   month: string; // "YYYY-MM"
   balanceByThird: number; // amount still owed as of this lease's "by 3rd" cutoff (day 3, unless overridden — see LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID), oldest charge first
   balanceByTenth: number; // amount still owed as of the 10th — always day 10, the grace-period override only ever affects the earlier cutoff
+  balanceByMonthEnd: number; // amount still owed as of the last calendar day of the month — never overridden, see the field's own note on MonthlyCollectionRate
 }
 
 export function resolveLeaseBalancesPerMonth(leaseId: string, transactions: BuildiumLeaseTransaction[]): LeaseBalanceForMonth[] {
@@ -426,6 +545,7 @@ export function resolveLeaseBalancesPerMonth(leaseId: string, transactions: Buil
     month: charge.month,
     balanceByThird: outstandingBalanceAsOf(charges, credits, charge.month, `${charge.month}-${thirdCutoffDayStr}`),
     balanceByTenth: outstandingBalanceAsOf(charges, credits, charge.month, `${charge.month}-10`),
+    balanceByMonthEnd: outstandingBalanceAsOf(charges, credits, charge.month, lastDayOfMonth(charge.month)),
   }));
 }
 

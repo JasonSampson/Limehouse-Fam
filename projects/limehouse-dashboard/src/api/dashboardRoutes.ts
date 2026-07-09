@@ -51,7 +51,12 @@ import {
 } from "../kpi/leaseRows.js";
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
-import { summarizeRentAndDeposit } from "../kpi/rentCollection.js";
+import {
+  summarizeRentAndDeposit,
+  summarizeYearlyCollectionRates,
+  findSameMonthLastYear,
+  type MonthlyCollectionRate,
+} from "../kpi/rentCollection.js";
 import { getCachedMetric, isCacheFresh } from "../db/metricCache.js";
 import { logError, logWarn } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
@@ -525,17 +530,46 @@ dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", requireLogin,
 // telling the caller to trigger a sync, rather than falling back to the
 // old expensive live path and reintroducing the exact rate-limit problem
 // this fix exists to prevent.
+// ADDED 2026-07-09, per Jason directly: two new pieces alongside the
+// existing 12-month `months` array — a same-calendar-month-last-year
+// callout and a by-year rollup list, for the new side panels next to the
+// existing chart. Both are computed here from the FULL wide dataset the
+// sync now stores (see monthsSinceYearsAgo in syncRoutes.ts), not just the
+// last 12 months — `months` itself is deliberately left as the full wide
+// array too (not sliced down to 12 server-side) so the frontend can build
+// both the existing 12-month chart AND these wider panels from one
+// response. The existing chart's own rendering slices to the most recent
+// 12 itself (see renderRentCollectionChart in dashboard.js) so its visual
+// output is unchanged despite the wider payload.
+//
+// STOPPED EXCLUDING THE CURRENT MONTH 2026-07-09, per Jason directly (see
+// the matching note in syncRoutes.ts for the full reasoning): `months` now
+// includes the still-in-progress current month, whose paidByThird/Tenth/
+// MonthEndPercent fields are already correct at every point in the month —
+// a live rolling figure before each cutoff passes, the true final figure
+// once it does. `latestMonth` below is therefore now the CURRENT month
+// (when it has any due leases), not last month — that's what makes
+// sameMonthLastYear and the by-year rollup naturally reflect the most
+// current data too. The frontend adds a "(so far)" qualifier on the Rent
+// By 3rd/10th tiles specifically when the relevant cutoff hasn't passed
+// yet (see renderFinancials in dashboard.js), and separately excludes the
+// in-progress month when building the 12-month CHART, which is meant to
+// keep showing only complete months, unchanged from before.
 dashboardRoutes.get("/api/dashboard/financials/rent-collection", requireLogin, async (_req, res) => {
   try {
-    const cached = await getCachedMetric("rent_collection_12mo", "portfolio");
+    const cached = await getCachedMetric("rent_collection_extended", "portfolio");
     if (!cached || cached.value === null) {
       res.status(503).json({
         error: "Rent collection data has not been synced yet. Trigger POST /api/sync/rent-collection first.",
       });
       return;
     }
+    const months = cached.value as MonthlyCollectionRate[];
+    const latestMonth = months.length > 0 ? months[months.length - 1].month : null;
     res.json({
-      months: cached.value,
+      months,
+      yearly: summarizeYearlyCollectionRates(months),
+      sameMonthLastYear: latestMonth ? findSameMonthLastYear(months, latestMonth) : null,
       cachedAt: cached.fetchedAt,
       stale: !isCacheFresh(cached),
       lastError: cached.lastError,

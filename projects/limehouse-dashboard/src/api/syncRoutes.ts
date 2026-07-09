@@ -19,8 +19,7 @@ import { summarizeDelinquency } from "../buildium/delinquency.js";
 import {
   summarizeMonthlyCollectionRates,
   resolveLeaseBalancesPerMonth,
-  last12Months,
-  excludeCurrentInProgressMonth,
+  monthsSinceYearsAgo,
   buildDuePerMonth,
   extractDepositDisposition,
   summarizeSecurityDepositWithheld,
@@ -139,6 +138,48 @@ syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
 // — see that function's comment for how. Re-verified live against Jason's
 // own manual tracking spreadsheet (not just the vendor site) after this
 // landed.
+//
+// WIDENED 2026-07-09, per Jason directly: the new "Rent Collected by Month
+// End" side panels next to the existing chart need a same-calendar-month
+// comparison a full year back, plus several complete years for a by-year
+// rollup — the existing chart's trailing-12-month window doesn't reach far
+// enough back for either. Switched from last12Months to
+// monthsSinceYearsAgo(asOf, 2) (back to January of two years ago), which
+// costs nothing extra in Buildium API calls — fetchLeaseTransactions
+// already pulls each lease's FULL transaction history with no date
+// filtering, so widening the window just means extracting more months from
+// data already being fetched, not fetching more data. The existing 12-month
+// chart is unaffected: it slices the last 12 COMPLETE months off this wider
+// result on the frontend (see renderRentCollectionChart in dashboard.js)
+// rather than being fed a separately-scoped dataset. Per Jason's own
+// scoping: this still only covers CURRENTLY-active leases, same as before —
+// a tenant who moved out doesn't drag down an earlier year's numbers, but
+// it also means an early year's total can undercount the true historical
+// portfolio (leases that have since turned over are invisible for every
+// month, not just the ones after they left) — an accepted, deliberate
+// limitation, not a bug.
+//
+// STOPPED EXCLUDING THE CURRENT MONTH 2026-07-09, per Jason directly: he
+// asked why "Rent By 10th" was showing a month-old figure when today's own
+// running total was sitting right there and more current. The answer is
+// that this endpoint used to drop the in-progress month entirely — but on
+// closer look that exclusion was solving a DIFFERENT, narrower problem (a
+// 2026-07-04 fix: showing paidByThird == paidByTenth for an in-progress
+// month looked like a bug, since day 10 hadn't happened yet to tell them
+// apart). The underlying MATH was never wrong: outstandingBalanceAsOf (see
+// rentCollection.ts) filters credits by `date <= cutoff`, and Buildium
+// simply has no transactions dated after today — so asking for "balance as
+// of the 10th" while today is only the 9th naturally returns "balance as of
+// today" anyway, automatically, with no special-casing. That means
+// paidByThirdPercent/paidByTenthPercent/paidByMonthEndPercent for the
+// current month are ALREADY correct at every point in the month: a live
+// rolling figure before each cutoff passes, and the true final figure once
+// it does. Keeping the month out of the window was throwing away a
+// genuinely-correct, more-current number to avoid a labeling problem — the
+// frontend now solves that labeling problem directly with a "(so far)"
+// qualifier instead (see renderFinancials in dashboard.js), which also
+// retired the separate resolveCurrentMonthBalance/summarizeCurrentMonthRolling
+// functions this session had briefly added — same data, one path now.
 syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "rent_collection_cache_refresh");
   try {
@@ -160,14 +201,11 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
     // ~202 genuinely-occupied-unit count the occupancy fix (see
     // src/kpi/occupancy.ts) independently landed on.
     const activeLeases = await fetchActiveLeases();
-    // See last12Months/excludeCurrentInProgressMonth/buildDuePerMonth in
-    // src/kpi/rentCollection.ts for the other two real bugs fixed here
-    // (2026-07-04): the current in-progress month trivially made
-    // paidByThird == paidByTenth, and leases were counted as "due" in
-    // months before they even started, inflating the denominator and
-    // dragging every month's percentage down versus the real vendor
-    // numbers.
-    const monthsInWindow = excludeCurrentInProgressMonth(last12Months(new Date()), new Date());
+    // See last12Months/buildDuePerMonth in src/kpi/rentCollection.ts for the
+    // other real bug fixed here (2026-07-04): leases were counted as "due"
+    // in months before they even started, inflating the denominator and
+    // dragging every month's percentage down versus the real vendor numbers.
+    const monthsInWindow = monthsSinceYearsAgo(new Date(), 2);
     const duePerMonth = buildDuePerMonth(activeLeases, monthsInWindow);
 
     // Sequential, not Promise.all: the old Promise.all(activeLeases.map(...))
@@ -184,14 +222,14 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
     }
 
     const rentCollection = summarizeMonthlyCollectionRates(duePerMonth, balancesByLease.flat());
-    await upsertCachedMetric("rent_collection_12mo", "portfolio", "buildium", rentCollection);
+    await upsertCachedMetric("rent_collection_extended", "portfolio", "buildium", rentCollection);
 
     await completeSyncRun(syncLogId, activeLeases.length);
     logInfo("Rent collection sync completed", { syncLogId, leaseCount: activeLeases.length });
     res.json({ ok: true, syncedAt: new Date().toISOString() });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordCacheRefreshFailure("rent_collection_12mo", "portfolio", "buildium", message);
+    await recordCacheRefreshFailure("rent_collection_extended", "portfolio", "buildium", message);
     await failSyncRun(syncLogId, message);
     logError("Rent collection sync failed", { syncLogId, error: message });
     res.status(502).json({ error: "Rent collection sync failed. Last known-good data is still being served.", detail: message });

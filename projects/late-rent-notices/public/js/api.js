@@ -122,6 +122,10 @@ async function initLayout(activeTab) {
     <main>
       <nav class="tabs">
         ${tabs.map((t) => `<a href="${t.href}" class="${t.key === activeTab ? "active" : ""}">${t.label}</a>`).join("")}
+        <form id="nav-search-form" class="nav-search" role="search">
+          <input type="search" id="nav-search-input" placeholder="Search past notices &amp; history by address…" aria-label="Search by address" />
+          <button type="submit">Search</button>
+        </form>
       </nav>
       <div id="app-content"></div>
     </main>
@@ -130,6 +134,13 @@ async function initLayout(activeTab) {
   document.getElementById("logout-btn").addEventListener("click", async () => {
     await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
     window.location.href = "/login.html";
+  });
+
+  document.getElementById("nav-search-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = document.getElementById("nav-search-input").value.trim();
+    if (!q) return;
+    window.location.href = `/search.html?q=${encodeURIComponent(q)}`;
   });
 
   return me;

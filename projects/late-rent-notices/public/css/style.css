@@ -359,6 +359,30 @@ button:disabled {
   color: var(--white);
 }
 
+.nav-search {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.nav-search input {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--gray-border);
+  font-size: 0.85rem;
+  min-width: 240px;
+}
+
+.nav-search button {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--gray-border);
+  background: var(--white);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .ledger-table {
   width: 100%;
   border-collapse: collapse;

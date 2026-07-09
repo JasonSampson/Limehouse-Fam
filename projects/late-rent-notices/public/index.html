@@ -137,6 +137,15 @@
         }
       }
 
+      let pmUsersCache = null;
+      async function getPmUsers() {
+        if (!pmUsersCache) {
+          const { pmUsers } = await LimehouseAPI.get("/api/pm-users");
+          pmUsersCache = pmUsers;
+        }
+        return pmUsersCache;
+      }
+
       async function loadNoNotice() {
         listArea.className = "loading";
         listArea.innerHTML = "Loading…";
@@ -149,15 +158,18 @@
             return;
           }
 
+          const pmUsers = await getPmUsers();
+          const pmOptions = pmUsers.map((pm) => `<option value="${pm.id}">${escapeHtml(pm.display_name)}</option>`).join("");
+
           listArea.className = "";
           listArea.innerHTML = `
             <div class="alert alert-warn">
               <strong>These need attention:</strong> each of these leases is past its grace period, but no notice has been drafted for the current cycle.
-              Something is blocking it — an unclassifiable charge on the ledger, no PM assigned to the property, or no active letter template.
-              A human needs to look into why before a notice can go out. Nothing to click here — this list is informational only.
+              Most of these are missing a property manager assignment — assign one below and it'll be picked up automatically on the next daily check.
+              A few may be blocked for a different reason (an unclassifiable charge on the ledger, no active letter template) — those need a human to look into why.
             </div>
             <div class="notice-list">${lateNoNotice
-              .map((c) => `
+              .map((c, idx) => `
                 <div class="notice-row status-draft">
                   <div class="row-top">
                     <span class="tenant-name">${escapeHtml(c.property_name)} — Unit ${escapeHtml(c.unit_label)}</span>
@@ -167,10 +179,50 @@
                     Due ${fmtDate(c.due_date)}
                     &middot; Past grace period since ${fmtDate(c.opened_at)}
                   </div>
+                  ${
+                    c.needs_pm_assignment
+                      ? `
+                        <form class="assign-pm-form" data-property-id="${c.property_id}" style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+                          <label style="font-size:0.85rem;">No property manager assigned:</label>
+                          <select required>
+                            <option value="">Choose a manager…</option>
+                            ${pmOptions}
+                          </select>
+                          <button type="submit" class="btn-primary">Assign</button>
+                          <span class="assign-pm-result"></span>
+                        </form>
+                      `
+                      : `<p class="field-hint" style="margin-top:6px;">A property manager is already assigned — something else is blocking this draft (check the ledger classification or the active letter template).</p>`
+                  }
                 </div>
               `)
               .join("")}</div>
           `;
+
+          listArea.querySelectorAll(".assign-pm-form").forEach((form) => {
+            form.addEventListener("submit", async (e) => {
+              e.preventDefault();
+              const select = form.querySelector("select");
+              const resultSpan = form.querySelector(".assign-pm-result");
+              const button = form.querySelector("button");
+              const propertyId = Number(form.dataset.propertyId);
+              const pmUserId = Number(select.value);
+              if (!pmUserId) return;
+
+              button.disabled = true;
+              select.disabled = true;
+              resultSpan.textContent = "Assigning…";
+              try {
+                await LimehouseAPI.post("/api/pm-property-assignments", { propertyId, pmUserId });
+                resultSpan.textContent = "Assigned — will draft on the next daily check.";
+                setTimeout(loadNoNotice, 1200);
+              } catch (err) {
+                resultSpan.textContent = friendlyError(err);
+                button.disabled = false;
+                select.disabled = false;
+              }
+            });
+          });
         } catch (err) {
           listArea.className = "";
           listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;

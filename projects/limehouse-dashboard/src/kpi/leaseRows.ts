@@ -115,17 +115,18 @@ export function moveInLeaseRows(activeLeases: BuildiumLease[], fromDate: string,
 // Total Units / Vacant — Not Rented drill-downs: every tracked unit with
 // its occupied/vacant status.
 //
-// FIXED 2026-07-06: this used to derive occupied the same way
-// summarizeOccupancy does (has a currently-Active lease) — correct for the
-// Occupancy % tile, but confirmed live it does NOT match the vendor's own
-// "Vacant — Not Rented" tile (vendor: 22, this gave 8/31 depending on when
-// checked). The vendor's Vacant tile uses Buildium's own IsUnitOccupied
-// flag directly instead — confirmed by counting both ways against real
-// data and matching the vendor's 22 exactly via the flag. This is a real
-// inconsistency between the vendor's OWN Occupancy and Vacant tiles (they
-// use two different underlying signals), not something introduced here —
-// see occupancy.ts's summarizeOccupancy comment for why IsUnitOccupied
-// deliberately is NOT used for the Occupancy percentage itself.
+// FIXED 2026-07-06, REVERTED 2026-07-09: briefly matched the vendor's
+// "Vacant — Not Rented" tile by using Buildium's own IsUnitOccupied flag
+// directly (matched their 22 exactly at the time). Confirmed live
+// 2026-07-09 against the vendor's OWN "Avg Days Vacant" drill-down that
+// the flag lags real lease-status transitions by up to ~2 weeks: 12 units
+// whose most recent lease had already ended (LeaseStatus "Past", real
+// move-out) still showed IsUnitOccupied=true in Buildium — undercounting
+// real vacancies by 12 (19 vs. the true 31). Same lagging-flag problem
+// summarizeOccupancy's own comment already documented for the Occupancy %
+// tile — this now uses the same fix (occupied = has a currently-Active
+// lease attached), per Jason directly, so Total Units/Vacant/Avg Days
+// Vacant all agree with Occupancy % on what "occupied" means.
 export interface UnitStatusRow {
   unitId: string;
   propertyId: string;
@@ -133,17 +134,18 @@ export interface UnitStatusRow {
   occupied: boolean;
 }
 
-export function unitStatusRows(units: BuildiumUnit[]): UnitStatusRow[] {
+export function unitStatusRows(units: BuildiumUnit[], activeLeases: BuildiumLease[]): UnitStatusRow[] {
+  const occupiedUnitIds = new Set(activeLeases.map((l) => l.UnitId));
   return units.map((u) => ({
     unitId: String(u.Id),
     propertyId: String(u.PropertyId),
     unitNumber: u.UnitNumber ?? null,
-    occupied: u.IsUnitOccupied,
+    occupied: occupiedUnitIds.has(u.Id),
   }));
 }
 
-export function vacantUnitRows(units: BuildiumUnit[]): UnitStatusRow[] {
-  return unitStatusRows(units).filter((r) => !r.occupied);
+export function vacantUnitRows(units: BuildiumUnit[], activeLeases: BuildiumLease[]): UnitStatusRow[] {
+  return unitStatusRows(units, activeLeases).filter((r) => !r.occupied);
 }
 
 // Avg Days Vacant: for each currently-vacant unit, how many days since its
@@ -165,7 +167,8 @@ export interface VacantUnitDaysRow {
 }
 
 export function vacantUnitDaysRows(units: BuildiumUnit[], allLeases: BuildiumLease[], asOfDate: Date): VacantUnitDaysRow[] {
-  const vacant = vacantUnitRows(units);
+  const activeLeases = allLeases.filter((l) => l.LeaseStatus === "Active");
+  const vacant = vacantUnitRows(units, activeLeases);
   const leasesByUnit = new Map<number, BuildiumLease[]>();
   for (const l of allLeases) {
     const bucket = leasesByUnit.get(l.UnitId);

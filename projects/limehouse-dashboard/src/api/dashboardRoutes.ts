@@ -130,21 +130,17 @@ dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) 
     const trackedUnitIds = new Set(units.map((u) => u.Id));
     const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
     const summary = summarizeOccupancy(units.length, activeLeasesOnTrackedUnits);
-    // CONFIRMED LIVE 2026-07-06: the vendor's own "Vacant — Not Rented" tile
-    // does NOT use the same lease-based occupied count as its Occupancy
-    // tile — it uses Buildium's own IsUnitOccupied flag directly (matched
-    // exactly: 22 vacant by flag vs. our already-confirmed-correct 86.8%
-    // occupancy, which is lease-based and gives a different vacant count).
-    // This is a real inconsistency on the vendor's OWN site between these
-    // two tiles, not something introduced here — summarizeOccupancy's own
-    // comment already documents why IsUnitOccupied lags real lease
-    // transitions and is deliberately NOT used for the Occupancy percentage
-    // itself. vacantUnitsByFlag is exposed separately so the Vacant tile can
-    // match the vendor's real number without changing the Occupancy tile's
-    // already-correct math.
-    const vacantUnitsByFlag = units.filter((u) => !u.IsUnitOccupied).length;
+    // REVERTED 2026-07-09: this used to expose a separate vacantUnitsByFlag
+    // (Buildium's own IsUnitOccupied flag) so the Vacant tile could match
+    // the vendor's number, which at the time relied on that same flag.
+    // Confirmed live against the vendor's own "Avg Days Vacant" drill-down
+    // that the flag lags real lease-status transitions by up to ~2 weeks —
+    // 12 units whose lease had already ended still showed occupied. Vacant
+    // tile now uses summary.vacantUnits (lease-based, same signal as
+    // Occupancy %) instead, per Jason directly — see leaseRows.ts's
+    // unitStatusRows comment for the full story.
     const totalUnitsYoY = summarizeTotalUnitsYoY(units.length, new Date());
-    res.json({ ...summary, vacantUnitsByFlag, totalUnitsYoY });
+    res.json({ ...summary, totalUnitsYoY });
   } catch (err) {
     logError("GET /api/dashboard/occupancy failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load occupancy data from Buildium." });
@@ -660,8 +656,10 @@ dashboardRoutes.get("/api/dashboard/financials/security-deposit-withheld/leases"
 // see that route's comment for why.
 dashboardRoutes.get("/api/dashboard/units", requireLogin, async (_req, res) => {
   try {
-    const [units, properties] = await Promise.all([fetchActiveManagedUnits(), fetchProperties()]);
-    res.json(withPropertyAddress(unitStatusRows(units), propertyAddressById(properties)));
+    const [units, activeLeases, properties] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases(), fetchProperties()]);
+    const trackedUnitIds = new Set(units.map((u) => u.Id));
+    const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
+    res.json(withPropertyAddress(unitStatusRows(units, activeLeasesOnTrackedUnits), propertyAddressById(properties)));
   } catch (err) {
     logError("GET /api/dashboard/units failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load unit data from Buildium." });
@@ -672,10 +670,15 @@ dashboardRoutes.get("/api/dashboard/units", requireLogin, async (_req, res) => {
 // CHANGED 2026-07-05: uses fetchActiveManagedUnits() (234 units, matches
 // the Vacant tile above) instead of fetchActiveResidentialUnits() — see
 // /api/dashboard/occupancy's comment for why.
+// CHANGED 2026-07-09: occupied now derived from Active-lease status
+// instead of Buildium's own IsUnitOccupied flag — see leaseRows.ts's
+// unitStatusRows comment for why (the flag lags real move-outs).
 dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, async (_req, res) => {
   try {
-    const [units, properties] = await Promise.all([fetchActiveManagedUnits(), fetchProperties()]);
-    res.json(withPropertyAddress(vacantUnitRows(units), propertyAddressById(properties)));
+    const [units, activeLeases, properties] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases(), fetchProperties()]);
+    const trackedUnitIds = new Set(units.map((u) => u.Id));
+    const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
+    res.json(withPropertyAddress(vacantUnitRows(units, activeLeasesOnTrackedUnits), propertyAddressById(properties)));
   } catch (err) {
     logError("GET /api/dashboard/units/vacant failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load vacant unit data from Buildium." });

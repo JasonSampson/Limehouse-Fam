@@ -113,17 +113,26 @@ describe("moveInLeaseRows", () => {
 });
 
 describe("unitStatusRows / vacantUnitRows", () => {
-  // CONFIRMED LIVE 2026-07-06: matches the vendor's real "Vacant — Not
-  // Rented" tile (22), which uses Buildium's own IsUnitOccupied flag
-  // directly — NOT the lease-based rule summarizeOccupancy uses for the
-  // Occupancy percentage (a real, confirmed inconsistency on the vendor's
-  // own site between these two tiles).
-  it("marks a unit occupied/vacant directly from IsUnitOccupied, not lease presence", () => {
-    const units = [unit({ Id: 10, IsUnitOccupied: true }), unit({ Id: 20, IsUnitOccupied: false })];
-    const rows = unitStatusRows(units);
+  // CHANGED 2026-07-09, per Jason directly: used to derive occupied
+  // straight from Buildium's own IsUnitOccupied flag (matched the vendor's
+  // "Vacant — Not Rented" tile at the time). Confirmed live against the
+  // vendor's own "Avg Days Vacant" drill-down that the flag lags real
+  // lease-status transitions by up to ~2 weeks — 12 units whose lease had
+  // already ended (Past) still showed IsUnitOccupied=true, undercounting
+  // real vacancies. Now derives occupied from having a currently-Active
+  // lease instead — same rule summarizeOccupancy already uses for
+  // Occupancy % — so the flag is deliberately ignored even when it
+  // disagrees with lease status.
+  it("marks a unit occupied/vacant from whether it has a currently-Active lease, ignoring the (stale) IsUnitOccupied flag", () => {
+    const units = [
+      unit({ Id: 10, IsUnitOccupied: false }), // flag says vacant, but has an Active lease
+      unit({ Id: 20, IsUnitOccupied: true }), // flag says occupied, but no Active lease (already ended)
+    ];
+    const activeLeases = [lease({ Id: 1, UnitId: 10, LeaseStatus: "Active" })];
+    const rows = unitStatusRows(units, activeLeases);
     expect(rows.find((r) => r.unitId === "10")?.occupied).toBe(true);
     expect(rows.find((r) => r.unitId === "20")?.occupied).toBe(false);
-    expect(vacantUnitRows(units).map((r) => r.unitId)).toEqual(["20"]);
+    expect(vacantUnitRows(units, activeLeases).map((r) => r.unitId)).toEqual(["20"]);
   });
 });
 
@@ -132,8 +141,8 @@ describe("vacantUnitDaysRows / averageDaysVacant", () => {
     const asOf = new Date("2026-07-01T00:00:00Z");
     const units = [unit({ Id: 10, IsUnitOccupied: false }), unit({ Id: 20, IsUnitOccupied: false })];
     const allLeases = [
-      lease({ Id: 1, UnitId: 10, LeaseToDate: "2026-06-01" }), // 30 days vacant
-      lease({ Id: 2, UnitId: 10, LeaseToDate: "2026-05-01" }), // older — should NOT be picked (most recent wins)
+      lease({ Id: 1, UnitId: 10, LeaseStatus: "Past", LeaseToDate: "2026-06-01" }), // 30 days vacant
+      lease({ Id: 2, UnitId: 10, LeaseStatus: "Past", LeaseToDate: "2026-05-01" }), // older — should NOT be picked (most recent wins)
       // unit 20 has no lease history at all
     ];
     const rows = vacantUnitDaysRows(units, allLeases, asOf);
@@ -148,6 +157,28 @@ describe("vacantUnitDaysRows / averageDaysVacant", () => {
 
   it("returns null average when no vacant unit has a known days-vacant value", () => {
     expect(averageDaysVacant([{ unitId: "1", propertyId: "1", unitNumber: "1", daysVacant: null, lastLeaseToDate: null }])).toBeNull();
+  });
+
+  // Regression test for the real bug found 2026-07-09: a unit whose most
+  // recent lease already ended (Past) but Buildium's IsUnitOccupied flag
+  // hasn't caught up yet (still true) must still count as vacant.
+  it("counts a unit as vacant when its lease has ended even if IsUnitOccupied is still true", () => {
+    const asOf = new Date("2026-07-09T00:00:00Z");
+    const units = [unit({ Id: 10, IsUnitOccupied: true })];
+    const allLeases = [lease({ Id: 1, UnitId: 10, LeaseStatus: "Past", LeaseToDate: "2026-06-30" })];
+    const rows = vacantUnitDaysRows(units, allLeases, asOf);
+    expect(rows.find((r) => r.unitId === "10")?.daysVacant).toBe(9);
+  });
+
+  // A unit with a currently-Active lease must be excluded entirely, even
+  // if IsUnitOccupied happens to say false (the flag is not trusted
+  // either direction anymore).
+  it("excludes a unit with a currently-Active lease, even if IsUnitOccupied says false", () => {
+    const asOf = new Date("2026-07-09T00:00:00Z");
+    const units = [unit({ Id: 10, IsUnitOccupied: false })];
+    const allLeases = [lease({ Id: 1, UnitId: 10, LeaseStatus: "Active", LeaseToDate: "2027-01-01" })];
+    const rows = vacantUnitDaysRows(units, allLeases, asOf);
+    expect(rows.find((r) => r.unitId === "10")).toBeUndefined();
   });
 });
 

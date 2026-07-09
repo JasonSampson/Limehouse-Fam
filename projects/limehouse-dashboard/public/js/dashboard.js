@@ -576,7 +576,7 @@ function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avg
             ? tileHtml({
                 id: "vacant-not-rented",
                 label: "Vacant — Not Rented",
-                value: formatNumber(occupancy.vacantUnitsByFlag),
+                value: formatNumber(occupancy.vacantUnits),
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -1318,15 +1318,29 @@ async function handleTileClick(tileId) {
     return;
   }
 
+  // Matches the vendor's own "Vacant units" drill-down format: header,
+  // then a subtitle line right below it with "Avg N days · N vacant (N
+  // with prior leases)". Uses OUR OWN vacant-unit count (IsUnitOccupied,
+  // same as the Vacant — Not Rented tile) rather than the vendor's — their
+  // own drill-down shows a DIFFERENT, larger vacant count here (31) than
+  // their own Vacant — Not Rented tile (19), a real inconsistency on their
+  // site between two tiles that both claim to count "vacant units."
+  // "Never rented" (their exact wording) replaces a null daysVacant, same
+  // as their display for units with no lease history at all.
   if (tileId === "avg-days-vacant") {
     await simpleDrillDown({
       tileId,
-      title: "Avg Days Vacant",
+      title: "Vacant units",
+      subtitle: (rows) => {
+        const withHistory = rows.filter((r) => r.daysVacant !== null);
+        const avg = withHistory.length > 0 ? Math.round(withHistory.reduce((sum, r) => sum + r.daysVacant, 0) / withHistory.length) : null;
+        return `Avg ${avg === null ? "—" : avg} days · ${rows.length} vacant (${withHistory.length} with prior leases)`;
+      },
       url: "/api/dashboard/avg-days-vacant/units",
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
-        { label: "Days Vacant", render: (r) => (r.daysVacant === null ? "Unknown (no lease history)" : r.daysVacant) },
+        { label: "Days Vacant", render: (r) => (r.daysVacant === null ? "Never rented" : r.daysVacant) },
       ],
       emptyText: "No vacant units right now.",
     });

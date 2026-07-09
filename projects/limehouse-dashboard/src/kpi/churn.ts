@@ -373,6 +373,52 @@ export function summarizeDoorsLostEstimate(
   };
 }
 
+// Churn by year — ADDED 2026-07-09, per Jason directly: "churn for the
+// year" as a live rolling count + percentage, plus a by-year sidebar for
+// previous years. Reuses the SAME real Jan-1 door-count anchors as Net
+// Doors YTD / Total Units YoY above (2023-2026) as the denominator for
+// each year's churn rate — doors lost that year divided by doors under
+// management at the start of that year. The current year's row IS the
+// "rolling count for the year" Jason asked for: as more losses get
+// estimated through the year, doorsLost and churnPercent grow — no
+// separate "YTD" calculation needed, this literally only counts what's
+// happened so far since today's asOfDate is always inside the current
+// year. Every year with a real anchor is included even at 0 losses (a
+// genuine "0% churn" is a real answer, not a gap) — years without an
+// anchor (before 2023) are left out rather than shown with a misleading
+// missing percentage.
+export interface ChurnByYear {
+  year: number;
+  doorsLost: number;
+  doorsAtStartOfYear: number;
+  churnPercent: number;
+  isCurrentYear: boolean;
+}
+
+export function summarizeChurnByYear(estimates: PropertyLossEstimate[], asOfDate: Date): ChurnByYear[] {
+  const currentYear = asOfDate.getUTCFullYear();
+  const lossesByYear = new Map<number, number>();
+  for (const e of estimates) {
+    const year = Number(e.estimatedLossDate.slice(0, 4));
+    lossesByYear.set(year, (lossesByYear.get(year) ?? 0) + 1);
+  }
+
+  return Object.entries(DOOR_COUNT_ANCHORS_BY_YEAR)
+    .map(([yearStr, doorsAtStartOfYear]) => {
+      const year = Number(yearStr);
+      const doorsLost = lossesByYear.get(year) ?? 0;
+      return {
+        year,
+        doorsLost,
+        doorsAtStartOfYear,
+        churnPercent: doorsAtStartOfYear > 0 ? roundPercent((doorsLost / doorsAtStartOfYear) * 100) : 0,
+        isCurrentYear: year === currentYear,
+      };
+    })
+    .filter((row) => row.year <= currentYear) // no anchor "reached" yet for a future year
+    .sort((a, b) => b.year - a.year); // most recent year first
+}
+
 // ============================================================================
 // Net Doors drill-down rows (the /api/dashboard/net-doors/properties route
 // in dashboardRoutes.ts just calls this rather than filtering inline).

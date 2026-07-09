@@ -6,6 +6,7 @@ import {
   summarizeDoorsLostEstimate,
   summarizeNetDoorsYTD,
   summarizeTotalUnitsYoY,
+  summarizeChurnByYear,
   netDoorsRows,
   doorsAddedRows,
 } from "../../src/kpi/churn.js";
@@ -355,6 +356,53 @@ describe("summarizeDoorsLostEstimate", () => {
     ];
     const result = summarizeDoorsLostEstimate(estimates, 2, asOf);
     expect(result.doorsLostYTD).toBe(1);
+  });
+});
+
+// Churn by year — ADDED 2026-07-09, per Jason directly: "churn for the
+// year" as a live rolling count + percentage, plus a by-year sidebar.
+// Real anchors for 2023-2026: 137, 169, 222, 218.
+describe("summarizeChurnByYear", () => {
+  const asOf = new Date("2026-07-09T00:00:00Z");
+
+  it("buckets losses by the year of estimatedLossDate and divides by that year's real door-count anchor", () => {
+    const estimates = [
+      { propertyId: "1", estimatedLossDate: "2025-03-01" },
+      { propertyId: "2", estimatedLossDate: "2025-11-01" },
+    ];
+    const result = summarizeChurnByYear(estimates, asOf);
+    const year2025 = result.find((r) => r.year === 2025);
+    expect(year2025).toEqual({ year: 2025, doorsLost: 2, doorsAtStartOfYear: 222, churnPercent: 0.9, isCurrentYear: false });
+  });
+
+  it("includes every anchor year even at zero losses — a real 0% churn, not a gap", () => {
+    const result = summarizeChurnByYear([], asOf);
+    expect(result.every((r) => r.doorsLost === 0 && r.churnPercent === 0)).toBe(true);
+    expect(result.map((r) => r.year)).toEqual([2026, 2025, 2024, 2023]);
+  });
+
+  it("marks the current year isCurrentYear:true and only the current year", () => {
+    const result = summarizeChurnByYear([], asOf);
+    expect(result.find((r) => r.year === 2026)?.isCurrentYear).toBe(true);
+    expect(result.filter((r) => r.isCurrentYear)).toHaveLength(1);
+  });
+
+  it("sorts most recent year first", () => {
+    const result = summarizeChurnByYear([], asOf);
+    expect(result.map((r) => r.year)).toEqual([2026, 2025, 2024, 2023]);
+  });
+
+  it("only counts losses estimated so far — asOf being mid-year doesn't inflate the current year's count", () => {
+    const estimates = [{ propertyId: "1", estimatedLossDate: "2026-03-01" }];
+    const result = summarizeChurnByYear(estimates, asOf);
+    const year2026 = result.find((r) => r.year === 2026);
+    expect(year2026?.doorsLost).toBe(1);
+    expect(year2026?.churnPercent).toBe(0.5); // 1/218
+  });
+
+  it("excludes anchor years in the future relative to asOfDate", () => {
+    const result = summarizeChurnByYear([], new Date("2024-06-01T00:00:00Z"));
+    expect(result.map((r) => r.year)).toEqual([2024, 2023]); // 2025/2026 anchors exist but are still in the future relative to asOf
   });
 });
 

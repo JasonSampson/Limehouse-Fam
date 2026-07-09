@@ -35,6 +35,7 @@ import {
   summarizeDoorsLostEstimate,
   summarizeNetDoorsYTD,
   summarizeTotalUnitsYoY,
+  summarizeChurnByYear,
   netDoorsRows,
   doorsAddedRows,
 } from "../kpi/churn.js";
@@ -365,6 +366,7 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
 
     const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
     const doorsLostEstimated = summarizeDoorsLostEstimate(lossEstimates, inactiveProperties.length, new Date());
+    const churnByYear = summarizeChurnByYear(lossEstimates, new Date());
 
     // Net Doors (Top of Mind) — EXACT, using Jason's own real door counts
     // as of Jan 1 each year, not the lease-history estimate above. See
@@ -382,6 +384,7 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
         note:
           "Estimated from the most recent lease end date on each currently-inactive property, not a real deactivation date — likely undercounts properties that never had a Buildium lease on file (see propertiesUndercounted).",
       },
+      churnByYear,
       netDoorsYTD,
     });
   } catch (err) {

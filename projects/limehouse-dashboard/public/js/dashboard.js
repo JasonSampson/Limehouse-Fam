@@ -599,7 +599,7 @@ function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avg
             : couldNotLoadTile({ id: "avg-days-vacant", label: "Avg Days Vacant", sourceTags: ["BD"] })
         }
         ${doorsTile({ doors, id: "doors-added", label: "Doors Added" })}
-        ${doorsTile({ doors, id: "doors-lost", label: "Doors Lost / Churn" })}
+        ${renderChurnTile(doors)}
         ${
           owners
             ? tileHtml({
@@ -620,10 +620,6 @@ function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avg
       <div class="chart-card">
         <p class="chart-card-title">Property Health</p>
         ${renderPropertyHealthChart(propertyHealth)}
-      </div>
-      <div class="chart-card">
-        <p class="chart-card-title">Doors Added vs Lost</p>
-        ${renderDoorsChart(doors)}
       </div>
     </div>
   `;
@@ -716,22 +712,43 @@ function renderPropertyHealthChart(propertyHealth) {
   return donutWithLegendHtml({ canvasId: "property-health-chart", categories });
 }
 
-// Doors Added vs Lost — 12-MONTH CHART specifically (distinct from the
-// tiles above, which now show real numbers). CORRECTED 2026-07-04: the
-// door counts themselves are real now (see doorsTile), but there's no
-// month-by-month historical breakdown yet — only cumulative 30/60/90-day
-// windows (added) and a 31-day/12-month total (lost estimate). This is a
-// genuine "not built yet" gap, not a permanent limitation like the tiles
-// used to be — using notConnectedBox (dashed), not notAvailableBox, since
-// this one really could get wired up later.
-function renderDoorsChart(doors) {
+// Doors Lost / Churn tile — REBUILT 2026-07-09, per Jason directly: a live
+// rolling count + percentage for the current year's churn, shrunk down to
+// fit the same tile slot the plain "Doors Lost / Churn" tile used to
+// occupy (previously this was its own full-width chart-card below —
+// Jason asked for it moved back into the tile grid instead). The compact
+// "by year" line reuses summarizeChurnByYear's real Jan-1 door-count
+// anchors (src/kpi/churn.ts) as each year's denominator.
+function renderChurnTile(doors) {
   if (!doors) {
-    return notConnectedBox("Couldn't load", "Couldn't reach the doors-tracking endpoint just now.");
+    return couldNotLoadTile({ id: "doors-lost", label: "Doors Lost / Churn", sourceTags: ["BD"] });
   }
-  return notConnectedBox(
-    "Not connected yet",
-    "Month-by-month history isn't wired up yet — the Doors Added and Doors Lost tiles above are live."
-  );
+  const churnByYear = doors.churnByYear;
+  const currentYearRow = churnByYear && churnByYear.find((y) => y.isCurrentYear);
+  if (!currentYearRow) {
+    return couldNotLoadTile({ id: "doors-lost", label: "Doors Lost / Churn", sourceTags: ["BD"] });
+  }
+  const previousYears = churnByYear.filter((y) => !y.isCurrentYear);
+  const historyHtml =
+    previousYears.length > 0
+      ? previousYears
+          .map((y) => `<div class="churn-tile-year-row"><span>${y.year}</span><span>${formatPercent(y.churnPercent)}</span></div>`)
+          .join("")
+      : "";
+
+  return `
+    <div class="tile">
+      <div class="tile-top">
+        <span class="tile-label">Doors Lost / Churn</span>
+        ${badgeHtml(["BD"], true)}
+      </div>
+      <div class="churn-tile-body">
+        <div class="tile-value">${formatNumber(currentYearRow.doorsLost)}</div>
+        ${historyHtml ? `<div class="churn-tile-history">${historyHtml}</div>` : ""}
+      </div>
+      <div class="tile-yoy up">${formatPercent(currentYearRow.churnPercent)} churn · ${currentYearRow.year} so far</div>
+    </div>
+  `;
 }
 
 // ---------------------------------------------------------------------

@@ -8,6 +8,8 @@ import { fetchAndClassifyLeaseCharges, insertNoticeLineItems } from "../lib/noti
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace, childSpan } from "../lib/trace.js";
 import { logInfo, logError } from "../lib/appLogger.js";
+import { sendAlert } from "../email/sendAlert.js";
+import { formatCurrency } from "../templates/renderTemplate.js";
 
 interface LeaseRow {
   id: number;
@@ -17,11 +19,218 @@ interface LeaseRow {
   buildium_lease_id: string;
 }
 
+interface UnassignedPropertyIssue {
+  leaseId: number;
+  propertyId: number;
+  propertyName: string;
+  amountOwed: number;
+  dueDate: string;
+}
+
 interface DailyJobResult {
   leasesChecked: number;
   noticesDrafted: number;
   excludedCount: number;
+  cyclesReconciled: number;
+  noticesAutoVoided: number;
+  unassignedPropertyCount: number;
   errors: string[];
+}
+
+// Reconciles already-open late_cycles rows against today's Buildium
+// balances. fetchOutstandingBalances() only returns leases that still owe
+// something — a lease that pays off (or pays down below the de minimis
+// threshold) simply drops out of that list entirely, so without this step
+// its late_cycles row, and any still-draft notice attached to it, would
+// stay open forever: a tenant who paid would keep showing up as needing a
+// notice. sendNotice.ts already has a similar "stale-draft protection"
+// check, but only at the moment someone clicks Send — this runs it
+// proactively every day so a paid lease disappears from the review queue
+// the same day it's paid, not only when someone tries to send its notice.
+export async function reconcileClosedCycles(
+  jobPool: Pool,
+  outstandingBalances: Array<{ leaseId: string; balance: number }>,
+  deMinimisThreshold: number,
+  trace: ReturnType<typeof startTrace>
+): Promise<{ cyclesReconciled: number; noticesAutoVoided: number; errors: string[] }> {
+  const balanceByBuildiumLeaseId = new Map(outstandingBalances.map((b) => [b.leaseId, b.balance]));
+  const errors: string[] = [];
+  let cyclesReconciled = 0;
+  let noticesAutoVoided = 0;
+
+  const openCycles = await jobPool.query<{ id: number; lease_id: number; property_id: number; buildium_lease_id: string }>(
+    `SELECT lc.id, lc.lease_id, l.property_id, l.buildium_lease_id
+     FROM late_cycles lc
+     JOIN leases l ON l.id = lc.lease_id
+     WHERE lc.closed_at IS NULL`
+  );
+
+  for (const cycle of openCycles.rows) {
+    const span = childSpan(trace);
+    try {
+      // Absent from the balances list means Buildium reports zero/credit
+      // balance for this lease (see fetchOutstandingBalances's doc comment)
+      // — not an error, and not "still owes money."
+      const currentBalance = balanceByBuildiumLeaseId.get(cycle.buildium_lease_id) ?? 0;
+      if (currentBalance > 0 && currentBalance >= deMinimisThreshold) {
+        continue; // still genuinely late — leave the cycle open
+      }
+
+      const closedReason = currentBalance <= 0 ? "paid_in_full" : "paid_below_threshold";
+      const voidReason =
+        closedReason === "paid_in_full"
+          ? "Tenant paid the balance in full before the notice was sent (reconciled automatically by the daily job)."
+          : "Tenant's balance dropped below the de minimis threshold before the notice was sent (reconciled automatically by the daily job).";
+
+      await jobPool.query("UPDATE late_cycles SET closed_at = now(), closed_reason = $1 WHERE id = $2", [
+        closedReason,
+        cycle.id,
+      ]);
+      cyclesReconciled += 1;
+
+      // Only a still-draft notice gets auto-voided — a notice that was
+      // already sent while the debt was outstanding is a legitimate
+      // historical record and must not be touched.
+      const voided = await jobPool.query<{ id: number }>(
+        `UPDATE notices SET status = 'voided', voided_at = now(), voided_reason = $1
+         WHERE late_cycle_id = $2 AND status = 'draft'
+         RETURNING id`,
+        [voidReason, cycle.id]
+      );
+      if (voided.rows.length > 0) {
+        noticesAutoVoided += 1;
+      }
+
+      await writeAuditLog(jobPool, {
+        companyId: "limehouse-pm",
+        instanceId: "late-rent-notices",
+        decisionId: voided.rows.length > 0 ? `notice-${voided.rows[0].id}` : undefined,
+        actorType: "system",
+        actorId: "daily_lateness_check",
+        eventType: "late_cycle.closed",
+        eventSummary:
+          `Late cycle ${cycle.id} closed (${closedReason})` +
+          (voided.rows.length > 0 ? `, voided draft notice ${voided.rows[0].id}` : ""),
+        eventData: { closedReason, currentBalance, deMinimisThreshold },
+        contextSnapshot: { leaseId: cycle.lease_id, lateCycleId: cycle.id },
+        privacyCategory: "Aggregation",
+        regulationTags: ["VRLTA"],
+        riskLevel: "low",
+        propertyId: cycle.property_id,
+        legalBasis: "payment_received",
+        retentionPolicy: "retain_7_years_post_tenancy",
+        trace: span,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`Late cycle ${cycle.id} (lease ${cycle.lease_id}) reconciliation: ${message}`);
+      logError("daily lateness check: error reconciling late cycle", {
+        traceId: span.trace_id,
+        error: message,
+      });
+    }
+  }
+
+  return { cyclesReconciled, noticesAutoVoided, errors };
+}
+
+// Resolves which late_cycles row a qualifying lease's notice should attach
+// to for a given due date — first-ever cycle, an already-open one, or a
+// REOPEN of a previously-closed one (migration 0042). A cycle gets closed
+// when a balance check shows the tenant paid (reconcileClosedCycles above,
+// or staleDraftCheck.ts); if that payment later bounces (NSF) or is
+// otherwise reversed, the tenant is delinquent again for the SAME rent
+// period, and this is what notices a fresh notice is needed rather than
+// silently doing nothing until a LATER due date makes them qualify again.
+//
+// A reopen never touches the closed row it's reopening from — it inserts a
+// brand-new late_cycles row (higher cycle_attempt, reopened_from_cycle_id
+// pointing back to it) so the original stays exactly as it was,
+// permanently, as audit history. notices.late_cycle_id stays UNIQUE
+// unchanged; the caller's existing "draft a fresh notice for this
+// lateCycleId" step (ON CONFLICT (late_cycle_id) DO NOTHING) works
+// unmodified since a reopened cycle always starts with zero notices.
+export async function resolveLateCycleId(
+  jobPool: Pool,
+  params: { leaseId: number; propertyId: number; dueDateStr: string; deMinimisConfigId: number; trace: ReturnType<typeof startTrace> }
+): Promise<number> {
+  const mostRecent = await jobPool.query<{ id: number; closed_at: Date | null; cycle_attempt: number }>(
+    "SELECT id, closed_at, cycle_attempt FROM late_cycles WHERE lease_id = $1 AND due_date = $2 ORDER BY cycle_attempt DESC LIMIT 1",
+    [params.leaseId, params.dueDateStr]
+  );
+
+  if (mostRecent.rows.length === 0) {
+    // First-ever cycle for this lease+due_date — same happy path as
+    // before (cycle_attempt defaults to 1). ON CONFLICT DO NOTHING +
+    // refetch preserves the original idempotency guarantee: a second
+    // same-day run of this job is a no-op insert, not a second notice.
+    const inserted = await jobPool.query<{ id: number }>(
+      `INSERT INTO late_cycles (lease_id, due_date, de_minimis_config_id, opened_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (lease_id, due_date, cycle_attempt) DO NOTHING
+       RETURNING id`,
+      [params.leaseId, params.dueDateStr, params.deMinimisConfigId]
+    );
+    if (inserted.rows.length > 0) {
+      return inserted.rows[0].id;
+    }
+    const refetch = await jobPool.query<{ id: number }>(
+      "SELECT id FROM late_cycles WHERE lease_id = $1 AND due_date = $2 AND cycle_attempt = 1",
+      [params.leaseId, params.dueDateStr]
+    );
+    return refetch.rows[0].id;
+  }
+
+  if (mostRecent.rows[0].closed_at === null) {
+    // Already open — same due date, already being worked (or a notice
+    // already drafted for it). Identical to the original behavior.
+    return mostRecent.rows[0].id;
+  }
+
+  // Reopen case: the most recent attempt for this due date was closed
+  // (e.g. paid_in_full), but the tenant is delinquent again for the SAME
+  // rent period — a bounced/reversed payment.
+  const previousCycleId = mostRecent.rows[0].id;
+  const nextAttempt = mostRecent.rows[0].cycle_attempt + 1;
+  const reopened = await jobPool.query<{ id: number }>(
+    `INSERT INTO late_cycles (lease_id, due_date, de_minimis_config_id, opened_at, cycle_attempt, reopened_from_cycle_id)
+     VALUES ($1, $2, $3, now(), $4, $5)
+     ON CONFLICT (lease_id, due_date, cycle_attempt) DO NOTHING
+     RETURNING id`,
+    [params.leaseId, params.dueDateStr, params.deMinimisConfigId, nextAttempt, previousCycleId]
+  );
+  let lateCycleId: number;
+  if (reopened.rows.length > 0) {
+    lateCycleId = reopened.rows[0].id;
+  } else {
+    const refetch = await jobPool.query<{ id: number }>(
+      "SELECT id FROM late_cycles WHERE lease_id = $1 AND due_date = $2 AND cycle_attempt = $3",
+      [params.leaseId, params.dueDateStr, nextAttempt]
+    );
+    lateCycleId = refetch.rows[0].id;
+  }
+
+  await writeAuditLog(jobPool, {
+    companyId: "limehouse-pm",
+    instanceId: "late-rent-notices",
+    actorType: "system",
+    actorId: "daily_lateness_check",
+    eventType: "late_cycle.reopened",
+    eventSummary:
+      `Late cycle reopened for lease ${params.leaseId}, due date ${params.dueDateStr}: balance is owed again ` +
+      `after being closed (previous cycle ${previousCycleId}), now reversed — e.g. an NSF bounce.`,
+    eventData: { previousCycleId, newCycleId: lateCycleId, cycleAttempt: nextAttempt },
+    contextSnapshot: { leaseId: params.leaseId, dueDate: params.dueDateStr },
+    privacyCategory: "Aggregation",
+    regulationTags: ["VRLTA"],
+    riskLevel: "high",
+    propertyId: params.propertyId,
+    legalBasis: "payment_reversed_reopen",
+    retentionPolicy: "retain_7_years_post_tenancy",
+    trace: params.trace,
+  });
+
+  return lateCycleId;
 }
 
 // The daily job, scheduled for 10:00 EST (after the prior day's Buildium
@@ -42,11 +251,15 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
   const errors: string[] = [];
   let noticesDrafted = 0;
   let excludedCount = 0;
+  const unassignedPropertyIssues: UnassignedPropertyIssue[] = [];
 
   await syncBuildiumData(jobPool);
 
   const { id: deMinimisConfigId, amount: deMinimisThreshold } = await getDeMinimisThreshold(jobPool);
   const outstandingBalances = await fetchOutstandingBalances();
+
+  const reconciliation = await reconcileClosedCycles(jobPool, outstandingBalances, deMinimisThreshold, trace);
+  errors.push(...reconciliation.errors);
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -130,27 +343,14 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
         continue;
       }
 
-      // Duplicate guard: UNIQUE(lease_id, due_date) on late_cycles means a
-      // second daily-job run for the same due date is a no-op insert, not
-      // a second notice.
-      const cycleResult = await jobPool.query<{ id: number }>(
-        `INSERT INTO late_cycles (lease_id, due_date, de_minimis_config_id, opened_at)
-         VALUES ($1, $2, $3, now())
-         ON CONFLICT (lease_id, due_date) DO NOTHING
-         RETURNING id`,
-        [lease.id, lateness.dueDate.toISOString().slice(0, 10), deMinimisConfigId]
-      );
-
-      let lateCycleId: number;
-      if (cycleResult.rows.length > 0) {
-        lateCycleId = cycleResult.rows[0].id;
-      } else {
-        const existing = await jobPool.query<{ id: number }>(
-          "SELECT id FROM late_cycles WHERE lease_id = $1 AND due_date = $2",
-          [lease.id, lateness.dueDate.toISOString().slice(0, 10)]
-        );
-        lateCycleId = existing.rows[0].id;
-      }
+      const dueDateStr = lateness.dueDate.toISOString().slice(0, 10);
+      const lateCycleId = await resolveLateCycleId(jobPool, {
+        leaseId: lease.id,
+        propertyId: lease.property_id,
+        dueDateStr,
+        deMinimisConfigId,
+        trace: leaseSpan,
+      });
 
       const activeTemplate = await jobPool.query<{ id: number }>(
         "SELECT id FROM letter_templates WHERE is_active = true LIMIT 1"
@@ -164,6 +364,22 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
         [lease.property_id]
       );
       if (assignedPm.rows.length === 0) {
+        // A genuinely delinquent lease with no one to draft the notice to
+        // review/send — this used to only land in the ephemeral `errors`
+        // array (logged, never actually seen by Jason). Collected here so
+        // it can be surfaced in a real alert below: a property silently
+        // missing a PM assignment should never be a "discover it by
+        // accident" problem.
+        const propertyResult = await jobPool.query<{ name: string }>("SELECT name FROM properties WHERE id = $1", [
+          lease.property_id,
+        ]);
+        unassignedPropertyIssues.push({
+          leaseId: lease.id,
+          propertyId: lease.property_id,
+          propertyName: propertyResult.rows[0]?.name ?? `property ${lease.property_id}`,
+          amountOwed: balanceRow.balance,
+          dueDate: lateness.dueDate.toISOString().slice(0, 10),
+        });
         errors.push(`Lease ${lease.id}: no PM assigned to property ${lease.property_id}, skipping draft`);
         continue;
       }
@@ -271,13 +487,55 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
     }
   }
 
+  // Safeguard: a genuinely delinquent tenant whose property has no PM
+  // assigned would otherwise sit invisible — no notice drafted, and (since
+  // RLS scopes every PM's view to their own assigned doors) not visible to
+  // anyone in the app either, including Jason. Real money owed should never
+  // depend on someone noticing this by accident.
+  if (unassignedPropertyIssues.length > 0) {
+    try {
+      await sendAlert({
+        to: env.JASON_ALERT_EMAIL,
+        subject: `ACTION NEEDED: ${unassignedPropertyIssues.length} propert${unassignedPropertyIssues.length === 1 ? "y needs" : "ies need"} a manager assigned before a late notice can go out`,
+        body:
+          `Today's late-rent check found ${unassignedPropertyIssues.length} genuinely delinquent lease(s) whose ` +
+          `property has no property manager assigned. No notice was drafted for any of them — this system will ` +
+          `never draft a legal notice with nobody accountable to review and send it.\n\n` +
+          unassignedPropertyIssues
+            .map((i) => `- ${i.propertyName} (lease ${i.leaseId}): owes ${formatCurrency(i.amountOwed)}, due ${i.dueDate}`)
+            .join("\n") +
+          `\n\nAssign a property manager to each of these properties (pm_property_assignments) — the next daily ` +
+          `run will pick them up automatically once assigned.`,
+      });
+    } catch (err) {
+      // Same principle as jobRunner.ts's job-failure alert: the alert path
+      // itself failing must never mask or block the job's own success —
+      // log loudly, don't throw.
+      logError("failed to send unassigned-property alert", {
+        traceId: trace.trace_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   logInfo("daily lateness check complete", {
     traceId: trace.trace_id,
     leasesChecked: outstandingBalances.length,
     noticesDrafted,
     excludedCount,
+    cyclesReconciled: reconciliation.cyclesReconciled,
+    noticesAutoVoided: reconciliation.noticesAutoVoided,
+    unassignedPropertyCount: unassignedPropertyIssues.length,
     errorCount: errors.length,
   });
 
-  return { leasesChecked: outstandingBalances.length, noticesDrafted, excludedCount, errors };
+  return {
+    leasesChecked: outstandingBalances.length,
+    noticesDrafted,
+    excludedCount,
+    cyclesReconciled: reconciliation.cyclesReconciled,
+    noticesAutoVoided: reconciliation.noticesAutoVoided,
+    unassignedPropertyCount: unassignedPropertyIssues.length,
+    errors,
+  };
 }

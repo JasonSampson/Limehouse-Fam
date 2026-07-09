@@ -540,6 +540,19 @@ function formatMonthLabel(yyyyMm) {
 // OCCUPANCY & DOORS
 // ---------------------------------------------------------------------
 
+// Total Units "vs last yr" badge — ADDED 2026-07-09, per Jason directly,
+// matching the vendor's own "▲ +143.8% vs last yr" badge on their Total
+// Units tile. Their exact number doesn't reconcile against any of Jason's
+// real Jan-1 door-count anchors (see summarizeTotalUnitsYoY in
+// src/kpi/churn.ts), so this uses his own real anchor (doors under
+// management as of Jan 1 this year) instead of guessing at their baseline.
+function totalUnitsYoyBadge(totalUnitsYoY) {
+  if (!totalUnitsYoY) return null;
+  const arrow = totalUnitsYoY.direction === "up" ? "▲" : "▼";
+  const sign = totalUnitsYoY.percent >= 0 ? "+" : "";
+  return { direction: totalUnitsYoY.direction, text: `${arrow} ${sign}${totalUnitsYoY.percent}% vs Jan. 1st` };
+}
+
 function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avgDaysVacant }) {
   return `
     <div class="section">
@@ -554,6 +567,7 @@ function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avg
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
+                yoy: totalUnitsYoyBadge(occupancy.totalUnitsYoY),
               })
             : couldNotLoadTile({ id: "total-units", label: "Total Units", sourceTags: ["BD"] })
         }

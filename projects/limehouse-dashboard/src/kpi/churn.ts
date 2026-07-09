@@ -182,6 +182,42 @@ export function summarizeNetDoorsYTD(currentTotalDoors: number, asOfDate: Date):
   };
 }
 
+function roundPercent(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+// Total Units "vs last yr" badge — ADDED 2026-07-09, per Jason directly.
+// The vendor's own site shows a "+143.8% vs last yr" badge under Total
+// Units, but that number doesn't reconcile against any of Jason's real
+// Jan-1 door-count anchors above (it implies a ~96-unit baseline, which
+// isn't 2023/2024/2025/2026's real count) — almost certainly built on the
+// same kind of incomplete historical snapshot as the vendor's own admitted
+// ~50-day-old Net Doors tracking. Rather than guess at their broken
+// baseline, this reuses the SAME real anchor as Net Doors YTD (doors under
+// management as of Jan 1 this year) — Jason's own call when asked which
+// anchor to use for this comparison.
+export interface TotalUnitsYoY {
+  percent: number; // signed: positive = grew since Jan 1, negative = shrank
+  direction: "up" | "down";
+  anchorUnits: number;
+  anchorDate: string; // "YYYY-01-01"
+}
+
+// Returns null under the same conditions as summarizeNetDoorsYTD (no known
+// anchor for this year) or when the anchor is 0 (can't divide by it).
+export function summarizeTotalUnitsYoY(currentTotalUnits: number, asOfDate: Date): TotalUnitsYoY | null {
+  const year = asOfDate.getUTCFullYear();
+  const anchorUnits = DOOR_COUNT_ANCHORS_BY_YEAR[year];
+  if (anchorUnits === undefined || anchorUnits === 0) return null;
+  const percent = roundPercent(((currentTotalUnits - anchorUnits) / anchorUnits) * 100);
+  return {
+    percent,
+    direction: percent >= 0 ? "up" : "down",
+    anchorUnits,
+    anchorDate: `${year}-01-01`,
+  };
+}
+
 export interface DoorsAddedSummary {
   doorsAdded30Days: number;
   doorsAdded60Days: number;

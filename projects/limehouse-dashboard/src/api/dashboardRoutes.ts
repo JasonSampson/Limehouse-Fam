@@ -34,6 +34,7 @@ import {
   estimatePropertyLossDates,
   summarizeDoorsLostEstimate,
   summarizeNetDoorsYTD,
+  summarizeTotalUnitsYoY,
   netDoorsRows,
 } from "../kpi/churn.js";
 import {
@@ -142,7 +143,8 @@ dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) 
     // match the vendor's real number without changing the Occupancy tile's
     // already-correct math.
     const vacantUnitsByFlag = units.filter((u) => !u.IsUnitOccupied).length;
-    res.json({ ...summary, vacantUnitsByFlag });
+    const totalUnitsYoY = summarizeTotalUnitsYoY(units.length, new Date());
+    res.json({ ...summary, vacantUnitsByFlag, totalUnitsYoY });
   } catch (err) {
     logError("GET /api/dashboard/occupancy failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load occupancy data from Buildium." });

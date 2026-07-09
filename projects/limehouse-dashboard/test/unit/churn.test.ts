@@ -5,6 +5,7 @@ import {
   estimatePropertyLossDates,
   summarizeDoorsLostEstimate,
   summarizeNetDoorsYTD,
+  summarizeTotalUnitsYoY,
   netDoorsRows,
 } from "../../src/kpi/churn.js";
 import type { BuildiumOwner, BuildiumProperty, BuildiumLease } from "../../src/buildium/client.js";
@@ -337,6 +338,33 @@ describe("summarizeNetDoorsYTD", () => {
   it("returns null when there's no known anchor for asOfDate's year", () => {
     const asOf = new Date("2030-01-01T00:00:00Z");
     expect(summarizeNetDoorsYTD(300, asOf)).toBeNull();
+  });
+});
+
+// ADDED 2026-07-09, per Jason directly: the vendor's own "Total Units"
+// tile shows a "+143.8% vs last yr" badge, but that figure doesn't
+// reconcile against any of Jason's real Jan-1 anchors (implies a ~96-unit
+// baseline that was never real) — same kind of broken historical tracking
+// as the vendor's own admitted ~50-day-old Net Doors snapshot. Jason chose
+// to reuse the Jan 1 THIS YEAR anchor (same one Net Doors YTD already
+// uses) rather than guess at the vendor's baseline.
+describe("summarizeTotalUnitsYoY", () => {
+  it("computes percent change from the door count at the start of this year", () => {
+    const asOf = new Date("2026-07-09T00:00:00Z");
+    const result = summarizeTotalUnitsYoY(234, asOf); // real anchor for 2026 is 218
+    expect(result).toEqual({ percent: 7.3, direction: "up", anchorUnits: 218, anchorDate: "2026-01-01" });
+  });
+
+  it("returns direction:down and a negative percent when below the year's starting count", () => {
+    const asOf = new Date("2025-06-01T00:00:00Z");
+    const result = summarizeTotalUnitsYoY(200, asOf); // real anchor for 2025 is 222
+    expect(result?.direction).toBe("down");
+    expect(result?.percent).toBeLessThan(0);
+  });
+
+  it("returns null when there's no known anchor for asOfDate's year", () => {
+    const asOf = new Date("2030-01-01T00:00:00Z");
+    expect(summarizeTotalUnitsYoY(300, asOf)).toBeNull();
   });
 });
 

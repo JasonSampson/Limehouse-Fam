@@ -1306,7 +1306,8 @@ async function handleTileClick(tileId) {
   if (tileId === "vacant-not-rented") {
     await simpleDrillDown({
       tileId,
-      title: "Vacant — Not Rented",
+      title: "Vacant (no future lease)",
+      subtitle: (rows) => `${rows.length} vacant`,
       url: "/api/dashboard/units/vacant",
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
@@ -1484,12 +1485,12 @@ async function handleTileClick(tileId) {
 // each repeat the same try/catch boilerplate. `rowsKey` is for endpoints
 // that wrap rows in an envelope (e.g. {connected, prospects: [...]})
 // instead of returning a bare array.
-async function simpleDrillDown({ tileId, title, url, note, columns, emptyText, rowsKey }) {
+async function simpleDrillDown({ tileId, title, url, note, subtitle, columns, emptyText, rowsKey }) {
   openLoadingModal(title);
   try {
     const response = await apiGet(url);
     const rows = rowsKey ? response[rowsKey] ?? [] : response;
-    openDrillDownModal({ title, note, columns, rows, emptyText });
+    openDrillDownModal({ title, subtitle: typeof subtitle === "function" ? subtitle(rows) : subtitle, note, columns, rows, emptyText });
   } catch (err) {
     openDrillDownModal({ title, columns: [], rows: [], emptyText: `Couldn't load: ${err.message}` });
   }

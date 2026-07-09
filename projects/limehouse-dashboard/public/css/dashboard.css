@@ -687,14 +687,25 @@ main {
 .modal-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.modal-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .modal-title {
   font-size: 15px;
   font-weight: 700;
+}
+
+.modal-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .modal-close {

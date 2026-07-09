@@ -3,7 +3,7 @@
 // (property/unit/balance for delinquency, property/unit/rent for occupied
 // units, etc. — per the project brief).
 
-function openDrillDownModal({ title, formula, note, columns, rows, emptyText = "No records for this period." }) {
+function openDrillDownModal({ title, subtitle, formula, note, columns, rows, emptyText = "No records for this period." }) {
   closeDrillDownModal();
 
   const overlay = document.createElement("div");
@@ -39,10 +39,15 @@ function openDrillDownModal({ title, formula, note, columns, rows, emptyText = "
         </table>
       `;
 
+  const subtitleHtml = subtitle ? `<span class="modal-subtitle">${subtitle}</span>` : "";
+
   overlay.innerHTML = `
     <div class="modal-panel">
       <div class="modal-header">
-        <span class="modal-title">${title}</span>
+        <div class="modal-heading">
+          <span class="modal-title">${title}</span>
+          ${subtitleHtml}
+        </div>
         <button class="modal-close" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body">${bodyHtml}</div>

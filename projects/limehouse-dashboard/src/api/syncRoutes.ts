@@ -21,10 +21,11 @@ import {
   resolveLeaseBalancesPerMonth,
   monthsSinceYearsAgo,
   buildDuePerMonth,
-  extractDepositDisposition,
+  extractSecurityDepositWithheld,
   summarizeSecurityDepositWithheld,
-  type PastLeaseDeposit,
+  securityDepositMoveOutWindow,
 } from "../kpi/rentCollection.js";
+import { securityDepositWithheldRows } from "../kpi/leaseRows.js";
 import { syncCallActivityForPeriod } from "../rentengine/callActivitySync.js";
 import { resolvePeriod } from "../kpi/period.js";
 import { logError, logInfo } from "../lib/logger.js";
@@ -236,47 +237,39 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
   }
 });
 
-// Avg SD Withheld % (Dashboard tab Financials section) — NEW 2026-07-04,
-// per Oracle's real-data research. Operates on Past leases with a recent
-// move-out date, not Active leases — a fundamentally different population
-// than the rest of the Financials section. Sequential per-lease transaction
-// fetches, same rate-limit discipline as the rent-collection sync above
-// (this endpoint's population is much smaller — recent move-outs only, not
-// the whole active portfolio — so this runs quickly in practice).
-//
-// Window: trailing 12 months of LeaseToDate, matching the same "last 12
-// months" convention used elsewhere on this dashboard. If this doesn't land
-// close to the vendor's real 57% once compared live, the window is the
-// first thing to adjust — Oracle's spec flagged this as unconfirmed against
-// the vendor's own population, not the formula.
+// Avg SD Withheld / Avg SD Withheld % (Dashboard tab Financials section) —
+// REBUILT 2026-07-10, per Jason directly, matching the vendor's own
+// real methodology (read from their live drill-down note, then confirmed
+// against real Buildium data) — see the full derivation in
+// rentCollection.ts's comment above summarizeSecurityDepositWithheld.
+// Operates on Past leases with a recent move-out date, not Active leases —
+// a fundamentally different population than the rest of the Financials
+// section. Only fetches transactions for leases whose move-out already
+// falls in the real window (13 months ago through 30 days ago), not every
+// Past lease ever, keeping this fast even as the window slides forward.
 syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "security_deposit_withheld_cache_refresh");
   try {
     const pastLeases = await fetchLeasesByStatus(["Past"]);
-    const twelveMonthsAgo = new Date();
-    twelveMonthsAgo.setUTCMonth(twelveMonthsAgo.getUTCMonth() - 12);
-    const recentMoveOuts = pastLeases.filter(
-      (l) => l.LeaseToDate !== null && new Date(l.LeaseToDate) >= twelveMonthsAgo
+    const window = securityDepositMoveOutWindow(new Date());
+    const candidateLeases = pastLeases.filter(
+      (l) => l.LeaseToDate !== null && l.LeaseToDate >= window.start && l.LeaseToDate <= window.end
     );
-
-    const deposits: PastLeaseDeposit[] = recentMoveOuts.map((l) => ({
-      leaseId: String(l.Id),
-      securityDeposit: l.AccountDetails?.SecurityDeposit ?? null,
-    }));
 
     // Sequential, not Promise.all — same rate-limit reasoning as the
     // rent-collection sync above, applied here even though this
     // population is smaller.
-    const dispositions = [];
-    for (const lease of recentMoveOuts) {
+    const withheldByLeaseId = new Map<string, ReturnType<typeof extractSecurityDepositWithheld>>();
+    for (const lease of candidateLeases) {
       const transactions = await fetchLeaseTransactions(String(lease.Id));
-      dispositions.push(extractDepositDisposition(String(lease.Id), transactions));
+      withheldByLeaseId.set(String(lease.Id), extractSecurityDepositWithheld(String(lease.Id), transactions));
     }
 
-    const summary = summarizeSecurityDepositWithheld(deposits, dispositions);
-    await upsertCachedMetric("security_deposit_withheld", "portfolio", "buildium", summary);
+    const rows = securityDepositWithheldRows(candidateLeases, withheldByLeaseId, window);
+    const summary = summarizeSecurityDepositWithheld(rows);
+    await upsertCachedMetric("security_deposit_withheld", "portfolio", "buildium", { summary, rows });
 
-    await completeSyncRun(syncLogId, recentMoveOuts.length);
+    await completeSyncRun(syncLogId, candidateLeases.length);
     logInfo("Security deposit withheld sync completed", { syncLogId, ...summary });
     res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
   } catch (err) {

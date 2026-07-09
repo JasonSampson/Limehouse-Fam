@@ -11,8 +11,10 @@ import {
   vacantUnitDaysRows,
   averageDaysVacant,
   renewalRateRows,
+  securityDepositWithheldRows,
 } from "../../src/kpi/leaseRows.js";
 import type { BuildiumLease, BuildiumUnit } from "../../src/buildium/client.js";
+import type { LeaseDepositWithheld, MoveOutWindow } from "../../src/kpi/rentCollection.js";
 
 function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
   return {
@@ -209,6 +211,71 @@ describe("renewalRateRows", () => {
       lease({ Id: 2, LeaseStatus: "Past", LeaseFromDate: "2025-03-01", LeaseToDate: "2026-03-01" }),
     ];
     const rows = renewalRateRows(leases, new Map(), asOf);
+    expect(rows.map((r) => r.leaseId)).toEqual(["2", "1"]);
+  });
+});
+
+describe("securityDepositWithheldRows", () => {
+  const window: MoveOutWindow = { start: "2025-06-09", end: "2026-06-09" };
+
+  function withheld(leaseId: string, amount: number, hasQualifyingEntry = true): [string, LeaseDepositWithheld] {
+    return [leaseId, { leaseId, withheld: amount, hasQualifyingEntry }];
+  }
+
+  it("includes a Past lease that moved out within the window, has a known deposit, and has a qualifying entry", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-03-11", AccountDetails: { Rent: 1500, SecurityDeposit: 2450 } })];
+    const rows = securityDepositWithheldRows(leases, new Map([withheld("1", 2450)]), window);
+    expect(rows).toEqual([
+      { leaseId: "1", propertyId: "100", unitNumber: "1", tenantName: "Jane Doe", moveOutDate: "2026-03-11", securityDeposit: 2450, withheld: 2450, percent: 100 },
+    ]);
+  });
+
+  it("excludes a lease whose move-out date falls outside the window (too recent or too old)", () => {
+    const leases = [
+      lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-06-20" }), // after window.end — too recent, not reconciled yet
+      lease({ Id: 2, LeaseStatus: "Past", LeaseToDate: "2025-01-01" }), // before window.start — too old
+    ];
+    const withheldByLeaseId = new Map([withheld("1", 500), withheld("2", 500)]);
+    expect(securityDepositWithheldRows(leases, withheldByLeaseId, window)).toEqual([]);
+  });
+
+  it("excludes a lease with no known deposit amount (null or zero)", () => {
+    const leases = [
+      lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-01-01", AccountDetails: { Rent: 1500, SecurityDeposit: null } }),
+      lease({ Id: 2, LeaseStatus: "Past", LeaseToDate: "2026-01-01", AccountDetails: { Rent: 1500, SecurityDeposit: 0 } }),
+    ];
+    const withheldByLeaseId = new Map([withheld("1", 500), withheld("2", 500)]);
+    expect(securityDepositWithheldRows(leases, withheldByLeaseId, window)).toEqual([]);
+  });
+
+  it("excludes a lease with no qualifying reconciliation entry yet, rather than showing it as $0/0%", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-01-01", AccountDetails: { Rent: 1500, SecurityDeposit: 2000 } })];
+    const withheldByLeaseId = new Map([withheld("1", 0, false)]);
+    expect(securityDepositWithheldRows(leases, withheldByLeaseId, window)).toEqual([]);
+  });
+
+  it("excludes a lease absent from the withheld map entirely", () => {
+    const leases = [lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-01-01", AccountDetails: { Rent: 1500, SecurityDeposit: 2000 } })];
+    expect(securityDepositWithheldRows(leases, new Map(), window)).toEqual([]);
+  });
+
+  it("caps withheld at the lease's own deposit amount", () => {
+    // Real vendor rule: withheld can never exceed what was actually
+    // collected — a data-entry overshoot on the Buildium side shouldn't
+    // produce a >100% row.
+    const leases = [lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-01-01", AccountDetails: { Rent: 1500, SecurityDeposit: 1000 } })];
+    const rows = securityDepositWithheldRows(leases, new Map([withheld("1", 1450)]), window);
+    expect(rows[0].withheld).toBe(1000);
+    expect(rows[0].percent).toBe(100);
+  });
+
+  it("sorts rows by percent withheld, descending", () => {
+    const leases = [
+      lease({ Id: 1, LeaseStatus: "Past", LeaseToDate: "2026-01-01", AccountDetails: { Rent: 1500, SecurityDeposit: 2860 } }),
+      lease({ Id: 2, LeaseStatus: "Past", LeaseToDate: "2026-02-01", AccountDetails: { Rent: 1500, SecurityDeposit: 2450 } }),
+    ];
+    const withheldByLeaseId = new Map([withheld("1", 35), withheld("2", 2450)]); // 1.2% vs 100%
+    const rows = securityDepositWithheldRows(leases, withheldByLeaseId, window);
     expect(rows.map((r) => r.leaseId)).toEqual(["2", "1"]);
   });
 });

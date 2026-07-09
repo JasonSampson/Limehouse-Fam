@@ -1,4 +1,5 @@
 import type { BuildiumLease, BuildiumUnit } from "../buildium/client.js";
+import type { LeaseDepositWithheld, MoveOutWindow } from "./rentCollection.js";
 
 // Shared row-shaping helpers for Dashboard tab drill-downs. Kept as pure
 // functions over plain lease/unit arrays (no fetching, no Date.now() other
@@ -271,4 +272,52 @@ export function renewalRateRows(
   }
 
   return rows.sort((a, b) => (b.toDate ?? "").localeCompare(a.toDate ?? ""));
+}
+
+// Avg SD Withheld drill-down — REBUILT 2026-07-10, matching the vendor's
+// own real methodology (see summarizeSecurityDepositWithheld in
+// rentCollection.ts for the full derivation). One row per Past lease that:
+//   1. moved out within the vendor's real window (13 months ago through 30
+//      days ago — recent enough to matter, old enough that Limehouse has
+//      actually posted the reconciliation),
+//   2. has a known original deposit amount, and
+//   3. has at least one real move-out reconciliation transaction (not just
+//      any "Applied Deposit" — see extractSecurityDepositWithheld).
+// `withheld` here is already CAPPED at the lease's own deposit — a
+// withheld amount can never exceed what was actually collected.
+export interface SecurityDepositWithheldRow extends LeaseRow {
+  moveOutDate: string; // "YYYY-MM-DD"
+  securityDeposit: number;
+  withheld: number; // capped at securityDeposit
+  percent: number; // withheld / securityDeposit * 100, this lease only
+}
+
+export function securityDepositWithheldRows(
+  pastLeases: BuildiumLease[],
+  withheldByLeaseId: Map<string, LeaseDepositWithheld>,
+  window: MoveOutWindow
+): SecurityDepositWithheldRow[] {
+  const rows: SecurityDepositWithheldRow[] = [];
+
+  for (const lease of pastLeases) {
+    if (!lease.LeaseToDate) continue;
+    if (lease.LeaseToDate < window.start || lease.LeaseToDate > window.end) continue;
+
+    const deposit = lease.AccountDetails?.SecurityDeposit;
+    if (typeof deposit !== "number" || deposit <= 0) continue; // no known deposit amount — can't compute a percent
+
+    const info = withheldByLeaseId.get(String(lease.Id));
+    if (!info || !info.hasQualifyingEntry) continue; // no real move-out reconciliation posted yet — excluded, not shown as $0
+
+    const withheld = Math.min(info.withheld, deposit); // capped — see summarizeSecurityDepositWithheld's note on why
+    rows.push({
+      ...baseRow(lease),
+      moveOutDate: lease.LeaseToDate,
+      securityDeposit: deposit,
+      withheld,
+      percent: Math.round((withheld / deposit) * 1000) / 10,
+    });
+  }
+
+  return rows.sort((a, b) => b.percent - a.percent);
 }

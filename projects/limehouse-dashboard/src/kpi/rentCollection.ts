@@ -11,62 +11,27 @@ import type { BuildiumLease, BuildiumLeaseTransaction } from "../buildium/client
 // every lease silently had zero matching rent/deposit values to average.
 // The MATH here is fully unit-tested against fixed fixtures.
 
-// ============================================================================
-// KNOWN WRONG METRIC, 2026-07-04 — NOT FIXED, DO NOT TRUST
-// avgSecurityDepositWithheldPercent BELOW. Do not remove this notice until
-// this is actually rebuilt and re-verified live.
-// ============================================================================
-// Found comparing "Avg SD Withheld %" against the real vendor site: this
-// dashboard showed 111.5% (impossible — a % of deposit withheld cannot
-// exceed 100% as a portfolio average), vendor showed 57%.
-//
-// ROOT CAUSE: this isn't an arithmetic bug, it's the WRONG METRIC.
-// avgSecurityDepositWithheldPercent below computes
-// avgSecurityDepositWithheld / avgRentPerLease — i.e. "security deposit
-// as a percent of rent." But "% withheld" is a real property-management
-// term meaning something entirely different: of the deposits collected
-// from tenants who have MOVED OUT, what percentage was kept (for damages
-// /unpaid charges) versus refunded. That requires move-out deposit
-// disposition data — Buildium exposes this as itemized ledger
-// charges/credits against the security deposit liability account on a
-// lease's transaction history AFTER move-out (confirmed via Buildium's
-// own help docs: "Withhold tenant deposits" / "refund or withhold
-// security deposits held by a rental owner" — full or partial withhold,
-// each posted as ledger transactions, not a single field). There is no
-// single "amount withheld" field anywhere in the Buildium lease record —
-// AccountDetails.SecurityDeposit (used below) is the deposit HELD on an
-// active lease, not withheld at move-out; those are different tenants,
-// different leases (Past, not Active), and different data entirely.
-//
-// This needs a real spec, not a quick patch: (1) fetch Past leases with a
-// recent move-out date, (2) fetch each one's transaction history, (3)
-// identify which transactions represent a security-deposit deduction vs.
-// a refund, (4) sum withheld amounts and sum total deposits originally
-// collected for that same set of leases, (5) portfolio % = sum(withheld)
-// / sum(total deposits) — NOT an average of per-lease percentages, and
-// NOT deposit-as-%-of-rent. Left exactly as-is per Jason's/the
-// coordinator's direction on 2026-07-04 rather than shipping a half-fix.
-// Next session: start here with Oracle before writing any code.
+// FIXED 2026-07-10 — the WRONG METRIC flagged 2026-07-04 is now rebuilt
+// below (see the "Avg SD Withheld" section further down this file) and this
+// function no longer computes avgSecurityDepositWithheld/Percent at all.
+// The old version averaged AccountDetails.SecurityDeposit across ACTIVE
+// leases — the deposit currently HELD, not withheld at move-out — which is
+// a fundamentally different population (Active vs. recently-moved-out Past
+// leases) and a fundamentally different number (what's held today vs. what
+// was kept after move-out). Comparing against the real vendor site 2026-07-04
+// showed this dashboard reporting 111.5% (impossible — a portfolio % of
+// deposit withheld cannot exceed 100%) against the vendor's real 57%,
+// confirming it wasn't a rounding/arithmetic bug but the wrong question
+// entirely. See summarizeSecurityDepositWithheld below for the real
+// calculation, built from actual move-out reconciliation transactions.
 export interface RentSecurityDepositSummary {
   avgRentPerLease: number | null; // null when there are no leases with a known rent amount
-  avgSecurityDepositWithheld: number | null;
-  avgSecurityDepositWithheldPercent: number | null; // WRONG METRIC — see notice above. Currently avg SD / avg rent, as a percent; does not represent deposit actually withheld at move-out.
 }
 
 export function summarizeRentAndDeposit(leases: BuildiumLease[]): RentSecurityDepositSummary {
   const rents = leases.map((l) => l.AccountDetails?.Rent).filter((v): v is number => typeof v === "number");
-  const deposits = leases
-    .map((l) => l.AccountDetails?.SecurityDeposit)
-    .filter((v): v is number => typeof v === "number");
-
   const avgRentPerLease = rents.length > 0 ? roundCurrency(average(rents)) : null;
-  const avgSecurityDepositWithheld = deposits.length > 0 ? roundCurrency(average(deposits)) : null;
-  const avgSecurityDepositWithheldPercent =
-    avgRentPerLease !== null && avgSecurityDepositWithheld !== null && avgRentPerLease > 0
-      ? roundPercent((avgSecurityDepositWithheld / avgRentPerLease) * 100)
-      : null;
-
-  return { avgRentPerLease, avgSecurityDepositWithheld, avgSecurityDepositWithheldPercent };
+  return { avgRentPerLease };
 }
 
 // ============================================================================
@@ -580,100 +545,115 @@ export function earliestPaymentPerMonth(leaseId: string, transactions: BuildiumL
 }
 
 // ============================================================================
-// Avg SD Withheld % — REBUILT 2026-07-04, per Oracle's real-data research.
-// This is a DIFFERENT metric from avgSecurityDepositWithheld/
-// avgRentPerLease above (which describe deposits currently HELD on Active
-// leases) — "% withheld" means, of tenants who have actually MOVED OUT,
-// what share of their deposit was kept for damages/unpaid charges versus
-// refunded. Operates on Past leases + their transaction history, not
-// Active leases + AccountDetails.
+// Avg SD Withheld / Avg SD Withheld % — REBUILT 2026-07-10, per Jason
+// directly, by reading the vendor's own drill-down note on their live site
+// (a rare case where the vendor documents its exact methodology in-product)
+// and cross-checking it against real Buildium data for a known match
+// (lease 2540300, 2421 Arkansas Avenue — vendor shows $2,450/$2,450/100%
+// for this exact move-out, confirmed live).
 //
-// CONFIRMED LIVE real transaction types: "Applied Deposit" = amount
-// withheld at move-out (negative TotalAmount); "Refund" = amount returned
-// to the tenant (positive TotalAmount). Classify by TransactionType
-// string, NOT by GL account name — the GL account used varies
-// inconsistently ("Move Out Repairs"/"Vendor Over Site/Setup Charge" for
-// withholdings; "Rent Income" or "Other Income" for refunds, confirmed
-// live on different leases) — the opposite of how the rent-payment fix
-// above classifies (GL account name, since Payment/Charge repeat across
-// every category and can't be told apart by TransactionType alone).
+// The 2026-07-04 rebuild attempt (kept only in git history now) was closer
+// in SPIRIT than the original "% of rent" bug, but still didn't match the
+// vendor for three concrete reasons the vendor's own note spells out:
 //
-// CRITICAL, confirmed live: roughly a third of recent Past leases have
-// NEITHER an Applied Deposit nor a Refund transaction at all — the move-
-// out settlement hasn't been processed in Buildium yet. These must be
-// EXCLUDED from both the numerator and denominator entirely, not counted
-// as 0% withheld (that would misrepresent an unsettled case as "fully
-// refunded" and drag the portfolio average down for no real reason).
-export interface SecurityDepositWithheldSummary {
-  avgSecurityDepositWithheldPercent: number | null; // sum(withheld) / sum(deposit) across SETTLED leases only — a ratio of sums, not an average of per-lease percentages
-  settledLeaseCount: number;
-  unsettledLeaseCount: number; // leases excluded because Buildium shows no disposition transaction yet
+//   1. WRONG TRANSACTION FILTER. Not every "Applied Deposit" transaction
+//      is a real move-out reconciliation — Buildium also uses that same
+//      TransactionType for monthly prepayment applications, which have
+//      nothing to do with security deposits. The real reconciliation entry
+//      always carries a Journal.Memo containing "deposit applied to
+//      balances" (confirmed live in two casings: "Deposit applied to
+//      balances" and "Security Deposit applied to balances" — both are
+//      genuine move-out withholdings, so the filter is a case-insensitive
+//      SUBSTRING match, not an exact string). The old code accepted any
+//      "Applied Deposit" transaction regardless of memo.
+//   2. NO CAP. A withheld amount can never exceed the deposit actually
+//      collected — the old code never enforced this, so a data-entry
+//      oddity in Buildium could silently inflate the portfolio numerator.
+//   3. WRONG WINDOW. The old code used "trailing 12 months of LeaseToDate"
+//      ending TODAY. The vendor's real window is move-outs from 13 months
+//      ago through 30 days ago — Limehouse doesn't post the reconciliation
+//      until roughly 30 days after a tenant moves out, so anything more
+//      recent than that is real but not yet reconciled, and including it
+//      would misrepresent "not done yet" as "$0 withheld."
+//
+// Also confirmed live: the vendor's dollar figure ($1,203) is a plain
+// AVERAGE of each qualifying lease's (capped) withheld amount — NOT a
+// ratio of sums. The percent figure (57%) IS a ratio of sums
+// (sum(withheld)/sum(deposit)) — same "don't let a few extreme small-
+// deposit leases skew the portfolio number" reasoning the 2026-07-04
+// attempt already had right, just applied to the correct population.
+// Verified by hand-summing the vendor's own real 34-row list: average
+// withheld = $1,203.3 ≈ $1,203; sum(withheld)/sum(deposit) = 57.49% ≈ 57%.
+//
+// Leases with NO qualifying memo-matched Applied Deposit transaction at
+// all are excluded entirely (not counted as $0/0%) — per the vendor's own
+// stated rule, this includes a lease that was fully refunded with no
+// withholding, not just ones still pending reconciliation.
+export interface MoveOutWindow {
+  start: string; // "YYYY-MM-DD" — 13 months before asOf
+  end: string; // "YYYY-MM-DD" — 30 days before asOf
 }
 
-export interface PastLeaseDeposit {
+export function securityDepositMoveOutWindow(asOf: Date): MoveOutWindow {
+  const start = new Date(asOf);
+  start.setUTCMonth(start.getUTCMonth() - 13);
+  const end = new Date(asOf);
+  end.setUTCDate(end.getUTCDate() - 30);
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+}
+
+// Case-insensitive SUBSTRING match, not exact — catches both real-world
+// memo variants ("Deposit applied to balances" and "Security Deposit
+// applied to balances") without also matching an unrelated memo that
+// happens to share other words.
+const SD_RECONCILIATION_MEMO_SUBSTRING = "deposit applied to balances";
+
+export interface LeaseDepositWithheld {
   leaseId: string;
-  securityDeposit: number | null;
+  withheld: number; // sum of |TotalAmount| across every qualifying transaction — NOT yet capped at the lease's own deposit; the caller applies the cap once it knows that amount
+  hasQualifyingEntry: boolean; // false = no real move-out reconciliation posted yet (or ever, e.g. a fully-refunded lease) — caller must exclude, not treat as $0
 }
 
-// Per-lease withheld/refunded amounts, derived from that lease's raw
-// transactions. hasDisposition=false means neither an Applied Deposit nor
-// a Refund transaction exists yet — the caller must exclude this lease
-// from the portfolio calculation rather than treating it as 0% withheld.
-export interface LeaseDepositDisposition {
-  leaseId: string;
-  withheld: number;
-  refunded: number;
-  hasDisposition: boolean;
-}
-
-export function extractDepositDisposition(leaseId: string, transactions: BuildiumLeaseTransaction[]): LeaseDepositDisposition {
+export function extractSecurityDepositWithheld(leaseId: string, transactions: BuildiumLeaseTransaction[]): LeaseDepositWithheld {
   let withheld = 0;
-  let refunded = 0;
-  let hasDisposition = false;
+  let hasQualifyingEntry = false;
 
   for (const t of transactions) {
-    if (t.TransactionType === "Applied Deposit") {
-      withheld += Math.abs(t.TotalAmount);
-      hasDisposition = true;
-    } else if (t.TransactionType === "Refund") {
-      refunded += Math.abs(t.TotalAmount);
-      hasDisposition = true;
-    }
+    if (t.TransactionType !== "Applied Deposit") continue;
+    const memo = t.Journal?.Memo?.toLowerCase() ?? "";
+    if (!memo.includes(SD_RECONCILIATION_MEMO_SUBSTRING)) continue; // excludes the OTHER "Applied Deposit" use (monthly prepayment application)
+    withheld += Math.abs(t.TotalAmount);
+    hasQualifyingEntry = true;
   }
 
-  return { leaseId, withheld: roundCurrency(withheld), refunded: roundCurrency(refunded), hasDisposition };
+  return { leaseId, withheld: roundCurrency(withheld), hasQualifyingEntry };
 }
 
-// Portfolio % = sum(withheld) / sum(deposit) across settled leases only —
-// per Oracle's spec, explicitly NOT an average of each lease's own
-// percentage (that would let a handful of small-deposit leases with
-// extreme percentages skew the portfolio number unfairly).
+export interface SecurityDepositWithheldSummary {
+  avgSecurityDepositWithheld: number | null; // plain average of each qualifying lease's (capped) withheld amount
+  avgSecurityDepositWithheldPercent: number | null; // sum(withheld) / sum(deposit) across qualifying leases — a ratio of sums, not an average of per-lease percentages
+  reconciledLeaseCount: number;
+}
+
+// Takes the SAME rows the drill-down table shows (see
+// securityDepositWithheldRows in leaseRows.ts) — one source of truth for
+// both the tile's headline numbers and the list underneath it, rather than
+// two separate calculations that could quietly drift apart.
 export function summarizeSecurityDepositWithheld(
-  deposits: PastLeaseDeposit[],
-  dispositions: LeaseDepositDisposition[]
+  rows: Array<{ withheld: number; securityDeposit: number }>
 ): SecurityDepositWithheldSummary {
-  const depositByLeaseId = new Map(deposits.map((d) => [d.leaseId, d.securityDeposit]));
-
-  let sumWithheld = 0;
-  let sumDeposit = 0;
-  let settledLeaseCount = 0;
-  let unsettledLeaseCount = 0;
-
-  for (const disposition of dispositions) {
-    if (!disposition.hasDisposition) {
-      unsettledLeaseCount++;
-      continue;
-    }
-    const deposit = depositByLeaseId.get(disposition.leaseId);
-    if (typeof deposit !== "number") continue; // no known deposit amount for this lease — can't include it in either sum
-    sumWithheld += disposition.withheld;
-    sumDeposit += deposit;
-    settledLeaseCount++;
+  if (rows.length === 0) {
+    return { avgSecurityDepositWithheld: null, avgSecurityDepositWithheldPercent: null, reconciledLeaseCount: 0 };
   }
 
-  const avgSecurityDepositWithheldPercent = sumDeposit > 0 ? roundPercent((sumWithheld / sumDeposit) * 100) : null;
+  const sumWithheld = rows.reduce((sum, r) => sum + r.withheld, 0);
+  const sumDeposit = rows.reduce((sum, r) => sum + r.securityDeposit, 0);
 
-  return { avgSecurityDepositWithheldPercent, settledLeaseCount, unsettledLeaseCount };
+  return {
+    avgSecurityDepositWithheld: roundCurrency(sumWithheld / rows.length),
+    avgSecurityDepositWithheldPercent: sumDeposit > 0 ? roundPercent((sumWithheld / sumDeposit) * 100) : null,
+    reconciledLeaseCount: rows.length,
+  };
 }
 
 function average(values: number[]): number {

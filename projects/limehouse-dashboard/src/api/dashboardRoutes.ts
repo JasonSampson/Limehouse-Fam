@@ -48,6 +48,7 @@ import {
   vacantUnitDaysRows,
   averageDaysVacant,
   type RenewalRateRow,
+  type SecurityDepositWithheldRow,
 } from "../kpi/leaseRows.js";
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
@@ -421,16 +422,19 @@ dashboardRoutes.get("/api/dashboard/owners", requireLogin, async (_req, res) => 
 // for the verification history on each metric.
 // ============================================================================
 
-// Avg Rent/Lease, Avg SD Withheld — STRUCTURAL (as-of-today across all
-// active leases, deposits currently HELD, not period-dependent).
+// Avg Rent/Lease — STRUCTURAL (as-of-today across all active leases).
 //
-// Avg SD Withheld % — CORRECTED 2026-07-04, per Oracle's real-data spec.
-// This is a DIFFERENT population (recent Past/move-out leases, not Active
-// ones) and a DIFFERENT calculation (sum-of-withheld / sum-of-deposit
-// across settled move-outs, via POST /api/sync/security-deposit-withheld,
-// not deposit-as-percent-of-rent). Cache-backed, same pattern as
-// rent-collection — reads whatever the sync last computed rather than
-// running the Past-lease/transaction fetch live on every page load.
+// Avg SD Withheld / Avg SD Withheld % — REBUILT 2026-07-10, matching the
+// vendor's own real methodology (see rentCollection.ts's comment above
+// summarizeSecurityDepositWithheld for the full derivation). Both figures
+// now come entirely from the cache — there's no "base" fallback value
+// anymore, since the old fallback (avg deposit currently HELD on Active
+// leases) was the wrong metric this whole rebuild replaced. This is a
+// DIFFERENT population (recent Past/move-out leases within a specific
+// window, not all Active ones) via POST /api/sync/security-deposit-withheld,
+// cache-backed same as rent-collection — reads whatever the sync last
+// computed rather than running the Past-lease/transaction fetch live on
+// every page load.
 dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", requireLogin, async (_req, res) => {
   try {
     const activeLeases = await fetchActiveLeases();
@@ -440,27 +444,26 @@ dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", requireLogin, 
     if (!cached || cached.value === null) {
       res.json({
         ...baseSummary,
+        avgSecurityDepositWithheld: null,
         avgSecurityDepositWithheldPercent: null,
         securityDepositWithheldSynced: false,
         securityDepositWithheldMessage:
-          "Security deposit withheld % has not been synced yet. Trigger POST /api/sync/security-deposit-withheld first.",
+          "Security deposit withheld data has not been synced yet. Trigger POST /api/sync/security-deposit-withheld first.",
       });
       return;
     }
 
-    const withheldSummary = cached.value as {
-      avgSecurityDepositWithheldPercent: number | null;
-      settledLeaseCount: number;
-      unsettledLeaseCount: number;
+    const cachedValue = cached.value as {
+      summary: { avgSecurityDepositWithheld: number | null; avgSecurityDepositWithheldPercent: number | null; reconciledLeaseCount: number };
     };
     res.json({
       ...baseSummary,
-      avgSecurityDepositWithheldPercent: withheldSummary.avgSecurityDepositWithheldPercent,
+      avgSecurityDepositWithheld: cachedValue.summary.avgSecurityDepositWithheld,
+      avgSecurityDepositWithheldPercent: cachedValue.summary.avgSecurityDepositWithheldPercent,
       securityDepositWithheldSynced: true,
       securityDepositWithheldStale: !isCacheFresh(cached),
       securityDepositWithheldCachedAt: cached.fetchedAt,
-      settledLeaseCount: withheldSummary.settledLeaseCount,
-      unsettledLeaseCount: withheldSummary.unsettledLeaseCount,
+      reconciledLeaseCount: cachedValue.summary.reconciledLeaseCount,
     });
   } catch (err) {
     logError("GET /api/dashboard/financials/rent-and-deposit failed", { error: String(err) });
@@ -623,6 +626,29 @@ dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit/leases", require
   } catch (err) {
     logError("GET /api/dashboard/financials/rent-and-deposit/leases failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load lease rent data from Buildium." });
+  }
+});
+
+// Avg SD Withheld drill-down — ADDED 2026-07-10. Reads the SAME cached rows
+// the sync built (see POST /api/sync/security-deposit-withheld), not a live
+// recompute — building this list requires a transaction fetch per
+// candidate lease, same rate-limit discipline as the rent-collection sync,
+// so it only ever runs during the scheduled/manual sync, never on page load.
+dashboardRoutes.get("/api/dashboard/financials/security-deposit-withheld/leases", requireLogin, async (_req, res) => {
+  try {
+    const cached = await getCachedMetric("security_deposit_withheld", "portfolio");
+    if (!cached || cached.value === null) {
+      res.status(503).json({
+        error: "Security deposit withheld data has not been synced yet. Trigger POST /api/sync/security-deposit-withheld first.",
+      });
+      return;
+    }
+    const cachedValue = cached.value as { rows: SecurityDepositWithheldRow[] };
+    const properties = await fetchProperties();
+    res.json(withPropertyAddress(cachedValue.rows, propertyAddressById(properties)));
+  } catch (err) {
+    logError("GET /api/dashboard/financials/security-deposit-withheld/leases failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load security deposit withheld data." });
   }
 });
 

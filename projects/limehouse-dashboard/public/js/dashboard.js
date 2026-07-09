@@ -365,6 +365,7 @@ function renderFinancials({
                     : formatCurrency(rentAndDeposit.avgSecurityDepositWithheld),
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
               })
             : couldNotLoadTile({ id: "avg-sd-withheld", label: "Avg SD Withheld", sourceTags: ["BD"] })
         }
@@ -379,6 +380,7 @@ function renderFinancials({
                     : formatPercent(rentAndDeposit.avgSecurityDepositWithheldPercent),
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
               })
             : couldNotLoadTile({ id: "avg-sd-withheld-pct", label: "Avg SD Withheld %", sourceTags: ["BD"] })
         }
@@ -1238,6 +1240,36 @@ async function handleTileClick(tileId) {
         { label: "Rent", render: (r) => formatCurrency(r.rent) },
       ],
       emptyText: "No active leases with a known rent amount.",
+    });
+    return;
+  }
+
+  // Avg SD Withheld / Avg SD Withheld % — REBUILT 2026-07-10, matching the
+  // vendor's own real methodology (see summarizeSecurityDepositWithheld in
+  // src/kpi/rentCollection.ts for the full derivation). Both tiles share
+  // the same underlying reconciled-move-out list, same note, same drill-
+  // down — they're just two different aggregations (plain average vs.
+  // ratio-of-sums) over the same rows, so a single drill-down for both
+  // tiles avoids ever showing two different lists for what's really one
+  // dataset.
+  const SD_WITHHELD_NOTE =
+    "For each lease that moved out in the trailing window (13 months ago through 30 days ago — recent enough to matter, old enough that the reconciliation has likely been posted), we look for a real move-out reconciliation transaction in Buildium (an \"Applied Deposit\" transaction whose memo says the deposit was applied to balances — Buildium also uses \"Applied Deposit\" for unrelated monthly prepayments, which are excluded). A lease is only included once that reconciliation has actually been posted — a lease with no reconciliation yet is left out, not shown as $0/0%. The withheld amount is capped at the lease's own deposit amount. The dollar figure is a plain average across these leases; the percent figure is the total withheld divided by the total deposits (not an average of each lease's own percentage).";
+
+  if (tileId === "avg-sd-withheld" || tileId === "avg-sd-withheld-pct") {
+    await simpleDrillDown({
+      tileId,
+      title: "Avg SD Withheld — Move-Outs, Trailing ~12 Months",
+      url: "/api/dashboard/financials/security-deposit-withheld/leases",
+      note: SD_WITHHELD_NOTE,
+      columns: [
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Unit", key: "unitNumber" },
+        { label: "Move-out", key: "moveOutDate" },
+        { label: "SD", render: (r) => formatCurrencyPrecise(r.securityDeposit) },
+        { label: "Withheld", render: (r) => formatCurrencyPrecise(r.withheld) },
+        { label: "%", render: (r) => formatPercent(r.percent) },
+      ],
+      emptyText: "No reconciled move-outs in the trailing window yet — trigger a Security Deposit Withheld sync first if this looks wrong.",
     });
     return;
   }

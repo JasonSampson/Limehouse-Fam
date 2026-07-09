@@ -7,8 +7,9 @@ import {
   resolvePaymentDatesPerMonth,
   resolveLeaseBalancesPerMonth,
   LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID,
-  extractDepositDisposition,
+  extractSecurityDepositWithheld,
   summarizeSecurityDepositWithheld,
+  securityDepositMoveOutWindow,
   last12Months,
   monthsSinceYearsAgo,
   lastDayOfMonth,
@@ -19,8 +20,6 @@ import {
   type LeasePaymentForMonth,
   type LeaseBalanceForMonth,
   type MonthlyCollectionRate,
-  type PastLeaseDeposit,
-  type LeaseDepositDisposition,
 } from "../../src/kpi/rentCollection.js";
 import type { BuildiumLease, BuildiumLeaseTransaction } from "../../src/buildium/client.js";
 
@@ -33,19 +32,20 @@ import type { BuildiumLease, BuildiumLeaseTransaction } from "../../src/buildium
 function txn(
   overrides: Partial<Omit<BuildiumLeaseTransaction, "Journal">> & {
     glLines?: Array<[number, string, number]>;
+    memo?: string | null;
   }
 ): BuildiumLeaseTransaction {
-  const { glLines, ...rest } = overrides;
+  const { glLines, memo, ...rest } = overrides;
   return {
     Id: 1,
     LeaseId: 10,
     Date: "2026-06-01",
     TransactionType: "Charge",
     TotalAmount: 0,
-    Journal: glLines
+    Journal: glLines || memo !== undefined
       ? {
-          Memo: null,
-          Lines: glLines.map(([Id, Name, Amount]) => ({ GLAccount: { Id, Name }, Amount })),
+          Memo: memo ?? null,
+          Lines: (glLines ?? []).map(([Id, Name, Amount]) => ({ GLAccount: { Id, Name }, Amount })),
         }
       : undefined,
     ...rest,
@@ -79,33 +79,22 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
 // response at all) that caused /api/dashboard/financials/rent-and-deposit
 // to always return all-null in production.
 describe("summarizeRentAndDeposit", () => {
-  it("averages rent and security deposit across leases with known amounts", () => {
-    const leases = [
-      lease({ AccountDetails: { Rent: 1000, SecurityDeposit: 1000 } }),
-      lease({ AccountDetails: { Rent: 1500, SecurityDeposit: 750 } }),
-    ];
+  it("averages rent across leases with a known rent amount", () => {
+    const leases = [lease({ AccountDetails: { Rent: 1000, SecurityDeposit: 1000 } }), lease({ AccountDetails: { Rent: 1500, SecurityDeposit: 750 } })];
     const result = summarizeRentAndDeposit(leases);
     expect(result.avgRentPerLease).toBe(1250);
-    expect(result.avgSecurityDepositWithheld).toBe(875);
-    expect(result.avgSecurityDepositWithheldPercent).toBe(70); // 875/1250
   });
 
-  it("skips leases with a missing rent or deposit amount rather than treating them as 0", () => {
-    const leases = [
-      lease({ AccountDetails: { Rent: 1000, SecurityDeposit: 1000 } }),
-      lease({ AccountDetails: { Rent: null, SecurityDeposit: null } }),
-    ];
+  it("skips leases with a missing rent amount rather than treating them as 0", () => {
+    const leases = [lease({ AccountDetails: { Rent: 1000, SecurityDeposit: 1000 } }), lease({ AccountDetails: { Rent: null, SecurityDeposit: null } })];
     const result = summarizeRentAndDeposit(leases);
     expect(result.avgRentPerLease).toBe(1000); // not dragged down to 500 by the null
-    expect(result.avgSecurityDepositWithheld).toBe(1000);
   });
 
-  it("returns nulls (not NaN/0) when no leases have rent data at all", () => {
+  it("returns null (not NaN/0) when no leases have rent data at all", () => {
     const leases = [lease({ AccountDetails: { Rent: null, SecurityDeposit: null } })];
     const result = summarizeRentAndDeposit(leases);
     expect(result.avgRentPerLease).toBeNull();
-    expect(result.avgSecurityDepositWithheld).toBeNull();
-    expect(result.avgSecurityDepositWithheldPercent).toBeNull();
   });
 
   it("handles AccountDetails being entirely absent (optional field, e.g. an older/edge-case lease record)", () => {
@@ -716,140 +705,168 @@ describe("findSameMonthLastYear", () => {
 });
 
 // ============================================================================
-// extractDepositDisposition / summarizeSecurityDepositWithheld — NEW
-// 2026-07-04. Fixtures modeled on Oracle's 13 real, hand-verified settled
-// move-outs plus the confirmed "unsettled, must be excluded" case.
+// securityDepositMoveOutWindow / extractSecurityDepositWithheld /
+// summarizeSecurityDepositWithheld — REBUILT 2026-07-10, per Jason
+// directly, matching the vendor's own real documented methodology.
+// Fixtures modeled on real leases confirmed live: 2540300 (2421 Arkansas
+// Avenue) matches the vendor's own drill-down exactly at $2,450/$2,450/
+// 100%; 796009 and 1501179 (2417/2421 Arkansas Avenue) confirmed the two
+// real memo casings Buildium actually uses for the same real reconciliation
+// entry ("Deposit applied to balances" and "Security Deposit applied to
+// balances").
 // ============================================================================
-describe("extractDepositDisposition", () => {
-  // Modeled on real lease 2540300: $2,450 deposit, 100% withheld, no refund.
-  it("sums Applied Deposit as withheld and Refund as refunded, by TransactionType not GL account", () => {
+describe("securityDepositMoveOutWindow", () => {
+  it("start is 13 months before asOf, end is 30 days before asOf", () => {
+    const result = securityDepositMoveOutWindow(new Date("2026-07-09T00:00:00Z"));
+    expect(result).toEqual({ start: "2025-06-09", end: "2026-06-09" });
+  });
+});
+
+describe("extractSecurityDepositWithheld", () => {
+  // Real case: lease 2540300, 2421 Arkansas Avenue — vendor's own
+  // drill-down shows this exact move-out at $2,450/$2,450/100%.
+  it("sums an Applied Deposit transaction whose memo matches the real reconciliation entry", () => {
     const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 1, Date: "2026-02-17", TransactionType: "Charge", TotalAmount: 465 },
-      { Id: 2, LeaseId: 1, Date: "2026-02-17", TransactionType: "Applied Deposit", TotalAmount: -2450 },
+      txn({ Id: 1, Date: "2026-03-11", TransactionType: "Applied Deposit", TotalAmount: -2450, memo: "Deposit applied to balances" }),
     ];
-    const result = extractDepositDisposition("1", transactions);
-    expect(result).toEqual({ leaseId: "1", withheld: 2450, refunded: 0, hasDisposition: true });
+    const result = extractSecurityDepositWithheld("2540300", transactions);
+    expect(result).toEqual({ leaseId: "2540300", withheld: 2450, hasQualifyingEntry: true });
   });
 
-  // Modeled on real lease 2589108: mostly withheld, small $0.45 refund.
-  it("handles a mix of withheld and refunded on the same lease", () => {
+  // Real case: lease 1501179, 2421 Arkansas Avenue — same real reconciliation
+  // concept, but Buildium recorded it with the OTHER real memo casing
+  // ("Security Deposit applied to balances," not "Deposit applied to
+  // balances"). Both must qualify — a case-insensitive SUBSTRING match,
+  // not an exact string match.
+  it("also matches the 'Security Deposit applied to balances' memo variant", () => {
     const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 1, Date: "2026-05-06", TransactionType: "Refund", TotalAmount: 0.45 },
-      { Id: 2, LeaseId: 1, Date: "2026-05-06", TransactionType: "Applied Deposit", TotalAmount: -1315.72 },
+      txn({ Id: 1, Date: "2024-05-09", TransactionType: "Applied Deposit", TotalAmount: -860, memo: "Security Deposit applied to balances" }),
     ];
-    const result = extractDepositDisposition("1", transactions);
-    expect(result.withheld).toBe(1315.72);
-    expect(result.refunded).toBe(0.45);
-    expect(result.hasDisposition).toBe(true);
+    const result = extractSecurityDepositWithheld("1501179", transactions);
+    expect(result).toEqual({ leaseId: "1501179", withheld: 860, hasQualifyingEntry: true });
   });
 
-  // Modeled on real lease 2309097: fully refunded, nothing withheld.
-  it("handles a fully-refunded move-out (0% withheld)", () => {
+  it("is case-insensitive on the memo match", () => {
     const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 1, Date: "2025-08-01", TransactionType: "Refund", TotalAmount: 2200 },
+      txn({ Id: 1, Date: "2026-03-11", TransactionType: "Applied Deposit", TotalAmount: -500, memo: "DEPOSIT APPLIED TO BALANCES" }),
     ];
-    const result = extractDepositDisposition("1", transactions);
-    expect(result.withheld).toBe(0);
-    expect(result.refunded).toBe(2200);
-    expect(result.hasDisposition).toBe(true);
+    const result = extractSecurityDepositWithheld("1", transactions);
+    expect(result.hasQualifyingEntry).toBe(true);
   });
 
-  // Modeled on real lease 2363680: a real recent move-out where Buildium
-  // shows ordinary rent charges/payments through the move-out month but no
-  // Applied Deposit or Refund transaction at all — the settlement simply
-  // hasn't been processed yet. Must report hasDisposition:false so the
-  // portfolio calculation excludes it, not counts it as 0% withheld.
-  it("reports hasDisposition:false when neither Applied Deposit nor Refund exists yet", () => {
+  // The vendor's own note explicitly calls this out: "Applied Deposit" is
+  // ALSO used for monthly prepayment applications, which have nothing to
+  // do with a security deposit and must not be counted.
+  it("excludes an Applied Deposit transaction whose memo does NOT match the real reconciliation entry", () => {
     const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500 },
-      { Id: 2, LeaseId: 1, Date: "2026-06-01", TransactionType: "Payment", TotalAmount: -1500 },
+      txn({ Id: 1, Date: "2026-04-01", TransactionType: "Applied Deposit", TotalAmount: -1450, memo: "Applied Prepayment" }),
     ];
-    const result = extractDepositDisposition("1", transactions);
-    expect(result.hasDisposition).toBe(false);
-    expect(result.withheld).toBe(0);
-    expect(result.refunded).toBe(0);
+    const result = extractSecurityDepositWithheld("1", transactions);
+    expect(result).toEqual({ leaseId: "1", withheld: 0, hasQualifyingEntry: false });
+  });
+
+  it("excludes an Applied Deposit transaction with no memo at all", () => {
+    const transactions: BuildiumLeaseTransaction[] = [
+      txn({ Id: 1, Date: "2026-04-01", TransactionType: "Applied Deposit", TotalAmount: -1450 }), // no memo override — Journal.Memo is null
+    ];
+    const result = extractSecurityDepositWithheld("1", transactions);
+    expect(result.hasQualifyingEntry).toBe(false);
+  });
+
+  it("sums multiple qualifying entries on the same lease", () => {
+    const transactions: BuildiumLeaseTransaction[] = [
+      txn({ Id: 1, Date: "2026-03-11", TransactionType: "Applied Deposit", TotalAmount: -1000, memo: "Deposit applied to balances" }),
+      txn({ Id: 2, Date: "2026-03-15", TransactionType: "Applied Deposit", TotalAmount: -450, memo: "Deposit applied to balances" }),
+    ];
+    const result = extractSecurityDepositWithheld("1", transactions);
+    expect(result.withheld).toBe(1450);
+  });
+
+  it("ignores Refund transactions entirely — not part of this calculation at all, per the vendor's own rule", () => {
+    const transactions: BuildiumLeaseTransaction[] = [
+      txn({ Id: 1, Date: "2025-08-01", TransactionType: "Refund", TotalAmount: 2200 }),
+    ];
+    const result = extractSecurityDepositWithheld("1", transactions);
+    expect(result).toEqual({ leaseId: "1", withheld: 0, hasQualifyingEntry: false });
+  });
+
+  it("reports hasQualifyingEntry:false when no Applied Deposit transaction exists at all yet", () => {
+    const transactions: BuildiumLeaseTransaction[] = [
+      txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500 }),
+      txn({ Id: 2, Date: "2026-06-01", TransactionType: "Payment", TotalAmount: -1500 }),
+    ];
+    const result = extractSecurityDepositWithheld("1", transactions);
+    expect(result.hasQualifyingEntry).toBe(false);
   });
 });
 
 describe("summarizeSecurityDepositWithheld", () => {
-  it("computes portfolio % as sum(withheld)/sum(deposit), not an average of per-lease percentages", () => {
-    // Two leases with very different deposit sizes — an average-of-
-    // percentages would treat them equally; sum-of-sums correctly weights
-    // the larger deposit more.
-    const deposits: PastLeaseDeposit[] = [
-      { leaseId: "1", securityDeposit: 1000 },
-      { leaseId: "2", securityDeposit: 4000 },
+  it("computes the dollar figure as a plain average, and the percent as a ratio of sums", () => {
+    // Two leases with very different deposit sizes — a naive average of
+    // percentages would treat them equally; ratio-of-sums correctly
+    // weights the larger deposit more for the PERCENT figure. The DOLLAR
+    // figure is still a plain average of the (capped) withheld amounts —
+    // confirmed against the vendor's real 34-row list (avg withheld =
+    // $1,203.3 ≈ their displayed $1,203).
+    const rows = [
+      { withheld: 1000, securityDeposit: 1000 }, // 100%
+      { withheld: 400, securityDeposit: 4000 }, // 10%
     ];
-    const dispositions: LeaseDepositDisposition[] = [
-      { leaseId: "1", withheld: 1000, refunded: 0, hasDisposition: true }, // 100%
-      { leaseId: "2", withheld: 400, refunded: 3600, hasDisposition: true }, // 10%
-    ];
-    const result = summarizeSecurityDepositWithheld(deposits, dispositions);
-    // sum(withheld)=1400, sum(deposit)=5000 -> 28%, NOT the naive average of (100%+10%)/2=55%
-    expect(result.avgSecurityDepositWithheldPercent).toBe(28);
-    expect(result.settledLeaseCount).toBe(2);
-    expect(result.unsettledLeaseCount).toBe(0);
+    const result = summarizeSecurityDepositWithheld(rows);
+    expect(result.avgSecurityDepositWithheld).toBe(700); // (1000+400)/2
+    expect(result.avgSecurityDepositWithheldPercent).toBe(28); // sum(withheld)=1400, sum(deposit)=5000 -> 28%, NOT (100%+10%)/2=55%
+    expect(result.reconciledLeaseCount).toBe(2);
   });
 
-  it("excludes unsettled leases from both numerator and denominator entirely, not as 0%", () => {
-    const deposits: PastLeaseDeposit[] = [
-      { leaseId: "1", securityDeposit: 1000 },
-      { leaseId: "2", securityDeposit: 2000 }, // unsettled — must not drag the average down as if 0% were withheld
-    ];
-    const dispositions: LeaseDepositDisposition[] = [
-      { leaseId: "1", withheld: 1000, refunded: 0, hasDisposition: true }, // 100%
-      { leaseId: "2", withheld: 0, refunded: 0, hasDisposition: false }, // unsettled
-    ];
-    const result = summarizeSecurityDepositWithheld(deposits, dispositions);
-    expect(result.avgSecurityDepositWithheldPercent).toBe(100); // only lease 1 counts, not diluted by lease 2's unsettled $0
-    expect(result.settledLeaseCount).toBe(1);
-    expect(result.unsettledLeaseCount).toBe(1);
+  it("returns nulls and a zero count for an empty row list (nothing reconciled yet)", () => {
+    const result = summarizeSecurityDepositWithheld([]);
+    expect(result).toEqual({ avgSecurityDepositWithheld: null, avgSecurityDepositWithheldPercent: null, reconciledLeaseCount: 0 });
   });
 
-  it("returns null when there are no settled leases with a known deposit amount at all", () => {
-    const result = summarizeSecurityDepositWithheld([], []);
-    expect(result.avgSecurityDepositWithheldPercent).toBeNull();
-    expect(result.settledLeaseCount).toBe(0);
-  });
-
-  // Full 13-lease portfolio check, matching Oracle's real hand-computed
-  // percentages exactly (verified live against the real leases before
-  // being encoded here as fixtures) — this is the same real-money math the
-  // vendor site's Avg SD Withheld % tile is being compared against.
-  it("matches Oracle's real 13-lease portfolio calculation (42.6%)", () => {
-    const deposits: PastLeaseDeposit[] = [
-      { leaseId: "2187438", securityDeposit: 1470 },
-      { leaseId: "2540300", securityDeposit: 2450 },
-      { leaseId: "2513056", securityDeposit: 2700 },
-      { leaseId: "2589108", securityDeposit: 1650 },
-      { leaseId: "2309216", securityDeposit: 2495 },
-      { leaseId: "2500978", securityDeposit: 2025 },
-      { leaseId: "2603363", securityDeposit: 3000 },
-      { leaseId: "2503700", securityDeposit: 1700 },
-      { leaseId: "2287726", securityDeposit: 1535 },
-      { leaseId: "2246300", securityDeposit: 1550 },
-      { leaseId: "2481322", securityDeposit: 3565 },
-      { leaseId: "2651113", securityDeposit: 2925 },
-      { leaseId: "2309097", securityDeposit: 4400 },
+  // Full real 34-move-out check, matching the vendor's own live drill-down
+  // list exactly (captured 2026-07-09) — this is the same real-money math
+  // the vendor site's Avg SD Withheld / Avg SD Withheld % tiles show.
+  it("matches the vendor's real 34-move-out portfolio calculation ($1,203 / 57%)", () => {
+    const rows = [
+      { withheld: 2450, securityDeposit: 2450 },
+      { withheld: 2200, securityDeposit: 2200 },
+      { withheld: 2200, securityDeposit: 2200 },
+      { withheld: 2350, securityDeposit: 2350 },
+      { withheld: 950, securityDeposit: 950 },
+      { withheld: 1837.5, securityDeposit: 1837.5 },
+      { withheld: 2100, securityDeposit: 2100 },
+      { withheld: 1385, securityDeposit: 1385 },
+      { withheld: 3250, securityDeposit: 3250 },
+      { withheld: 2400, securityDeposit: 2400 },
+      { withheld: 1385, securityDeposit: 1695 },
+      { withheld: 2186.55, securityDeposit: 2700 },
+      { withheld: 1315.72, securityDeposit: 1650 },
+      { withheld: 1558.35, securityDeposit: 2495 },
+      { withheld: 1354, securityDeposit: 2395 },
+      { withheld: 1075, securityDeposit: 2025 },
+      { withheld: 875, securityDeposit: 1700 },
+      { withheld: 1432.2, securityDeposit: 3000 },
+      { withheld: 800, securityDeposit: 1700 },
+      { withheld: 1060, securityDeposit: 2300 },
+      { withheld: 883.6, securityDeposit: 1975 },
+      { withheld: 1650, securityDeposit: 3700 },
+      { withheld: 746, securityDeposit: 1735 },
+      { withheld: 678, securityDeposit: 1595 },
+      { withheld: 964, securityDeposit: 2995 },
+      { withheld: 271.2, securityDeposit: 1025 },
+      { withheld: 288.96, securityDeposit: 1160 },
+      { withheld: 241.32, securityDeposit: 1445 },
+      { withheld: 176.2, securityDeposit: 1100 },
+      { withheld: 275.52, securityDeposit: 1850 },
+      { withheld: 150, securityDeposit: 1695 },
+      { withheld: 200.58, securityDeposit: 2325 },
+      { withheld: 187.5, securityDeposit: 2925 },
+      { withheld: 35, securityDeposit: 2860 },
     ];
-    const dispositions: LeaseDepositDisposition[] = [
-      { leaseId: "2187438", withheld: 1470, refunded: 0, hasDisposition: true },
-      { leaseId: "2540300", withheld: 2450, refunded: 0, hasDisposition: true },
-      { leaseId: "2513056", withheld: 2186.55, refunded: 0, hasDisposition: true },
-      { leaseId: "2589108", withheld: 1315.72, refunded: 0.45, hasDisposition: true },
-      { leaseId: "2309216", withheld: 1558.35, refunded: 0, hasDisposition: true },
-      { leaseId: "2500978", withheld: 1075, refunded: 0, hasDisposition: true },
-      { leaseId: "2603363", withheld: 1432.2, refunded: 0, hasDisposition: true },
-      { leaseId: "2503700", withheld: 800, refunded: 0, hasDisposition: true },
-      { leaseId: "2287726", withheld: 375, refunded: 0, hasDisposition: true },
-      { leaseId: "2246300", withheld: 242.67, refunded: 0, hasDisposition: true },
-      { leaseId: "2481322", withheld: 315, refunded: 50, hasDisposition: true },
-      { leaseId: "2651113", withheld: 187.5, refunded: 0, hasDisposition: true },
-      { leaseId: "2309097", withheld: 0, refunded: 2200, hasDisposition: true },
-    ];
-    const result = summarizeSecurityDepositWithheld(deposits, dispositions);
-    expect(result.avgSecurityDepositWithheldPercent).toBe(42.6);
-    expect(result.settledLeaseCount).toBe(13);
-    expect(result.unsettledLeaseCount).toBe(0);
+    expect(rows).toHaveLength(34);
+    const result = summarizeSecurityDepositWithheld(rows);
+    expect(result.avgSecurityDepositWithheld).toBe(1203.3);
+    expect(result.avgSecurityDepositWithheldPercent).toBe(57.5);
+    expect(result.reconciledLeaseCount).toBe(34);
   });
 });

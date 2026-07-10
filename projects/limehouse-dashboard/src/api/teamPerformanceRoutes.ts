@@ -14,6 +14,7 @@ import {
   fetchLeaseTransactions,
 } from "../buildium/client.js";
 import { occupancyExplainRows, delinquencyRateExplainRows } from "../kpi/occupancy.js";
+import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import {
   vendorComplianceExplainRows,
   nineNineComplianceExplainRows,
@@ -62,7 +63,7 @@ teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAd
 // real, live-verified formula (2026-07-05) are wired here — anything else
 // 404s with a clear message rather than fabricating an explanation.
 const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
-  "Portfolio Occupancy Rate": "Occupied units ÷ total managed units (234 doors, including the 1 commercial property). A unit counts as occupied only if it has a real Active lease with a current tenant on file.",
+  "Portfolio Occupancy Rate": "Occupied units ÷ total managed units, including the 1 commercial property, excluding properties Jason's team has terminated management on but Buildium hasn't closed out yet. A unit counts as occupied only if it has a real Active lease with a current tenant on file.",
   "Delinquency Rate": "Sum of outstanding balance across leases with a positive balance, ÷ sum of monthly rent across every active lease.",
   "Reconciliation Accuracy": "Across active bank accounts, how many fully-completed months in this period have a finished bank reconciliation (statement ending date in that month, marked finished). A partial current month never counts. Accounts with $0 balance and no reconciliations are excluded (nothing to reconcile).",
   "Rent Processing Accuracy": "1 − (operational payment reversals ÷ total payments), across every active lease this period. NSF/bounced/chargeback reversals are tenant-caused, not a processing error, so they're excluded from the percentage (but listed below for reference).",
@@ -89,8 +90,12 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
   try {
     switch (kpiName) {
       case "Portfolio Occupancy Rate": {
-        const units = await fetchActiveManagedUnits();
-        const activeLeases = await fetchActiveLeases();
+        const [allUnits, activeLeases, excludedPropertyIds] = await Promise.all([
+          fetchActiveManagedUnits(),
+          fetchActiveLeases(),
+          getExcludedPropertyIds(),
+        ]);
+        const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
         const rows = occupancyExplainRows(activeLeases, units.map((u) => String(u.Id)));
         res.json({ kpiName, formula, rows });
         return;

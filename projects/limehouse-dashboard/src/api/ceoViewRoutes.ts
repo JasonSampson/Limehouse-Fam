@@ -5,6 +5,7 @@ import { periodToSnapshotLabel, type PeriodKey } from "../kpi/period.js";
 import { fetchActiveResidentialUnits } from "../buildium/client.js";
 import { revenuePerUnit } from "../kpi/financialSummary.js";
 import { getAllFinancialHistory } from "../db/financialHistory.js";
+import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import { ACCOUNTING_BASIS } from "../buildium/financialHistorySync.js";
 import { logError } from "../lib/logger.js";
 import { requireLogin, requireAdmin } from "../auth/session.js";
@@ -55,13 +56,19 @@ ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, async (req,
 // Revenue-per-Unit is computed here at read time (not stored), always
 // dividing by TODAY's active unit count — see financialSummary.ts's
 // revenuePerUnit doc comment for why.
+//
+// CHANGED 2026-07-10, per Jason directly: excludes terminated-but-not-yet-
+// closed-out properties from the denominator (see
+// src/kpi/terminatedProperties.ts) — those units aren't earning anything
+// right now, so counting them here understated revenue per door.
 ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, async (_req, res) => {
   try {
-    const [monthlyHistory, units] = await Promise.all([
+    const [monthlyHistory, allUnits, excludedPropertyIds] = await Promise.all([
       getAllFinancialHistory(ACCOUNTING_BASIS),
       fetchActiveResidentialUnits(),
+      getExcludedPropertyIds(),
     ]);
-    const unitCount = units.length;
+    const unitCount = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId))).length;
 
     const months = monthlyHistory.map((m) => ({
       month: m.month,

@@ -25,6 +25,11 @@ import {
   summarizeLeaseMix,
   upcomingRenewals,
   averageTenancyMonths,
+  earliestTrackableMonth,
+  monthsSinceEarliestTrackable,
+  summarizeMonthlyOccupancy,
+  summarizeYearlyOccupancy,
+  findSameMonthLastYearOccupancy,
 } from "../kpi/occupancy.js";
 import { summarizePropertyHealthFromReporting } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
@@ -55,6 +60,7 @@ import {
 } from "../kpi/leaseRows.js";
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
+import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import {
   summarizeRentAndDeposit,
   summarizeYearlyCollectionRates,
@@ -128,7 +134,12 @@ function resolveDateRangeFromQuery(periodRaw: unknown): { from: string; to: stri
 // Lease, lease-mix, Revenue per Unit, Avg Days Vacant) were NOT changed.
 dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) => {
   try {
-    const [units, activeLeases] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases()]);
+    const [allUnits, activeLeases, excludedPropertyIds] = await Promise.all([
+      fetchActiveManagedUnits(),
+      fetchActiveLeases(),
+      getExcludedPropertyIds(),
+    ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const trackedUnitIds = new Set(units.map((u) => u.Id));
     const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
     const summary = summarizeOccupancy(units.length, activeLeasesOnTrackedUnits);
@@ -146,6 +157,41 @@ dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) 
   } catch (err) {
     logError("GET /api/dashboard/occupancy failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load occupancy data from Buildium." });
+  }
+});
+
+// Occupancy Rate — 12 Months chart — REBUILT 2026-07-09, per Jason
+// directly: "year over year, for each month, as far back as can be
+// tracked." See summarizeMonthlyOccupancy in occupancy.ts for the full
+// reconstruction (real lease coverage per month, not a snapshot the
+// vendor's version doesn't actually have going back that far). Returns
+// every month from the earliest month we have any real lease evidence for
+// (across currently-tracked units) through the current month, plus a
+// by-year rollup and a same-month-last-year callout for the side panels
+// — same shape as the Rent Collection year-over-year panels.
+dashboardRoutes.get("/api/dashboard/occupancy-history", requireLogin, async (_req, res) => {
+  try {
+    const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
+      fetchActiveManagedUnits(),
+      fetchAllLeases(),
+      getExcludedPropertyIds(),
+    ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
+    const earliestMonth = earliestTrackableMonth(units, allLeases);
+    if (earliestMonth === null) {
+      res.json({ months: [], yearly: [], sameMonthLastYear: null });
+      return;
+    }
+    const asOf = new Date();
+    const monthList = monthsSinceEarliestTrackable(asOf, earliestMonth);
+    const months = summarizeMonthlyOccupancy(units, allLeases, monthList, asOf);
+    const yearly = summarizeYearlyOccupancy(months);
+    const latestMonth = months[months.length - 1]?.month;
+    const sameMonthLastYear = latestMonth ? findSameMonthLastYearOccupancy(months, latestMonth) : null;
+    res.json({ months, yearly, sameMonthLastYear });
+  } catch (err) {
+    logError("GET /api/dashboard/occupancy-history failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load occupancy history from Buildium." });
   }
 });
 
@@ -660,7 +706,13 @@ dashboardRoutes.get("/api/dashboard/financials/security-deposit-withheld/leases"
 // see that route's comment for why.
 dashboardRoutes.get("/api/dashboard/units", requireLogin, async (_req, res) => {
   try {
-    const [units, activeLeases, properties] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases(), fetchProperties()]);
+    const [allUnits, activeLeases, properties, excludedPropertyIds] = await Promise.all([
+      fetchActiveManagedUnits(),
+      fetchActiveLeases(),
+      fetchProperties(),
+      getExcludedPropertyIds(),
+    ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const trackedUnitIds = new Set(units.map((u) => u.Id));
     const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
     res.json(withPropertyAddress(unitStatusRows(units, activeLeasesOnTrackedUnits), propertyAddressById(properties)));
@@ -679,7 +731,13 @@ dashboardRoutes.get("/api/dashboard/units", requireLogin, async (_req, res) => {
 // unitStatusRows comment for why (the flag lags real move-outs).
 dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, async (_req, res) => {
   try {
-    const [units, activeLeases, properties] = await Promise.all([fetchActiveManagedUnits(), fetchActiveLeases(), fetchProperties()]);
+    const [allUnits, activeLeases, properties, excludedPropertyIds] = await Promise.all([
+      fetchActiveManagedUnits(),
+      fetchActiveLeases(),
+      fetchProperties(),
+      getExcludedPropertyIds(),
+    ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const trackedUnitIds = new Set(units.map((u) => u.Id));
     const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
     res.json(withPropertyAddress(vacantUnitRows(units, activeLeasesOnTrackedUnits), propertyAddressById(properties)));
@@ -698,7 +756,12 @@ dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, async (_req, re
 // same rule the Doors Lost estimate already follows.
 dashboardRoutes.get("/api/dashboard/avg-days-vacant", requireLogin, async (_req, res) => {
   try {
-    const [units, allLeases] = await Promise.all([fetchActiveResidentialUnits(), fetchAllLeases()]);
+    const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
+      fetchActiveResidentialUnits(),
+      fetchAllLeases(),
+      getExcludedPropertyIds(),
+    ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const rows = vacantUnitDaysRows(units, allLeases, new Date());
     res.json({ avgDaysVacant: averageDaysVacant(rows), vacantUnitCount: rows.length });
   } catch (err) {
@@ -709,11 +772,13 @@ dashboardRoutes.get("/api/dashboard/avg-days-vacant", requireLogin, async (_req,
 
 dashboardRoutes.get("/api/dashboard/avg-days-vacant/units", requireLogin, async (_req, res) => {
   try {
-    const [units, allLeases, properties] = await Promise.all([
+    const [allUnits, allLeases, properties, excludedPropertyIds] = await Promise.all([
       fetchActiveResidentialUnits(),
       fetchAllLeases(),
       fetchProperties(),
+      getExcludedPropertyIds(),
     ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     res.json(withPropertyAddress(vacantUnitDaysRows(units, allLeases, new Date()), propertyAddressById(properties)));
   } catch (err) {
     logError("GET /api/dashboard/avg-days-vacant/units failed", { error: String(err) });

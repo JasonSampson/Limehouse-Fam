@@ -15,6 +15,7 @@ function process(overrides: Partial<LeadSimpleProcess>): LeadSimpleProcess {
     closed_at: null,
     tags: [],
     stage: null,
+    properties: [],
     ...overrides,
   };
 }

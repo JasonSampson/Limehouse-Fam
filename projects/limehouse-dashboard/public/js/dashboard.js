@@ -47,6 +47,7 @@ async function loadDashboard() {
   const [
     periodInfoResult,
     occupancyResult,
+    occupancyHistoryResult,
     leaseMixResult,
     delinquencyResult,
     renewals60Result,
@@ -69,6 +70,7 @@ async function loadDashboard() {
   ] = await Promise.allSettled([
     apiGet(`/api/dashboard/period-info?period=${period}`),
     apiGet("/api/dashboard/occupancy"),
+    apiGet("/api/dashboard/occupancy-history"),
     apiGet("/api/dashboard/lease-mix"),
     apiGet("/api/dashboard/delinquency"),
     apiGet("/api/dashboard/renewals?withinDays=60"),
@@ -92,6 +94,7 @@ async function loadDashboard() {
 
   const periodInfo = unwrap(periodInfoResult);
   const occupancy = unwrap(occupancyResult);
+  const occupancyHistory = unwrap(occupancyHistoryResult);
   const leaseMix = unwrap(leaseMixResult);
   const delinquency = unwrap(delinquencyResult);
   const renewals60 = unwrap(renewals60Result);
@@ -148,7 +151,7 @@ async function loadDashboard() {
   content.innerHTML = `
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
     ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
-    ${renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avgDaysVacant })}
+    ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, daysOnMarket })}
   `;
@@ -553,7 +556,7 @@ function totalUnitsYoyBadge(totalUnitsYoY) {
   return { direction: totalUnitsYoY.direction, text: `${arrow} ${sign}${totalUnitsYoY.percent}% vs Jan. 1st` };
 }
 
-function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avgDaysVacant }) {
+function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant }) {
   return `
     <div class="section">
       <p class="section-title">Occupancy &amp; Doors</p>
@@ -614,8 +617,8 @@ function renderOccupancyAndDoors({ occupancy, owners, propertyHealth, doors, avg
         }
       </div>
       <div class="chart-card">
-        <p class="chart-card-title">Occupancy Rate — 12 Months</p>
-        ${renderOccupancyTrendChart(occupancy)}
+        <p class="chart-card-title">Occupancy Rate — Year over Year</p>
+        ${renderOccupancyTrendChart(occupancyHistory)}
       </div>
       <div class="chart-card">
         <p class="chart-card-title">Property Health</p>
@@ -669,19 +672,71 @@ function doorsTile({ doors, id, label }) {
   return couldNotLoadTile({ id, label, sourceTags: ["BD"] });
 }
 
-// Occupancy history (12-month trend) has no backend feed yet — no
-// /api/dashboard/occupancy-history route exists, only the current
-// point-in-time snapshot. Shows the honest not-connected state rather than
-// faking a trend; the chart renderer itself (lineChartHtml in charts.js)
-// is ready to go the moment Q ships that endpoint.
-function renderOccupancyTrendChart(occupancy) {
-  if (!occupancy) {
-    return notConnectedBox("Couldn't load", "Current Occupancy tile above may still be live.");
+// Occupancy Rate — Year over Year — REBUILT 2026-07-09, per Jason
+// directly: "year over year, for each month, as far back as can be
+// tracked." Backed by /api/dashboard/occupancy-history (see
+// summarizeMonthlyOccupancy in occupancy.ts for how monthly figures this
+// far back are reconstructed from real lease coverage, not a snapshot).
+// One line per year, overlaid on a Jan-Dec axis via the SAME
+// yearOverYearLineChartHtml component already built for this (current
+// year highlighted, prior years muted) — plus the same side-panel pair
+// used for Rent Collection: a same-calendar-month-last-year callout and a
+// by-year average rollup.
+function renderOccupancyTrendChart(occupancyHistory) {
+  if (!occupancyHistory) {
+    return notConnectedBox("Couldn't load", "The occupancy history didn't come back from Buildium just now — current Occupancy tile above may still be live.");
   }
-  return notConnectedBox(
-    "Not connected yet",
-    "12-month occupancy trend history isn't wired up yet — current Occupancy tile above is live."
-  );
+  const months = occupancyHistory.months;
+  if (!months || months.length === 0) {
+    return `<p class="loading-text">No occupancy history available yet.</p>`;
+  }
+
+  const seriesByYear = {};
+  for (const m of months) {
+    const [year, mm] = m.month.split("-");
+    if (!seriesByYear[year]) seriesByYear[year] = new Array(12).fill(null);
+    seriesByYear[year][Number(mm) - 1] = m.occupancyPercent;
+  }
+  const currentYear = new Date().getUTCFullYear();
+
+  const sameMonthLastYear = occupancyHistory.sameMonthLastYear;
+  const sameMonthHtml = sameMonthLastYear
+    ? `<div class="rc-side-stat">
+        <p class="rc-side-stat-label">${formatMonthLabel(sameMonthLastYear.lastYearMonth)}</p>
+        <p class="rc-side-stat-value">${formatPercent(sameMonthLastYear.lastYearOccupancyPercent)}</p>
+      </div>`
+    : `<div class="rc-side-stat rc-side-stat-empty">
+        <p class="rc-side-stat-label">Same month last year</p>
+        <p class="rc-side-stat-value">—</p>
+      </div>`;
+
+  const yearly = occupancyHistory.yearly || [];
+  const yearlyRowsHtml =
+    yearly.length > 0
+      ? yearly
+          .map(
+            (y) =>
+              `<div class="rc-yearly-row"><span>${formatMonthLabel(y.lastMonth)}</span><span>${formatPercent(y.avgOccupancyPercent)}</span></div>`
+          )
+          .join("")
+      : `<p class="rc-side-stat-empty-text">No yearly history yet</p>`;
+
+  return `
+    <div class="rent-collection-layout">
+      <div class="rent-collection-chart-col">
+        ${yearOverYearLineChartHtml({ canvasId: "occupancy-yoy-chart", seriesByYear, currentYear, yFormat: (v) => `${v}%` })}
+      </div>
+      <div class="rent-collection-side-col">
+        <div class="rc-side-stat-row">
+          ${sameMonthHtml}
+        </div>
+        <div class="rc-yearly-list">
+          <p class="rc-side-panel-title">By Year (Avg)</p>
+          ${yearlyRowsHtml}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // Property Health donut/ring chart with side legend. Wired to the real

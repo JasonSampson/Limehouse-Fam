@@ -10,6 +10,7 @@ function process(overrides: Partial<LeadSimpleProcess>): LeadSimpleProcess {
     closed_at: null,
     tags: [],
     stage: { id: "s1", name: "Lease Renewed", status: "completed" },
+    properties: [],
     ...overrides,
   };
 }

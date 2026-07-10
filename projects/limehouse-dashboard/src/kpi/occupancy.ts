@@ -1,5 +1,5 @@
 import type { BuildiumLease, BuildiumUnit, LeaseBalance } from "../buildium/client.js";
-import { RENT_INCOME_GL_ACCOUNT_ID } from "./rentCollection.js";
+import { RENT_INCOME_GL_ACCOUNT_ID, monthsSinceYearsAgo, lastDayOfMonth } from "./rentCollection.js";
 
 // Occupancy / lease-mix calculations. These are STRUCTURAL metrics (per the
 // project brief's flow vs. structural distinction) — they always reflect
@@ -365,4 +365,158 @@ export interface OccupancyExplainRow {
 export function occupancyExplainRows(activeLeases: BuildiumLease[], allUnitIds: string[]): OccupancyExplainRow[] {
   const occupiedUnitIds = new Set(activeLeases.map((l) => String(l.UnitId)));
   return allUnitIds.map((unitId) => ({ unitId, occupied: occupiedUnitIds.has(unitId) }));
+}
+
+// ============================================================================
+// Occupancy Rate — 12 Months chart — REBUILT 2026-07-09, per Jason
+// directly: "year over year, for each month, as far back as can be
+// tracked." Buildium has no historical daily/monthly snapshot of
+// occupancy (unlike the vendor's own version, which only has ~50 days of
+// real snapshot history per its own admission elsewhere on this
+// dashboard) — but real per-lease LeaseFromDate/LeaseToDate history goes
+// back years, which is enough to RECONSTRUCT occupancy for any past
+// month: a unit is "occupied" in month M if any lease (regardless of
+// current status) covered that month.
+//
+// The trickier half is the DENOMINATOR — how many units even existed
+// under management that far back. Confirmed live 2026-07-09: this
+// account's real first-lease dates go back to 2014, ramping up from 11
+// units then to 234 today, roughly tracking Jason's own real Jan-1
+// door-count anchors (2023: 137 real vs. 142 reconstructed here — a
+// small, expected gap). A unit only counts toward a given month's total
+// if it has NO lease history at all (never-rented — no evidence it
+// joined later, so assumed part of the portfolio all along) OR its
+// earliest known lease started on or before that month — so a property
+// added in 2024 correctly doesn't drag down 2020's percentage. This is
+// scoped to CURRENTLY-tracked units only: a door lost in the past won't
+// appear in earlier months either (survivorship — real limitation, not
+// hidden).
+export interface MonthlyOccupancyRate {
+  month: string; // "YYYY-MM"
+  occupiedUnits: number;
+  totalUnits: number;
+  occupancyPercent: number | null; // null when totalUnits is 0 — no trackable units yet that month, not a real 0% (monthsSinceEarliestTrackable pads back to January of the earliest year, which can be a few months before any unit actually existed)
+}
+
+// Earliest month we have ANY real lease-coverage evidence for, across the
+// given units — the natural start of "as far back as can be tracked."
+// Returns null if none of the units has any lease history at all.
+export function earliestTrackableMonth(units: BuildiumUnit[], allLeases: BuildiumLease[]): string | null {
+  const trackedUnitIds = new Set(units.map((u) => u.Id));
+  let earliest: string | null = null;
+  for (const l of allLeases) {
+    if (!l.LeaseFromDate || !trackedUnitIds.has(l.UnitId)) continue;
+    if (earliest === null || l.LeaseFromDate < earliest) earliest = l.LeaseFromDate;
+  }
+  return earliest ? earliest.slice(0, 7) : null;
+}
+
+export function summarizeMonthlyOccupancy(units: BuildiumUnit[], allLeases: BuildiumLease[], months: string[], asOf: Date): MonthlyOccupancyRate[] {
+  const leasesByUnit = new Map<number, BuildiumLease[]>();
+  for (const l of allLeases) {
+    const bucket = leasesByUnit.get(l.UnitId);
+    if (bucket) bucket.push(l);
+    else leasesByUnit.set(l.UnitId, [l]);
+  }
+
+  const firstLeaseDateByUnit = new Map<number, string | null>();
+  for (const u of units) {
+    const dates = (leasesByUnit.get(u.Id) ?? [])
+      .map((l) => l.LeaseFromDate)
+      .filter((d): d is string => d !== null)
+      .sort();
+    firstLeaseDateByUnit.set(u.Id, dates[0] ?? null);
+  }
+
+  // CONFIRMED 2026-07-09, per Jason directly: the 10 currently-tracked
+  // units with ZERO lease history are all real, recently-added properties
+  // that simply haven't been rented yet — not units that have sat vacant
+  // since 2014. Projecting them backward through the portfolio's whole
+  // history badly deflated early years (a 10-unit vacant drag when the
+  // whole portfolio WAS only ~10-20 units). They're only counted from the
+  // CURRENT month onward instead — the one month we actually know they're
+  // real — not retroactively into years they didn't exist.
+  const currentMonth = `${asOf.getUTCFullYear()}-${String(asOf.getUTCMonth() + 1).padStart(2, "0")}`;
+
+  return months.map((month) => {
+    const monthStart = `${month}-01`;
+    const monthEnd = lastDayOfMonth(month);
+    let totalUnits = 0;
+    let occupiedUnits = 0;
+    for (const u of units) {
+      const firstLease = firstLeaseDateByUnit.get(u.Id) ?? null;
+      if (firstLease === null) {
+        if (month !== currentMonth) continue; // no lease history at all — only count it for the current month, see comment above
+      } else if (firstLease > monthEnd) {
+        continue; // unit didn't exist under management yet as of this month
+      }
+      totalUnits++;
+      const isOccupied = (leasesByUnit.get(u.Id) ?? []).some(
+        (l) => l.LeaseFromDate !== null && l.LeaseFromDate <= monthEnd && (l.LeaseToDate === null || l.LeaseToDate >= monthStart)
+      );
+      if (isOccupied) occupiedUnits++;
+    }
+    return { month, occupiedUnits, totalUnits, occupancyPercent: totalUnits > 0 ? roundPercent((occupiedUnits / totalUnits) * 100) : null };
+  });
+}
+
+// Same idea as monthsSinceYearsAgo, but starting from a specific real
+// earliest-trackable month rather than a fixed lookback window.
+export function monthsSinceEarliestTrackable(asOf: Date, earliestMonth: string): string[] {
+  const yearsBack = asOf.getUTCFullYear() - Number(earliestMonth.slice(0, 4));
+  return monthsSinceYearsAgo(asOf, Math.max(yearsBack, 0));
+}
+
+export interface YearlyOccupancyRate {
+  year: string; // "YYYY"
+  occupiedUnitMonths: number;
+  totalUnitMonths: number;
+  avgOccupancyPercent: number;
+  monthsIncluded: number;
+  lastMonth: string; // "YYYY-MM" — most recent month included, for a year-to-date label like "Jul 2026"
+}
+
+// Rolls monthly occupancy up to one number per calendar year — a ratio of
+// SUMS (total occupied unit-months over total tracked unit-months), not
+// an average of each month's percentage, for the same reason as
+// summarizeYearlyCollectionRates in rentCollection.ts: the portfolio's
+// total unit count changed across the window this covers, so an early,
+// smaller month shouldn't count exactly as much as a later, bigger one.
+export function summarizeYearlyOccupancy(months: MonthlyOccupancyRate[]): YearlyOccupancyRate[] {
+  const byYear = new Map<string, { occupied: number; total: number; monthsIncluded: number; lastMonth: string }>();
+
+  for (const m of months) {
+    const year = m.month.slice(0, 4);
+    const bucket = byYear.get(year) ?? { occupied: 0, total: 0, monthsIncluded: 0, lastMonth: m.month };
+    bucket.occupied += m.occupiedUnits;
+    bucket.total += m.totalUnits;
+    bucket.monthsIncluded += 1;
+    if (m.month > bucket.lastMonth) bucket.lastMonth = m.month;
+    byYear.set(year, bucket);
+  }
+
+  return [...byYear.entries()]
+    .map(([year, { occupied, total, monthsIncluded, lastMonth }]) => ({
+      year,
+      occupiedUnitMonths: occupied,
+      totalUnitMonths: total,
+      avgOccupancyPercent: total > 0 ? roundPercent((occupied / total) * 100) : 0,
+      monthsIncluded,
+      lastMonth,
+    }))
+    .sort((a, b) => b.year.localeCompare(a.year));
+}
+
+export interface SameMonthLastYearOccupancy {
+  month: string; // this year's month, e.g. "2026-06"
+  lastYearMonth: string; // e.g. "2025-06"
+  lastYearOccupancyPercent: number | null;
+}
+
+export function findSameMonthLastYearOccupancy(months: MonthlyOccupancyRate[], latestMonth: string): SameMonthLastYearOccupancy | null {
+  const [year, mm] = latestMonth.split("-");
+  const lastYearMonth = `${Number(year) - 1}-${mm}`;
+  const match = months.find((m) => m.month === lastYearMonth);
+  if (!match) return null;
+  return { month: latestMonth, lastYearMonth, lastYearOccupancyPercent: match.occupancyPercent };
 }

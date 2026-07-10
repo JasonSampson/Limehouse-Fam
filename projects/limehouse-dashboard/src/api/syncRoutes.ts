@@ -12,6 +12,8 @@ import {
   fetchVendors,
   fetchBankAccounts,
   fetchBankAccountReconciliations,
+  fetchGlAccountsById,
+  fetchOnboardingFeeDate,
 } from "../buildium/client.js";
 import { upsertCachedMetric, recordCacheRefreshFailure } from "../db/metricCache.js";
 import { startSyncRun, completeSyncRun, failSyncRun, getLastSuccessfulSync } from "../db/syncLog.js";
@@ -50,6 +52,12 @@ import {
   fetchLeaseRenewalProcesses,
   summarizeLeaseRenewalRate,
 } from "../leadsimple/client.js";
+import {
+  findTerminatingCandidates,
+  matchCandidatesToActiveProperties,
+  isStillExcluded,
+  getExcludedPropertyIds,
+} from "../kpi/terminatedProperties.js";
 import { periodToSnapshotLabel } from "../kpi/period.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
 
@@ -340,6 +348,89 @@ syncRoutes.post("/api/sync/renewal-rate", requireLogin, async (_req, res) => {
   }
 });
 
+// Terminated Properties — ADDED 2026-07-10, per Jason directly. See
+// src/kpi/terminatedProperties.ts for the full derivation (real examples:
+// 3400 Landstown Court, 300 Garrison Place). Cross-references LeadSimple's
+// Lease Renewal processes against Buildium leases and each CANDIDATE
+// property's own GL ledger (for an Owner Onboarding Fee transaction) —
+// both only affordable because this is scoped to the small set of
+// candidates LeadSimple identifies first (one Lease Renewal process fetch,
+// then per-property checks only for the handful still flagged), not run
+// across the whole 234-property portfolio.
+syncRoutes.post("/api/sync/terminated-properties", requireLogin, async (_req, res) => {
+  if (!isLeadSimpleConnected()) {
+    res.status(409).json({ error: "LeadSimple is not connected." });
+    return;
+  }
+  const syncLogId = await startSyncRun("buildium", "terminated_properties_cache_refresh");
+  try {
+    const [processResult, allProperties, allLeases, glAccountsById] = await Promise.all([
+      fetchLeaseRenewalProcesses(),
+      fetchProperties(),
+      fetchAllLeases(),
+      fetchGlAccountsById(),
+    ]);
+    if (!processResult.connected || !processResult.data) {
+      throw new Error(processResult.error ?? "LeadSimple Lease Renewal processes unavailable");
+    }
+
+    const candidates = findTerminatingCandidates(processResult.data);
+    const activeProperties = allProperties.filter((p) => p.IsActive === true);
+    const matched = matchCandidatesToActiveProperties(candidates, activeProperties);
+
+    const glAccountIds = [...glAccountsById.keys()];
+    const now = new Date();
+    const leasesByPropertyId = new Map<number, typeof allLeases>();
+    for (const l of allLeases) {
+      const bucket = leasesByPropertyId.get(l.PropertyId);
+      if (bucket) bucket.push(l);
+      else leasesByPropertyId.set(l.PropertyId, [l]);
+    }
+
+    // Sequential, not Promise.all — same rate-limit reasoning as the other
+    // per-property GL/transaction syncs in this file. Only runs for the
+    // small candidate set (typically well under 20 properties), not the
+    // whole portfolio.
+    const stillExcluded: typeof matched = [];
+    for (const candidate of matched) {
+      const leasesForProperty = leasesByPropertyId.get(Number(candidate.propertyId)) ?? [];
+      const onboardingFeeDate = await fetchOnboardingFeeDate(
+        Number(candidate.propertyId),
+        glAccountIds,
+        candidate.terminatedAt.slice(0, 10),
+        now
+      );
+      if (isStillExcluded(candidate.terminatedAt, leasesForProperty, onboardingFeeDate)) {
+        stillExcluded.push(candidate);
+      }
+    }
+
+    await upsertCachedMetric("terminated_properties", "portfolio", "buildium", { excluded: stillExcluded });
+
+    await completeSyncRun(syncLogId, matched.length);
+    logInfo("Terminated properties sync completed", {
+      syncLogId,
+      candidateCount: matched.length,
+      excludedCount: stillExcluded.length,
+    });
+    res.json({
+      ok: true,
+      syncedAt: new Date().toISOString(),
+      candidateCount: matched.length,
+      excludedCount: stillExcluded.length,
+      excluded: stillExcluded,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("terminated_properties", "portfolio", "buildium", message);
+    await failSyncRun(syncLogId, message);
+    logError("Terminated properties sync failed", { syncLogId, error: message });
+    res
+      .status(502)
+      .json({ error: "Terminated properties sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
 // Total Calls / Outbound Texts (Marketing & Showings section). CONFIRMED
 // LIVE 2026-07-03: RentEngine's /calls and /messages endpoints require one
 // request PER PROSPECT (no bulk/account-wide variant), against a confirmed
@@ -481,8 +572,16 @@ syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, async (_req, re
     const monthEnd = now.toISOString().slice(0, 10);
 
     // Portfolio Manager
-    const units = await fetchActiveManagedUnits();
-    const activeLeases = await fetchActiveLeases();
+    // CHANGED 2026-07-10, per Jason directly: excludes terminated-but-not-
+    // yet-closed-out properties (see src/kpi/terminatedProperties.ts) from
+    // the unit count this KPI is scored against — a Portfolio Manager
+    // shouldn't be graded on vacancy that isn't really theirs to fix.
+    const [allUnits, activeLeases, excludedPropertyIds] = await Promise.all([
+      fetchActiveManagedUnits(),
+      fetchActiveLeases(),
+      getExcludedPropertyIds(),
+    ]);
+    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const occupancy = summarizeOccupancy(units.length, activeLeases);
     await writeSnapshotForEveryDisplayGroup(
       "portfolio_manager", "Portfolio Occupancy Rate", period, periodStart, periodEnd,

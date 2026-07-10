@@ -106,6 +106,12 @@ export async function fetchProcessTypeStages(processTypeId: string): Promise<Lea
   });
 }
 
+// `properties` — ADDED 2026-07-10 for the terminated-properties feature.
+// CONFIRMED LIVE: the real API response carries a full properties[] array
+// (address/city/state/zip/unit) on every process, previously silently
+// stripped by zod since no caller needed it before now. `address` matches
+// Buildium's Address.AddressLine1 format exactly (confirmed against 15
+// real properties).
 const leadSimpleProcessSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -120,6 +126,7 @@ const leadSimpleProcessSchema = z.object({
       status: z.string(),
     })
     .nullable(),
+  properties: z.array(z.object({ address: z.string().nullable() })).default([]),
 });
 export type LeadSimpleProcess = z.infer<typeof leadSimpleProcessSchema>;
 

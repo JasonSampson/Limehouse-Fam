@@ -199,20 +199,28 @@ export async function fetchActiveLeases(): Promise<BuildiumLease[]> {
   return leases.filter((l) => l.CurrentTenants && l.CurrentTenants.length > 0);
 }
 
-// CONFIRMED LIVE 2026-07-07: the same ghost-record problem documented above
-// for fetchActiveLeases also affects Future-status leases (10 found with
-// CurrentTenants empty, same stale-data pattern) — Past leases are exempt
-// since a real, legitimate Past lease is SUPPOSED to have zero current
-// tenants (the tenant moved out). Verified against the vendor's real
-// current-lease count: 250 raw non-Past leases minus 47 zero-tenant ghosts
-// (37 Active + 10 Future) lands on exactly 203, matching the vendor's own
-// "234 units · 203 leases" header and its full 199 fixed-term + 4
-// month-to-month lease lists lease-for-lease (only 1 of 203 differed, and
-// that was an address-formatting quirk on the same lease, not a real
-// mismatch). Every renewal-rate/moved-out miscount traced back to this.
+// CORRECTED 2026-07-10, per Jason directly: the 2026-07-07 fix above
+// (excluding Future leases with empty CurrentTenants as "ghosts," same
+// pattern as Active) was wrong for Future specifically. CONFIRMED LIVE:
+// 13 of 13 real Future-status leases on this account have empty
+// CurrentTenants — 0 populated, no exceptions — including a lease Jason
+// confirmed by hand is completely real (724 Carolina Avenue, signed lease
+// starting 2026-08-01, tenant already entered in Buildium). A Future
+// lease's tenant isn't "current" yet by definition (the tenancy hasn't
+// started), so Buildium apparently never populates CurrentTenants for
+// ANY Future lease, real or not — it's not a ghost signature the way it
+// is for Active (where a real Active lease SHOULD have a current tenant,
+// so an empty one really does mean stale/never-transitioned-to-Past).
+// The 2026-07-07 "lands on exactly 203" vendor-match that justified this
+// filter never actually depended on the Future-lease portion — that
+// header count comes from fetchActiveLeases() (Active-status only, a
+// separate function with its own still-valid ghost filter), not from
+// here. Future leases are now included unconditionally, same as Past.
 export async function fetchAllLeases(): Promise<BuildiumLease[]> {
   const leases = await fetchLeasesByStatus(["Active", "Past", "Future"]);
-  return leases.filter((l) => l.LeaseStatus === "Past" || (l.CurrentTenants && l.CurrentTenants.length > 0));
+  return leases.filter(
+    (l) => l.LeaseStatus === "Past" || l.LeaseStatus === "Future" || (l.CurrentTenants && l.CurrentTenants.length > 0)
+  );
 }
 
 // ============================================================================
@@ -703,6 +711,54 @@ export async function fetchGeneralLedgerTotals(
   }
 
   return [...merged.values()];
+}
+
+// Owner Onboarding Fee lookup — ADDED 2026-07-10, per Jason directly: the
+// real signal for "this property has restarted active management" (he
+// confirmed the fee being paid is literally what triggers marketing/photos
+// to begin, not just a paperwork formality). CONFIRMED LIVE against a real
+// example (724 Carolina Avenue): the fee is NOT its own GL account — it
+// posts as a Check payment against whichever operating bank account,
+// distinguishable only by its Description text ("724 Carolina Ave, Owner
+// Onboarding Fee"). So this scans every GL account on the property's own
+// (Rental entity) ledger for an entry whose Description mentions
+// "Onboarding Fee", rather than filtering to one known account id.
+//
+// Scoped per-property (entitytype=Rental, not the Company-wide scope
+// fetchGeneralLedgerTotals uses) — deliberately NOT run across the whole
+// portfolio; only the small set of candidate terminated properties need
+// this checked (see src/kpi/terminatedProperties.ts).
+export async function fetchOnboardingFeeDate(propertyId: number, glAccountIds: number[], sinceDate: string, asOfDate: Date): Promise<string | null> {
+  if (glAccountIds.length === 0) return null;
+  const endDate = asOfDate.toISOString().slice(0, 10);
+  const windows = splitIntoMaxRangeWindows(sinceDate, endDate);
+
+  for (const window of windows) {
+    for (let i = 0; i < glAccountIds.length; i += GL_ACCOUNT_BATCH_SIZE) {
+      const batch = glAccountIds.slice(i, i + GL_ACCOUNT_BATCH_SIZE);
+      const glParams = batch.map((id) => `glaccountids=${id}`).join("&");
+      const path =
+        `/generalledger?startdate=${encodeURIComponent(window.start)}` +
+        `&enddate=${encodeURIComponent(window.end)}` +
+        `&accountingbasis=Cash` +
+        `&entitytype=Rental&entityid=${propertyId}` +
+        `&${glParams}`;
+
+      const rows = await buildiumGetAllPages<z.infer<typeof buildiumGeneralLedgerAccountSchema>>(
+        path,
+        z.array(buildiumGeneralLedgerAccountSchema)
+      );
+
+      for (const row of rows) {
+        for (const entry of row.Entries) {
+          if (entry.Description && /onboarding fee/i.test(entry.Description)) {
+            return entry.Date;
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 
 // ============================================================================

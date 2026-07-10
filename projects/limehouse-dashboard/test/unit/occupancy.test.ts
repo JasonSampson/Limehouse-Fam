@@ -8,6 +8,11 @@ import {
   summarizeRenewalRate,
   mostRecentRentEffectiveDate,
   summarizeDelinquencyRate,
+  earliestTrackableMonth,
+  summarizeMonthlyOccupancy,
+  monthsSinceEarliestTrackable,
+  summarizeYearlyOccupancy,
+  findSameMonthLastYearOccupancy,
 } from "../../src/kpi/occupancy.js";
 import type { BuildiumLease, BuildiumUnit, LeaseBalance } from "../../src/buildium/client.js";
 
@@ -400,6 +405,137 @@ describe("summarizeDelinquencyRate", () => {
     const leases = [lease({ Id: 1, AccountDetails: { Rent: 1000, SecurityDeposit: null } })];
     const result = summarizeDelinquencyRate(balances, leases);
     expect(result.totalDelinquentBalance).toBe(200);
+  });
+});
+
+// Occupancy Rate — Year over Year — REBUILT 2026-07-09, per Jason
+// directly: reconstructs occupancy for each past month from real lease
+// coverage, going back as far as real lease history allows.
+describe("earliestTrackableMonth", () => {
+  it("returns the earliest LeaseFromDate month across the given units' leases", () => {
+    const units = [unit({ Id: 10 }), unit({ Id: 20 })];
+    const leases = [
+      lease({ UnitId: 10, LeaseFromDate: "2020-05-15" }),
+      lease({ UnitId: 20, LeaseFromDate: "2018-02-01" }),
+    ];
+    expect(earliestTrackableMonth(units, leases)).toBe("2018-02");
+  });
+
+  it("ignores leases belonging to units outside the given list", () => {
+    const units = [unit({ Id: 10 })];
+    const leases = [lease({ UnitId: 10, LeaseFromDate: "2020-01-01" }), lease({ UnitId: 999, LeaseFromDate: "2015-01-01" })];
+    expect(earliestTrackableMonth(units, leases)).toBe("2020-01");
+  });
+
+  it("returns null when none of the units has any lease history", () => {
+    expect(earliestTrackableMonth([unit({ Id: 10 })], [])).toBeNull();
+  });
+});
+
+describe("summarizeMonthlyOccupancy", () => {
+  const asOf = new Date("2026-07-09T00:00:00Z");
+
+  it("counts a unit occupied for a month its lease covers (LeaseFromDate before/at month end, LeaseToDate at/after month start)", () => {
+    const units = [unit({ Id: 10 })];
+    const leases = [lease({ UnitId: 10, LeaseFromDate: "2025-01-01", LeaseToDate: "2025-12-31" })];
+    const result = summarizeMonthlyOccupancy(units, leases, ["2025-06"], asOf);
+    expect(result).toEqual([{ month: "2025-06", occupiedUnits: 1, totalUnits: 1, occupancyPercent: 100 }]);
+  });
+
+  it("counts a unit vacant for a month with no lease covering it, but still in the total", () => {
+    const units = [unit({ Id: 10 })];
+    const leases = [lease({ UnitId: 10, LeaseFromDate: "2025-01-01", LeaseToDate: "2025-03-31" })];
+    const result = summarizeMonthlyOccupancy(units, leases, ["2025-06"], asOf);
+    expect(result).toEqual([{ month: "2025-06", occupiedUnits: 0, totalUnits: 1, occupancyPercent: 0 }]);
+  });
+
+  it("treats a null LeaseToDate as an ongoing (month-to-month) lease covering every month from its start onward", () => {
+    const units = [unit({ Id: 10 })];
+    const leases = [lease({ UnitId: 10, LeaseFromDate: "2024-01-01", LeaseToDate: null })];
+    const result = summarizeMonthlyOccupancy(units, leases, ["2026-06"], asOf);
+    expect(result[0].occupiedUnits).toBe(1);
+  });
+
+  it("excludes a unit from the total entirely for a month before its earliest known lease started", () => {
+    const units = [unit({ Id: 10 })];
+    const leases = [lease({ UnitId: 10, LeaseFromDate: "2025-06-01", LeaseToDate: "2026-05-31" })];
+    const result = summarizeMonthlyOccupancy(units, leases, ["2024-01"], asOf);
+    expect(result).toEqual([{ month: "2024-01", occupiedUnits: 0, totalUnits: 0, occupancyPercent: null }]);
+  });
+
+  // CONFIRMED 2026-07-09, per Jason directly: units with zero lease
+  // history are all real, recently-added properties that haven't been
+  // rented yet — not decades-old vacancies. They must NOT be projected
+  // backward into years they didn't exist.
+  it("excludes a unit with zero lease history from every past month", () => {
+    const units = [unit({ Id: 10 })]; // never-rented, no lease record
+    const result = summarizeMonthlyOccupancy(units, [], ["2020-01"], asOf); // asOf is 2026-07, well after 2020-01
+    expect(result).toEqual([{ month: "2020-01", occupiedUnits: 0, totalUnits: 0, occupancyPercent: null }]);
+  });
+
+  it("includes a unit with zero lease history only in the CURRENT month (asOf), not before", () => {
+    const units = [unit({ Id: 10 })];
+    const result = summarizeMonthlyOccupancy(units, [], ["2026-07"], asOf); // asOf's own month
+    expect(result).toEqual([{ month: "2026-07", occupiedUnits: 0, totalUnits: 1, occupancyPercent: 0 }]);
+  });
+
+  it("computes a portfolio-wide percentage across multiple units in the same month", () => {
+    const units = [unit({ Id: 10 }), unit({ Id: 20 }), unit({ Id: 30 })];
+    const leases = [
+      lease({ UnitId: 10, LeaseFromDate: "2025-01-01", LeaseToDate: "2025-12-31" }), // occupied
+      lease({ UnitId: 20, LeaseFromDate: "2024-01-01", LeaseToDate: "2024-12-31" }), // vacant by 2025-06
+      // unit 30: no lease at all — only counted because asOf below IS 2025-06
+    ];
+    const result = summarizeMonthlyOccupancy(units, leases, ["2025-06"], new Date("2025-06-15T00:00:00Z"));
+    expect(result[0]).toEqual({ month: "2025-06", occupiedUnits: 1, totalUnits: 3, occupancyPercent: 33.3 });
+  });
+});
+
+describe("monthsSinceEarliestTrackable", () => {
+  it("returns every month from January of the earliest trackable year through asOf's month", () => {
+    const asOf = new Date("2026-03-01T00:00:00Z");
+    const result = monthsSinceEarliestTrackable(asOf, "2024-07");
+    expect(result[0]).toBe("2024-01");
+    expect(result[result.length - 1]).toBe("2026-03");
+  });
+});
+
+describe("summarizeYearlyOccupancy", () => {
+  it("rolls monthly figures up as a ratio of sums (occupied unit-months over total unit-months), not an average of percentages", () => {
+    const months = [
+      { month: "2025-01", occupiedUnits: 1, totalUnits: 1, occupancyPercent: 100 },
+      { month: "2025-02", occupiedUnits: 1, totalUnits: 10, occupancyPercent: 10 },
+    ];
+    const result = summarizeYearlyOccupancy(months);
+    // naive average of percentages would be 55%; ratio of sums is 2/11 = 18.2%
+    expect(result[0].avgOccupancyPercent).toBe(18.2);
+    expect(result[0].year).toBe("2025");
+    expect(result[0].lastMonth).toBe("2025-02");
+  });
+
+  it("sorts most recent year first", () => {
+    const months = [
+      { month: "2023-06", occupiedUnits: 1, totalUnits: 1, occupancyPercent: 100 },
+      { month: "2025-06", occupiedUnits: 1, totalUnits: 1, occupancyPercent: 100 },
+      { month: "2024-06", occupiedUnits: 1, totalUnits: 1, occupancyPercent: 100 },
+    ];
+    expect(summarizeYearlyOccupancy(months).map((y) => y.year)).toEqual(["2025", "2024", "2023"]);
+  });
+});
+
+describe("findSameMonthLastYearOccupancy", () => {
+  it("finds the same calendar month one year earlier", () => {
+    const months = [
+      { month: "2025-06", occupiedUnits: 8, totalUnits: 10, occupancyPercent: 80 },
+      { month: "2026-06", occupiedUnits: 9, totalUnits: 10, occupancyPercent: 90 },
+    ];
+    const result = findSameMonthLastYearOccupancy(months, "2026-06");
+    expect(result).toEqual({ month: "2026-06", lastYearMonth: "2025-06", lastYearOccupancyPercent: 80 });
+  });
+
+  it("returns null when last year's same month isn't in the data", () => {
+    const months = [{ month: "2026-06", occupiedUnits: 9, totalUnits: 10, occupancyPercent: 90 }];
+    expect(findSameMonthLastYearOccupancy(months, "2026-06")).toBeNull();
   });
 
   it("returns null when there is no monthly rent to divide by", () => {

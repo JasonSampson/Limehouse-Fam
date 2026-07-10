@@ -199,6 +199,16 @@ describe("summarizeUnitsOnMarket", () => {
   it("returns zero for an empty unit list", () => {
     expect(summarizeUnitsOnMarket([])).toEqual({ unitsOnMarket: 0, totalUnitsTracked: 0 });
   });
+
+  // ADDED 2026-07-10: confirms the crash-fix (status loosened from a
+  // strict Leased/Available enum to a plain string) didn't change this
+  // function's behavior -- an On Hold or Incomplete unit still correctly
+  // doesn't count as on-market, same as any other non-Available status.
+  it("does not count On Hold or Incomplete units as on-market", () => {
+    const units = [unit({ id: 1, status: "On Hold" }), unit({ id: 2, status: "Incomplete" })];
+    const result = summarizeUnitsOnMarket(units);
+    expect(result).toEqual({ unitsOnMarket: 0, totalUnitsTracked: 2 });
+  });
 });
 
 // CONFIRMED LIVE 2026-07-04: GET /reporting/leasing-performance/units/{id}
@@ -399,6 +409,32 @@ describe("summarizeShowingCompletionRate", () => {
     const result = summarizeShowingCompletionRate(rows, units);
     expect(result).toEqual({ showingsCompleted: 2, showingsScheduled: 2, ratePercent: 100 });
   });
+
+  // ADDED 2026-07-10: On Hold and Incomplete are real statuses RentEngine
+  // sends (confirmed live against a real crash their strict status enum
+  // used to cause) -- a unit sitting in either isn't actually being shown
+  // to anyone, so both are excluded from "available" the same as Leased.
+  it("excludes On Hold and Incomplete units the same as Leased ones", () => {
+    const units = [
+      unit({ id: 1, status: "Available" }),
+      unit({ id: 2, status: "On Hold" }),
+      unit({ id: 3, status: "Incomplete" }),
+    ];
+    const rows = [
+      leasingPerformance({ unit_id: 1, showings_scheduled: 4, showings_completed: 3 }),
+      leasingPerformance({ unit_id: 2, showings_scheduled: 10, showings_completed: 10 }), // On Hold -- excluded
+      leasingPerformance({ unit_id: 3, showings_scheduled: 10, showings_completed: 10 }), // Incomplete -- excluded
+    ];
+    const result = summarizeShowingCompletionRate(rows, units);
+    expect(result).toEqual({ showingsCompleted: 3, showingsScheduled: 4, ratePercent: 75 });
+  });
+
+  it("still counts a Waitlist unit as available (only Leased/On Hold/Incomplete are excluded)", () => {
+    const units = [unit({ id: 1, status: "Waitlist" })];
+    const rows = [leasingPerformance({ unit_id: 1, showings_scheduled: 2, showings_completed: 1 })];
+    const result = summarizeShowingCompletionRate(rows, units);
+    expect(result).toEqual({ showingsCompleted: 1, showingsScheduled: 2, ratePercent: 50 });
+  });
 });
 
 describe("showingCompletionRateExplainRows", () => {
@@ -408,6 +444,17 @@ describe("showingCompletionRateExplainRows", () => {
       leasingPerformance({ unit_id: 1, showings_scheduled: 4, showings_completed: 3 }),
       leasingPerformance({ unit_id: 2, showings_scheduled: 10, showings_completed: 10 }),
       leasingPerformance({ unit_id: 3, showings_scheduled: 0, showings_completed: 0 }),
+    ];
+    const rowsOut = showingCompletionRateExplainRows(rows, units);
+    expect(rowsOut).toEqual([{ unitId: 1, showingsScheduled: 4, showingsCompleted: 3 }]);
+  });
+
+  it("also excludes On Hold and Incomplete units", () => {
+    const units = [unit({ id: 1, status: "Available" }), unit({ id: 2, status: "On Hold" }), unit({ id: 3, status: "Incomplete" })];
+    const rows = [
+      leasingPerformance({ unit_id: 1, showings_scheduled: 4, showings_completed: 3 }),
+      leasingPerformance({ unit_id: 2, showings_scheduled: 10, showings_completed: 10 }),
+      leasingPerformance({ unit_id: 3, showings_scheduled: 10, showings_completed: 10 }),
     ];
     const rowsOut = showingCompletionRateExplainRows(rows, units);
     expect(rowsOut).toEqual([{ unitId: 1, showingsScheduled: 4, showingsCompleted: 3 }]);

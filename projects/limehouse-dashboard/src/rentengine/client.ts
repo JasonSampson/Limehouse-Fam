@@ -238,9 +238,21 @@ export async function fetchProspects(fromDate: string, toDate: string): Promise<
 // this account (see file header) — every fetchUnits caller must treat
 // that as the full available set, not a paginated slice of something
 // bigger.
+//
+// FIXED 2026-07-10: status used to be a strict z.enum(["Leased",
+// "Available"]) — CONFIRMED LIVE this was actively crashing the entire
+// /units fetch, and every tile that depends on it (Property Health, Days
+// on Market, Marketing Activity, Units on Market), because RentEngine's
+// real account now has units in "On Hold" and "Incomplete" too (confirmed
+// against the RentEngine UI itself — both are real, ordinary statuses
+// their own screen shows, not glitches). One bad value anywhere in the
+// array fails the whole array under zod, same failure mode the
+// `prospect.status` field below already guards against — status is now a
+// plain string here for the same reason, so a 5th/6th/7th real value
+// RentEngine adds later doesn't take the whole fetch down again.
 const unitSchema = z.object({
   id: z.number(),
-  status: z.enum(["Leased", "Available"]),
+  status: z.string(),
   is_occupied: z.boolean(),
   earliest_showing_date: z.string().nullable(),
   earliest_move_in_date: z.string().nullable(),
@@ -669,11 +681,24 @@ export interface ShowingCompletionRateSummary {
 // its own. RentEngine doesn't distinguish accompanied vs self-guided
 // showings, so self-guided showings can't be excluded even though the
 // vendor's own note says that would be more accurate.
+//
+// UPDATED 2026-07-10, per Jason directly: a unit sitting at "On Hold" or
+// "Incomplete" isn't actually being shown to anyone right now (same as a
+// Leased one, just for a different reason), so both are excluded from
+// "available for showing" alongside Leased — not just Leased alone, which
+// is all this checked before the status field crash fix above. Anything
+// else (Available, Waitlist, or a future status not seen yet) still
+// counts as available, same permissive-by-default posture as the schema
+// change right above.
+const NOT_AVAILABLE_FOR_SHOWING_STATUSES = new Set(["Leased", "On Hold", "Incomplete"]);
+
 export function summarizeShowingCompletionRate(
   rows: RentEngineLeasingPerformance[],
   units: RentEngineUnit[]
 ): ShowingCompletionRateSummary {
-  const availableUnitIds = new Set(units.filter((u) => u.status !== "Leased").map((u) => u.id));
+  const availableUnitIds = new Set(
+    units.filter((u) => !NOT_AVAILABLE_FOR_SHOWING_STATUSES.has(u.status)).map((u) => u.id)
+  );
   const availableRows = rows.filter((r) => availableUnitIds.has(r.unit_id));
   const showingsScheduled = availableRows.reduce((sum, r) => sum + r.showings_scheduled, 0);
   const showingsCompleted = availableRows.reduce((sum, r) => sum + r.showings_completed, 0);
@@ -694,7 +719,9 @@ export function showingCompletionRateExplainRows(
   rows: RentEngineLeasingPerformance[],
   units: RentEngineUnit[]
 ): ShowingCompletionRateExplainRow[] {
-  const availableUnitIds = new Set(units.filter((u) => u.status !== "Leased").map((u) => u.id));
+  const availableUnitIds = new Set(
+    units.filter((u) => !NOT_AVAILABLE_FOR_SHOWING_STATUSES.has(u.status)).map((u) => u.id)
+  );
   return rows
     .filter((r) => availableUnitIds.has(r.unit_id) && (r.showings_scheduled > 0 || r.showings_completed > 0))
     .map((r) => ({ unitId: r.unit_id, showingsScheduled: r.showings_scheduled, showingsCompleted: r.showings_completed }));

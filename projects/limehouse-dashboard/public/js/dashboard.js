@@ -621,7 +621,10 @@ function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, property
         ${renderOccupancyTrendChart(occupancyHistory)}
       </div>
       <div class="chart-card">
-        <p class="chart-card-title">Property Health</p>
+        <div class="chart-card-title-row">
+          <p class="chart-card-title">Property Health</p>
+          ${badgeHtml(["RE", "BD"], true)}
+        </div>
         ${renderPropertyHealthChart(propertyHealth)}
       </div>
     </div>

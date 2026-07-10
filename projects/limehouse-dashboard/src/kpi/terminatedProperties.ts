@@ -113,3 +113,22 @@ export async function getExcludedPropertyIds(): Promise<Set<string>> {
   const value = cached.value as { excluded: Array<{ propertyId: string }> };
   return new Set(value.excluded.map((e) => e.propertyId));
 }
+
+// Property Health "Pending Close-Out" category — ADDED 2026-07-10, per
+// Jason directly: a category of our own, not sourced from RentEngine, for
+// the same 8 terminated-but-not-yet-closed-out properties this file
+// already tracks. CONFIRMED live with Jason this has zero overlap with
+// RentEngine's own "Unknown" category — a terminated property never gets
+// listed again, so RentEngine simply has no record of it at all (not a
+// record with an odd/unrecognized value), unlike "Unknown," which means
+// RentEngine DOES track the unit but sent back a property_health value
+// that doesn't match any of its 7 known categories. Deliberately does NOT
+// touch totalUnits — that figure is RentEngine's own tracked-unit count,
+// and blending in a portfolio-wide PROPERTY count here would conflate two
+// different denominators under one number.
+export function withPendingCloseOutCategory(
+  countsByCategory: Record<string, number>,
+  pendingCloseOutCount: number
+): Record<string, number> {
+  return { ...countsByCategory, "Pending Close-Out": pendingCloseOutCount };
+}

@@ -60,7 +60,7 @@ import {
 } from "../kpi/leaseRows.js";
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
-import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
+import { getExcludedPropertyIds, withPendingCloseOutCategory } from "../kpi/terminatedProperties.js";
 import {
   summarizeRentAndDeposit,
   summarizeYearlyCollectionRates,
@@ -341,10 +341,20 @@ dashboardRoutes.get("/api/dashboard/properties", requireLogin, async (_req, res)
 // full note on that distinction. Cache-backed (same pattern as
 // rent-collection/call-activity): computing this live would mean ~61
 // RentEngine calls on every page load.
+// CHANGED 2026-07-10, per Jason directly: adds a "Pending Close-Out"
+// category on top of RentEngine's own 7 — the same terminated-but-not-
+// yet-closed-out properties already excluded from Total Units/Vacant/
+// Occupancy elsewhere (see src/kpi/terminatedProperties.ts). Confirmed
+// with Jason this can't double-count against RentEngine's "Unknown"
+// bucket — a terminated property is never listed again, so RentEngine has
+// no record of it at all, not a mislabeled one.
 dashboardRoutes.get("/api/dashboard/property-health", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const shared = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+    const [shared, excludedPropertyIds] = await Promise.all([
+      getOrFetchLeasingPerformanceForAllUnits(from, to),
+      getExcludedPropertyIds(),
+    ]);
     if (!shared.connected) {
       res.json({ connected: false, totalUnits: null, countsByCategory: null });
       return;
@@ -355,7 +365,15 @@ dashboardRoutes.get("/api/dashboard/property-health", requireLogin, async (req, 
       return;
     }
     const summary = summarizePropertyHealthFromReporting(shared.rows);
-    res.json({ connected: true, ...summary, cached: shared.cached, cachedAt: shared.cachedAt, stale: shared.stale });
+    const countsByCategory = withPendingCloseOutCategory(summary.countsByCategory, excludedPropertyIds.size);
+    res.json({
+      connected: true,
+      ...summary,
+      countsByCategory,
+      cached: shared.cached,
+      cachedAt: shared.cachedAt,
+      stale: shared.stale,
+    });
   } catch (err) {
     logError("GET /api/dashboard/property-health failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load property health data from RentEngine." });

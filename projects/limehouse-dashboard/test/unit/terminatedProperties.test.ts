@@ -3,6 +3,7 @@ import {
   findTerminatingCandidates,
   matchCandidatesToActiveProperties,
   isStillExcluded,
+  withPendingCloseOutCategory,
 } from "../../src/kpi/terminatedProperties.js";
 import type { LeadSimpleProcess } from "../../src/leadsimple/client.js";
 import type { BuildiumLease, BuildiumProperty } from "../../src/buildium/client.js";
@@ -192,5 +193,23 @@ describe("isStillExcluded", () => {
     const leases = [lease({ LeaseFromDate: "2026-08-01" })];
     const result = isStillExcluded("2024-01-01T00:00:00Z", leases, "2026-06-29");
     expect(result).toBe(false);
+  });
+});
+
+describe("withPendingCloseOutCategory", () => {
+  it("adds a Pending Close-Out key on top of the existing categories", () => {
+    const result = withPendingCloseOutCategory({ Healthy: 17, "At-risk": 5, "Off-Market": 44 }, 8);
+    expect(result).toEqual({ Healthy: 17, "At-risk": 5, "Off-Market": 44, "Pending Close-Out": 8 });
+  });
+
+  it("does not mutate the input object", () => {
+    const input = { Healthy: 1 };
+    withPendingCloseOutCategory(input, 3);
+    expect(input).toEqual({ Healthy: 1 });
+  });
+
+  it("reports a zero count honestly rather than omitting the category", () => {
+    const result = withPendingCloseOutCategory({ Healthy: 1 }, 0);
+    expect(result["Pending Close-Out"]).toBe(0);
   });
 });

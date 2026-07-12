@@ -612,6 +612,7 @@ function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, property
                 sub: "Gained this period: not connected yet",
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
               })
             : couldNotLoadTile({ id: "owners", label: "Owners", sourceTags: ["BD"] })
         }
@@ -1389,6 +1390,30 @@ async function handleTileClick(tileId) {
         { label: "%", render: (r) => formatPercent(r.percent) },
       ],
       emptyText: "No reconciled move-outs in the trailing window yet — trigger a Security Deposit Withheld sync first if this looks wrong.",
+    });
+    return;
+  }
+
+  // Owners drill-down — ADDED 2026-07-12, per Jason directly. Matches the
+  // vendor site's own "All owners" columns (Owner/Active/Start/End), plus
+  // a Properties column he asked for that the vendor's drill-down doesn't
+  // have. Each row here is already a deduped real owner (co-owner records
+  // on the same property, and the same owner using a different name/LLC
+  // on a different property, are merged server-side — see
+  // src/kpi/owners.ts) — not a raw Buildium owner record.
+  if (tileId === "owners") {
+    await simpleDrillDown({
+      tileId,
+      title: "Owners",
+      url: "/api/dashboard/owners/list",
+      columns: [
+        { label: "Owner", key: "name" },
+        { label: "Active", render: (r) => (r.active ? "yes" : "no") },
+        { label: "Start", render: (r) => r.start ?? "—" },
+        { label: "End", render: (r) => r.end ?? "—" },
+        { label: "Properties", render: (r) => r.properties.join(", ") },
+      ],
+      emptyText: "No owners found.",
     });
     return;
   }

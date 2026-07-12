@@ -484,13 +484,24 @@ export async function fetchUnitsForProperty(propertyId: string): Promise<Buildiu
 // signal for door losses on this account; Doors Lost is intentionally not
 // built against it (see src/kpi/churn.ts) pending further research into
 // the actual real signal.
+// `IsActive`, `PhoneNumbers`, `AlternateEmail` — ADDED 2026-07-12 for the
+// Owners drill-down (see src/kpi/owners.ts): CONFIRMED LIVE present on
+// real /rentals/owners records for this account, previously silently
+// dropped the same way ManagementAgreementStartDate once was. `IsActive`
+// is the real per-record status field — no need to separately compare
+// against fetchActiveOwners()'s id set. PhoneNumbers defaults to [] (some
+// real owner records have none) so a missing array can never crash
+// parsing, same defensive pattern as PropertyIds below.
 export const buildiumOwnerSchema = z.object({
   Id: z.number(),
   FirstName: z.string().nullable(),
   LastName: z.string().nullable(),
   IsCompany: z.boolean().nullable(),
+  IsActive: z.boolean(),
   CompanyName: z.string().nullable(),
   Email: z.string().nullable(),
+  AlternateEmail: z.string().nullable(),
+  PhoneNumbers: z.array(z.object({ Number: z.string(), Type: z.string().nullable() })).default([]),
   ManagementAgreementStartDate: z.string().nullable(),
   ManagementAgreementEndDate: z.string().nullable(),
   PropertyIds: z.array(z.number()).nullable(),

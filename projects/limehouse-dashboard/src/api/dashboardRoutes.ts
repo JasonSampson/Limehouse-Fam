@@ -10,7 +10,6 @@ import {
   fetchAllLeases,
   fetchActiveLeases,
   fetchOwners,
-  fetchActiveOwners,
   fetchLeaseTransactions,
   fetchPendingApplicants,
 } from "../buildium/client.js";
@@ -61,6 +60,7 @@ import {
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
 import { getExcludedPropertyIds, withPendingCloseOutCategory } from "../kpi/terminatedProperties.js";
+import { groupOwners } from "../kpi/owners.js";
 import {
   summarizeRentAndDeposit,
   summarizeYearlyCollectionRates,
@@ -457,20 +457,62 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
   }
 });
 
+// CHANGED 2026-07-12, per Jason directly: raw Buildium owner RECORDS
+// overcount real owners two ways (co-owners sharing one property each get
+// their own record; the same real owner sometimes uses a different name/
+// LLC on different properties) — see src/kpi/owners.ts for the full
+// derivation. Groups the FULL owner list (fetchOwners, not
+// fetchActiveOwners) so a link through an inactive record is never
+// missed, then keeps only groups with at least one currently-active
+// member, matching "how many owners am I actively managing for" rather
+// than the vendor site's raw (and here, provably wrong) owner-record count.
 dashboardRoutes.get("/api/dashboard/owners", requireLogin, async (_req, res) => {
   try {
-    // Active owners only — matches vendor's own dashboard (251), not the
-    // 383 you get from fetchOwners() which deliberately includes inactive
-    // owners for the Doors Added/Lost calculations elsewhere on this page.
-    const owners = await fetchActiveOwners();
-    res.json(
-      owners.map((o) => ({
-        id: o.Id,
-        name: o.IsCompany ? o.CompanyName : `${o.FirstName ?? ""} ${o.LastName ?? ""}`.trim(),
-      }))
-    );
+    const owners = await fetchOwners();
+    const activeGroups = groupOwners(owners).filter((g) => g.active);
+    res.json(activeGroups);
   } catch (err) {
     logError("GET /api/dashboard/owners failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load owners from Buildium." });
+  }
+});
+
+// Owners drill-down — same active-owner groups as the tile above, with
+// property addresses resolved for the "Properties" column Jason asked
+// for (each group's propertyIds map straight to real addresses via the
+// same lookup every other drill-down on this dashboard already uses).
+//
+// FIXED 2026-07-12, per Jason directly: Buildium's owner records don't
+// get cleaned up when a property goes inactive (sold, no longer
+// managed) — an owner's PropertyIds array keeps referencing it forever.
+// CONFIRMED LIVE against Red Lion Properties, the real example Jason
+// flagged: 948 Ivy Avenue and 1610 Marciano Drive are both
+// IsActive:false in Buildium but were still showing in the Properties
+// column. The grouping itself (co-owner merging via shared PropertyIds)
+// still uses the FULL history — a property they once co-owned together
+// is still real evidence they're the same owner, even after that
+// property is gone — but the properties actually LISTED here are
+// filtered to currently-active ones only, matching what the owner
+// genuinely still owns today.
+dashboardRoutes.get("/api/dashboard/owners/list", requireLogin, async (_req, res) => {
+  try {
+    const [owners, properties] = await Promise.all([fetchOwners(), fetchProperties()]);
+    const activePropertyIds = new Set(properties.filter((p) => p.IsActive === true).map((p) => String(p.Id)));
+    const addressesByPropertyId = propertyAddressById(properties);
+    const activeGroups = groupOwners(owners).filter((g) => g.active);
+    res.json(
+      activeGroups
+        .map((g) => ({
+          name: g.names.join(" / "),
+          active: g.active,
+          start: g.earliestStart,
+          end: g.latestEnd,
+          properties: g.propertyIds.filter((id) => activePropertyIds.has(id)).map((id) => addressesByPropertyId.get(id) ?? id),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    );
+  } catch (err) {
+    logError("GET /api/dashboard/owners/list failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load owners from Buildium." });
   }
 });

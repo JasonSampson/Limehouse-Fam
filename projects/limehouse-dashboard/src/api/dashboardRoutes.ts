@@ -61,6 +61,7 @@ import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnit
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
 import { getExcludedPropertyIds, withPendingCloseOutCategory } from "../kpi/terminatedProperties.js";
 import { groupOwners } from "../kpi/owners.js";
+import { pendingApplicantRows } from "../kpi/applicants.js";
 import {
   summarizeRentAndDeposit,
   summarizeYearlyCollectionRates,
@@ -893,6 +894,26 @@ dashboardRoutes.get("/api/dashboard/apps-submitted", requireLogin, async (_req, 
     res.json({ appsSubmitted: applicants.length });
   } catch (err) {
     logError("GET /api/dashboard/apps-submitted failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load applicant data from Buildium." });
+  }
+});
+
+// Apps Submitted drill-down — ADDED 2026-07-12. Same applicant population
+// as the tile above; property address and unit number are resolved here
+// the same way every other drill-down on this dashboard already does.
+dashboardRoutes.get("/api/dashboard/apps-submitted/list", requireLogin, async (_req, res) => {
+  try {
+    const [applicants, properties, units] = await Promise.all([fetchPendingApplicants(), fetchProperties(), fetchAllUnits()]);
+    const addressesByPropertyId = propertyAddressById(properties);
+    const unitNumberByUnitId = new Map(units.filter((u) => u.UnitNumber).map((u) => [String(u.Id), u.UnitNumber as string]));
+    const rows = pendingApplicantRows(applicants).map((r) => ({
+      ...r,
+      propertyAddress: addressesByPropertyId.get(r.propertyId) ?? r.propertyId,
+      unitNumber: r.unitId ? unitNumberByUnitId.get(r.unitId) ?? null : null,
+    }));
+    res.json(rows);
+  } catch (err) {
+    logError("GET /api/dashboard/apps-submitted/list failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load applicant data from Buildium." });
   }
 });

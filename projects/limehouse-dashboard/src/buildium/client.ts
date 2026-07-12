@@ -297,8 +297,18 @@ const buildiumApplicantApplicationSchema = z.object({
   ApplicationSubmittedDateTime: z.string().nullable(),
 });
 
+// `PropertyId`, `UnitId`, `FirstName`, `LastName` — ADDED 2026-07-12 for
+// the Apps Submitted drill-down: CONFIRMED LIVE present on the real
+// /applicants response, previously silently dropped the same way several
+// other fields on this account have been before their first real use.
+// UnitId is nullable — an applicant can apply to a property generally
+// before a specific unit is assigned.
 const buildiumApplicantSchema = z.object({
   Id: z.number(),
+  PropertyId: z.number(),
+  UnitId: z.number().nullable(),
+  FirstName: z.string().nullable(),
+  LastName: z.string().nullable(),
   Status: z.string(),
   Applications: z.array(buildiumApplicantApplicationSchema),
 });

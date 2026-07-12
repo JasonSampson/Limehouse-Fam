@@ -539,6 +539,15 @@ function formatMonthLabel(yyyyMm) {
   return d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+// Converts a "YYYY-MM-DD" string to "M/D/YYYY". Plain string splitting
+// (not `new Date(...).toLocaleDateString()`) so this can't shift the day
+// by a timezone offset — the input is already a calendar date, not a
+// moment in time.
+function formatMonthDayYear(yyyyMmDd) {
+  const [year, month, day] = yyyyMmDd.split("-");
+  return `${Number(month)}/${Number(day)}/${year}`;
+}
+
 // ---------------------------------------------------------------------
 // OCCUPANCY & DOORS
 // ---------------------------------------------------------------------
@@ -865,6 +874,7 @@ function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, apps
                 sub: "Awaiting a decision",
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
               })
             : couldNotLoadTile({ id: "apps-submitted", label: "Apps Submitted", sourceTags: ["BD"] })
         }
@@ -1414,6 +1424,23 @@ async function handleTileClick(tileId) {
         { label: "Properties", render: (r) => r.properties.join(", ") },
       ],
       emptyText: "No owners found.",
+    });
+    return;
+  }
+
+  if (tileId === "apps-submitted") {
+    await simpleDrillDown({
+      tileId,
+      title: "Apps Submitted",
+      url: "/api/dashboard/apps-submitted/list",
+      columns: [
+        { label: "Applicant", key: "applicantName" },
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Unit", render: (r) => r.unitNumber ?? "—" },
+        { label: "Status", key: "status" },
+        { label: "Submitted", render: (r) => (r.submittedDate ? formatMonthDayYear(r.submittedDate.slice(0, 10)) : "—") },
+      ],
+      emptyText: "No applications awaiting a decision right now.",
     });
     return;
   }

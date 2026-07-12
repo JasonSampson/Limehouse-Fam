@@ -911,6 +911,7 @@ function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, apps
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
+                alert: true,
               })
             : couldNotLoadTile({ id: "evictions-pending", label: "Evictions Pending", sourceTags: ["BD"] })
         }

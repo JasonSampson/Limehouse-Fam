@@ -113,6 +113,7 @@ function tileHtml(opts) {
     notConnected = false,
     notConnectedReason = "Not connected yet",
     sparkline = null, // { values: number[], color: string } — small inline trend line under the number
+    alert = false, // true = render the value in red (e.g. Evictions Pending)
   } = opts;
 
   const classes = ["tile"];
@@ -121,7 +122,7 @@ function tileHtml(opts) {
 
   const valueHtml = notConnected
     ? `<div class="tile-value not-connected">${notConnectedReason}</div>`
-    : `<div class="tile-value">${value}</div>`;
+    : `<div class="tile-value${alert ? " alert" : ""}">${value}</div>`;
 
   const subHtml = sub && !notConnected ? `<div class="tile-sub">${sub}</div>` : "";
   const yoyHtml =

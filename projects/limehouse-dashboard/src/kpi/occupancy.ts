@@ -131,30 +131,9 @@ function roundPercent(n: number): number {
   return Math.round(n * 10) / 10;
 }
 
-// Avg Tenancy (Leasing Pipeline section): average length, in months, of
-// every currently-Active lease, measured from LeaseFromDate to asOfDate —
-// NOT LeaseFromDate to LeaseToDate. A fixed-term lease's *contract* length
-// is not what "how long has this tenant actually been here" means, and
-// AtWill (month-to-month) leases have no LeaseToDate at all, so measuring
-// to the end date would silently drop every month-to-month tenant from the
-// average. Leases missing LeaseFromDate (data gap) are excluded from the
-// average rather than counted as 0 months, same "gap is visible, not
-// silently misclassified" rule summarizeLeaseMix already follows above.
-export function averageTenancyMonths(activeLeases: BuildiumLease[], asOfDate: Date): number | null {
-  const tenancyMonths = activeLeases
-    .filter((l) => l.LeaseFromDate !== null)
-    .map((l) => monthsBetween(new Date(l.LeaseFromDate as string), asOfDate));
-
-  if (tenancyMonths.length === 0) return null;
-
-  const avg = tenancyMonths.reduce((sum, m) => sum + m, 0) / tenancyMonths.length;
-  return Math.round(avg * 10) / 10;
-}
-
-function monthsBetween(from: Date, to: Date): number {
-  const days = (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24);
-  return Math.max(days / 30.44, 0); // 30.44 = average days/month across a year, avoids calendar-month edge cases
-}
+// Avg Tenancy moved to src/kpi/tenancy.ts 2026-07-12, per Jason directly —
+// rebuilt around every real Buildium tenant (past and current), not just
+// today's active leases. See that file for the full derivation.
 
 function daysBetweenDates(fromDateStr: string, toDateStr: string): number {
   return Math.round((new Date(toDateStr).getTime() - new Date(fromDateStr).getTime()) / (1000 * 60 * 60 * 24));

@@ -14,6 +14,7 @@ import {
   fetchPendingApplicants,
   fetchAllApplicants,
   fetchUnitListing,
+  fetchAllTenantsWithLeases,
 } from "../buildium/client.js";
 import { fetchMarketingProcesses } from "../leadsimple/client.js";
 import {
@@ -26,13 +27,13 @@ import {
   summarizeOccupancy,
   summarizeLeaseMix,
   upcomingRenewals,
-  averageTenancyMonths,
   earliestTrackableMonth,
   monthsSinceEarliestTrackable,
   summarizeMonthlyOccupancy,
   summarizeYearlyOccupancy,
   findSameMonthLastYearOccupancy,
 } from "../kpi/occupancy.js";
+import { buildTenantStayRows, averageTenantTenancyMonths } from "../kpi/tenancy.js";
 import { summarizePropertyHealthFromReporting } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
 import {
@@ -51,7 +52,6 @@ import {
   fixedTermLeaseRows,
   monthToMonthLeaseRows,
   evictionPendingLeaseRows,
-  tenancyRows,
   moveInLeaseRows,
   unitStatusRows,
   vacantUnitRows,
@@ -210,14 +210,14 @@ dashboardRoutes.get("/api/dashboard/lease-mix", requireLogin, async (_req, res) 
   }
 });
 
-// Avg Tenancy (Leasing Pipeline section) — STRUCTURAL, measured from each
-// active lease's LeaseFromDate to today. See src/kpi/occupancy.ts for why
-// this measures to LeaseFromDate rather than LeaseToDate (month-to-month
-// leases have no end date and would otherwise be silently excluded).
+// Avg Tenancy (Leasing Pipeline section) — STRUCTURAL, measured across
+// EVERY real tenant (past and current), not just today's active leases.
+// See src/kpi/tenancy.ts for the full derivation.
 dashboardRoutes.get("/api/dashboard/avg-tenancy", requireLogin, async (_req, res) => {
   try {
-    const activeLeases = await fetchActiveLeases();
-    const avgTenancyMonths = averageTenancyMonths(activeLeases, new Date());
+    const tenants = await fetchAllTenantsWithLeases();
+    const rows = buildTenantStayRows(tenants, new Date());
+    const avgTenancyMonths = averageTenantTenancyMonths(rows);
     res.json({ avgTenancyMonths });
   } catch (err) {
     logError("GET /api/dashboard/avg-tenancy failed", { error: String(err) });
@@ -1021,8 +1021,8 @@ dashboardRoutes.get("/api/dashboard/evictions-pending", requireLogin, async (_re
 // Avg Tenancy drill-down.
 dashboardRoutes.get("/api/dashboard/avg-tenancy/leases", requireLogin, async (_req, res) => {
   try {
-    const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
-    res.json(withPropertyAddress(tenancyRows(activeLeases, new Date()), propertyAddressById(properties)));
+    const [tenants, properties] = await Promise.all([fetchAllTenantsWithLeases(), fetchProperties()]);
+    res.json(withPropertyAddress(buildTenantStayRows(tenants, new Date()), propertyAddressById(properties)));
   } catch (err) {
     logError("GET /api/dashboard/avg-tenancy/leases failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load tenancy data from Buildium." });

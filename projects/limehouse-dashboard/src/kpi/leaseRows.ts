@@ -75,23 +75,9 @@ export function evictionPendingLeaseRows(activeLeases: BuildiumLease[]): LeaseRo
   return activeLeases.filter((l) => l.IsEvictionPending).map(baseRow);
 }
 
-// Avg Tenancy drill-down: active leases with tenancy length in months,
-// measured the same way averageTenancyMonths computes the summary (from
-// LeaseFromDate to asOfDate, not to LeaseToDate — see occupancy.ts for why).
-export interface TenancyRow extends LeaseRow {
-  tenancyMonths: number;
-}
-
-export function tenancyRows(activeLeases: BuildiumLease[], asOfDate: Date): TenancyRow[] {
-  return activeLeases
-    .filter((l) => l.LeaseFromDate !== null)
-    .map((l) => {
-      const days = (asOfDate.getTime() - new Date(l.LeaseFromDate as string).getTime()) / (1000 * 60 * 60 * 24);
-      const tenancyMonths = Math.round(Math.max(days / 30.44, 0) * 10) / 10;
-      return { ...baseRow(l), tenancyMonths };
-    })
-    .sort((a, b) => b.tenancyMonths - a.tenancyMonths);
-}
+// Avg Tenancy moved to src/kpi/tenancy.ts 2026-07-12, per Jason directly —
+// rebuilt around every real Buildium tenant (past and current), not just
+// today's active leases. See that file for the full derivation.
 
 // Move-Ins drill-down AND summary count: leases whose LeaseFromDate falls
 // within the selected period — this is a FLOW metric (respects the period

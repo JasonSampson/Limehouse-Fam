@@ -171,6 +171,18 @@ const buildiumLeaseSchema = z.object({
   MoveOutData: z
     .array(z.object({ TenantId: z.number(), MoveOutDate: z.string().nullable(), NoticeGivenDate: z.string().nullable() }))
     .default([]),
+  // Tenants — ADDED 2026-07-12 for the "every past and current tenant"
+  // Avg Tenancy rebuild, per Jason directly. CONFIRMED LIVE this is a real
+  // field on every lease (bulk /leases list AND /leases/tenants), present
+  // even when CurrentTenants is empty (which it always is once a lease
+  // goes Past — CurrentTenants only ever holds "who's there right now").
+  // Status is "Current" | "MovedOut" | "Future"; MoveInDate is a real
+  // per-tenant date, confirmed 0 nulls across 967 real tenant records on
+  // this account. This is the ONLY reliable way to find out who lived in a
+  // unit historically — CurrentTenants can't do it once they've moved out.
+  Tenants: z
+    .array(z.object({ Id: z.number(), Status: z.enum(["Current", "MovedOut", "Future"]), MoveInDate: z.string().nullable() }))
+    .default([]),
 });
 
 export type BuildiumLease = z.infer<typeof buildiumLeaseSchema>;
@@ -233,6 +245,31 @@ export async function fetchAllLeases(): Promise<BuildiumLease[]> {
   return leases.filter(
     (l) => l.LeaseStatus === "Past" || l.LeaseStatus === "Future" || (l.CurrentTenants && l.CurrentTenants.length > 0)
   );
+}
+
+// ADDED 2026-07-12 for the "every past and current tenant" Avg Tenancy
+// rebuild, per Jason directly. Buildium's real /leases/tenants endpoint —
+// CONFIRMED LIVE, one record per real tenant (931 on this account), each
+// with their name and a Leases[] array of every lease they've ever been
+// on. Deliberately NOT reusing fetchAllLeases() here: that function's
+// ghost-Active filter (excluding Active leases with empty CurrentTenants
+// and a stale LeaseToDate) is correct for occupancy-status purposes, but
+// would silently DROP real historical tenants — CONFIRMED LIVE those 37
+// "ghost" leases still carry a real, populated Tenants[] array. This
+// endpoint's own per-lease Tenants[].Status ("Current"/"MovedOut"/
+// "Future") is used instead of the lease-level LeaseStatus flag, which
+// sidesteps that whole ghost-record problem entirely.
+const buildiumTenantWithLeasesSchema = z.object({
+  Id: z.number(),
+  FirstName: z.string().nullable(),
+  LastName: z.string().nullable(),
+  Leases: z.array(buildiumLeaseSchema),
+});
+export type BuildiumTenantWithLeases = z.infer<typeof buildiumTenantWithLeasesSchema>;
+const buildiumTenantWithLeasesListSchema = z.array(buildiumTenantWithLeasesSchema);
+
+export async function fetchAllTenantsWithLeases(): Promise<BuildiumTenantWithLeases[]> {
+  return buildiumGetAllPages<BuildiumTenantWithLeases>("/leases/tenants", buildiumTenantWithLeasesListSchema);
 }
 
 // ============================================================================

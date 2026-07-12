@@ -57,6 +57,7 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
     PaymentDueDay: 1,
     CurrentTenants: null,
     MoveOutData: [],
+    Tenants: [],
     ...overrides,
   };
 }

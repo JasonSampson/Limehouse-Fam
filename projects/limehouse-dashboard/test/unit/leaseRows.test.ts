@@ -4,7 +4,6 @@ import {
   fixedTermLeaseRows,
   monthToMonthLeaseRows,
   evictionPendingLeaseRows,
-  tenancyRows,
   moveInLeaseRows,
   unitStatusRows,
   vacantUnitRows,
@@ -31,6 +30,7 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
     CurrentTenants: [{ Id: 1, FirstName: "Jane", LastName: "Doe", Email: null }],
     AccountDetails: { Rent: 1500, SecurityDeposit: 1500 },
     MoveOutData: [],
+    Tenants: [],
     ...overrides,
   };
 }
@@ -83,21 +83,8 @@ describe("evictionPendingLeaseRows", () => {
   });
 });
 
-describe("tenancyRows", () => {
-  it("computes tenancy in months from LeaseFromDate to asOfDate, sorted longest first", () => {
-    const asOf = new Date("2026-01-01T00:00:00Z");
-    const rows = tenancyRows(
-      [
-        lease({ Id: 1, LeaseFromDate: "2025-01-01" }), // ~12 months
-        lease({ Id: 2, LeaseFromDate: "2025-07-01" }), // ~6 months
-        lease({ Id: 3, LeaseFromDate: null }),
-      ],
-      asOf
-    );
-    expect(rows.map((r) => r.leaseId)).toEqual(["1", "2"]); // lease 3 excluded (no LeaseFromDate)
-    expect(rows[0].tenancyMonths).toBeGreaterThan(rows[1].tenancyMonths);
-  });
-});
+// tenancyRows moved to test/unit/tenancy.test.ts 2026-07-12, per Jason
+// directly — see src/kpi/tenancy.ts for the full derivation.
 
 describe("moveInLeaseRows", () => {
   it("returns leases whose LeaseFromDate falls within the given range", () => {

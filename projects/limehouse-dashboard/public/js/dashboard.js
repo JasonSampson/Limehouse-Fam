@@ -1626,13 +1626,16 @@ async function handleTileClick(tileId) {
       tileId,
       title: "Avg Tenancy",
       url: "/api/dashboard/avg-tenancy/leases",
+      note: "Every real tenant Buildium has on file, past and current — not just today's active leases. Each row runs from that tenant's real move-in date to their real move-out date, or to today if they're still living there (never to a current lease's contract end date, since an active tenant can terminate early). If the same tenant lived in the same unit more than once, those stays are combined into one row.",
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
-        { label: "Tenant", key: "tenantName" },
+        { label: "Tenant", render: (r) => r.tenantName ?? "—" },
+        { label: "Moved In", render: (r) => (r.movedIn ? formatMonthDayYear(r.movedIn) : "—") },
+        { label: "Moved Out", render: (r) => (r.movedOut ? formatMonthDayYear(r.movedOut) : "Current") },
         { label: "Tenancy (mo)", key: "tenancyMonths" },
       ],
-      emptyText: "No active leases found.",
+      emptyText: "No tenant history found.",
     });
     return;
   }

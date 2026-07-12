@@ -4,7 +4,6 @@ import {
   summarizeOccupancyFromUnits,
   summarizeLeaseMix,
   upcomingRenewals,
-  averageTenancyMonths,
   summarizeRenewalRate,
   mostRecentRentEffectiveDate,
   summarizeDelinquencyRate,
@@ -30,6 +29,7 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
     PaymentDueDay: 1,
     CurrentTenants: null,
     MoveOutData: [],
+    Tenants: [],
     ...overrides,
   };
 }
@@ -184,44 +184,9 @@ describe("upcomingRenewals", () => {
   });
 });
 
-// Avg Tenancy (Leasing Pipeline section): measured from LeaseFromDate to
-// asOfDate, NOT to LeaseToDate — a month-to-month (AtWill) lease has no
-// LeaseToDate at all, so measuring to the end date would silently drop
-// every month-to-month tenant from the average.
-describe("averageTenancyMonths", () => {
-  const asOf = new Date("2026-07-03T00:00:00Z");
-
-  it("averages months-since-move-in across active leases", () => {
-    const leases = [
-      lease({ LeaseFromDate: "2026-01-03" }), // 6 months
-      lease({ LeaseFromDate: "2025-07-03" }), // 12 months
-    ];
-    const result = averageTenancyMonths(leases, asOf);
-    expect(result).toBe(9);
-  });
-
-  it("includes month-to-month leases (no LeaseToDate) using LeaseFromDate", () => {
-    // 2026-01-03 to 2026-07-03 is exactly 6 calendar months, but
-    // averageTenancyMonths divides elapsed days by 30.44 (avg days/month)
-    // rather than doing calendar-month arithmetic, so this lands at 5.9,
-    // not a rounded 6 — an intentional approximation, not a bug.
-    const leases = [lease({ LeaseFromDate: "2026-01-03", LeaseToDate: null, LeaseType: "AtWill" })];
-    const result = averageTenancyMonths(leases, asOf);
-    expect(result).toBe(5.9);
-  });
-
-  it("excludes leases with no LeaseFromDate rather than counting them as 0 months", () => {
-    const leases = [lease({ LeaseFromDate: null }), lease({ LeaseFromDate: "2026-01-03" })];
-    const result = averageTenancyMonths(leases, asOf);
-    expect(result).toBe(5.9); // only the one lease with a real date counts
-  });
-
-  it("returns null (not 0 or NaN) when there is no usable lease data at all", () => {
-    const leases = [lease({ LeaseFromDate: null })];
-    expect(averageTenancyMonths(leases, asOf)).toBeNull();
-    expect(averageTenancyMonths([], asOf)).toBeNull();
-  });
-});
+// Avg Tenancy moved to test/unit/tenancy.test.ts 2026-07-12, per Jason
+// directly — rebuilt around every real tenant (past and current), not just
+// today's active leases. See src/kpi/tenancy.ts for the full derivation.
 
 // REBUILT 2026-07-05: Renewal Rate now means "% of leases that renewed
 // instead of moving out, over the trailing 12 months" (vendor: 70.8%,

@@ -100,7 +100,11 @@ export function tenancyRows(activeLeases: BuildiumLease[], asOfDate: Date): Tena
 // yet" even though it's fully computable from data already fetched
 // elsewhere on this dashboard (fetchLeasesByStatus) — no new endpoint
 // needed, just never wired up.
-export function moveInLeaseRows(activeLeases: BuildiumLease[], fromDate: string, toDate: string): LeaseRow[] {
+export interface MoveInLeaseRow extends LeaseRow {
+  moveInDate: string;
+}
+
+export function moveInLeaseRows(activeLeases: BuildiumLease[], fromDate: string, toDate: string): MoveInLeaseRow[] {
   const fromMs = new Date(fromDate).getTime();
   const toMs = new Date(toDate).getTime();
   return activeLeases
@@ -109,7 +113,7 @@ export function moveInLeaseRows(activeLeases: BuildiumLease[], fromDate: string,
       const ms = new Date(l.LeaseFromDate).getTime();
       return ms >= fromMs && ms <= toMs;
     })
-    .map(baseRow);
+    .map((l) => ({ ...baseRow(l), moveInDate: l.LeaseFromDate as string }));
 }
 
 // Total Units / Vacant — Not Rented drill-downs: every tracked unit with

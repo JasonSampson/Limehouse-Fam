@@ -112,6 +112,15 @@ describe("moveInLeaseRows", () => {
     );
     expect(rows.map((r) => r.leaseId)).toEqual(["1"]);
   });
+
+  it("includes the lease's real move-in date", () => {
+    const rows = moveInLeaseRows(
+      [lease({ Id: 1, LeaseFromDate: "2026-06-15" })],
+      "2026-06-01T00:00:00Z",
+      "2026-06-30T23:59:59Z"
+    );
+    expect(rows[0].moveInDate).toBe("2026-06-15");
+  });
 });
 
 describe("unitStatusRows / vacantUnitRows", () => {

@@ -1593,9 +1593,11 @@ async function handleTileClick(tileId) {
       tileId,
       title: "Move-Ins",
       url: `/api/dashboard/move-ins/leases?period=${period}`,
+      note: "Each row is a Buildium lease whose start date (move-in date) falls within the period selected in the dropdown at the top of the dashboard (This month, Last month, This quarter, Last quarter, This year, or Last year). The tenant name comes from that same lease's current tenants.",
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
+        { label: "Move-In Date", render: (r) => (r.moveInDate ? formatMonthDayYear(r.moveInDate.slice(0, 10)) : "—") },
         { label: "Tenant", key: "tenantName" },
       ],
       emptyText: "No move-ins in this period.",

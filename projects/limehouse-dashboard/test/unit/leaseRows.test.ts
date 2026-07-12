@@ -30,6 +30,7 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
     PaymentDueDay: 1,
     CurrentTenants: [{ Id: 1, FirstName: "Jane", LastName: "Doe", Email: null }],
     AccountDetails: { Rent: 1500, SecurityDeposit: 1500 },
+    MoveOutData: [],
     ...overrides,
   };
 }
@@ -42,6 +43,7 @@ function unit(overrides: Partial<BuildiumUnit>): BuildiumUnit {
     UnitSize: null,
     MarketRent: null,
     IsUnitOccupied: true,
+    IsUnitListed: false,
     ...overrides,
   };
 }

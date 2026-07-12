@@ -12,7 +12,10 @@ import {
   fetchOwners,
   fetchLeaseTransactions,
   fetchPendingApplicants,
+  fetchAllApplicants,
+  fetchUnitListing,
 } from "../buildium/client.js";
+import { fetchMarketingProcesses } from "../leadsimple/client.js";
 import {
   summarizeDelinquency,
   delinquentLeaseRows,
@@ -62,6 +65,7 @@ import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
 import { getExcludedPropertyIds, withPendingCloseOutCategory } from "../kpi/terminatedProperties.js";
 import { groupOwners } from "../kpi/owners.js";
 import { pendingApplicantRows } from "../kpi/applicants.js";
+import { buildVacancyCycles, countApplicationsInCycles, groupVacancyRowsByUnit } from "../kpi/vacancyApplications.js";
 import {
   summarizeRentAndDeposit,
   summarizeYearlyCollectionRates,
@@ -908,13 +912,87 @@ dashboardRoutes.get("/api/dashboard/apps-submitted/list", requireLogin, async (_
     const unitNumberByUnitId = new Map(units.filter((u) => u.UnitNumber).map((u) => [String(u.Id), u.UnitNumber as string]));
     const rows = pendingApplicantRows(applicants).map((r) => ({
       ...r,
-      propertyAddress: addressesByPropertyId.get(r.propertyId) ?? r.propertyId,
+      propertyAddress: r.propertyId ? addressesByPropertyId.get(r.propertyId) ?? r.propertyId : null,
       unitNumber: r.unitId ? unitNumberByUnitId.get(r.unitId) ?? null : null,
     }));
     res.json(rows);
   } catch (err) {
     logError("GET /api/dashboard/apps-submitted/list failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load applicant data from Buildium." });
+  }
+});
+
+// Apps Per Vacancy drill-down — ADDED 2026-07-12, per Jason directly. A
+// genuinely different, more detailed view than the Apps Per Move-In tile's
+// own headline ratio (currently-pending applications ÷ move-ins this
+// period, left unchanged) — see src/kpi/vacancyApplications.ts for the
+// full derivation. Scoped to real active, non-terminated properties only,
+// 5 years back. The per-unit /listing lookups are cheap here (only ~13
+// units are ever actually listed at once on this account), unlike
+// RentEngine's ~60-unit crawl elsewhere on this dashboard.
+dashboardRoutes.get("/api/dashboard/apps-per-move-in/list", requireLogin, async (_req, res) => {
+  try {
+    const [allApplicants, allUnits, allLeases, properties, excludedPropertyIds, marketingProcessesResult] = await Promise.all([
+      fetchAllApplicants(),
+      fetchAllUnits(),
+      fetchAllLeases(),
+      fetchProperties(),
+      getExcludedPropertyIds(),
+      fetchMarketingProcesses(),
+    ]);
+
+    const activePropertyIds = new Set(properties.filter((p) => p.IsActive === true).map((p) => String(p.Id)));
+    const eligibleUnits = allUnits.filter(
+      (u) => activePropertyIds.has(String(u.PropertyId)) && !excludedPropertyIds.has(String(u.PropertyId))
+    );
+
+    const listedUnits = eligibleUnits.filter((u) => u.IsUnitListed);
+    const listingEntries = await Promise.all(
+      listedUnits.map(async (u) => {
+        const listing = await fetchUnitListing(u.Id);
+        return listing?.ListingDate ? ([String(u.Id), listing.ListingDate] as const) : null;
+      })
+    );
+    const listingDateByUnitId = new Map(listingEntries.filter((e): e is [string, string] => e !== null));
+
+    // Marketing Process records are matched to a Buildium property by
+    // address (LeadSimple carries no Buildium property id) — same
+    // technique already used for the terminated-properties feature.
+    // Gracefully degrades to no extra cycles if LeadSimple isn't
+    // connected or the call fails; this data is a real enhancement, not
+    // a requirement for the rest of the report to work.
+    const propertyIdByAddress = new Map<string, string>();
+    for (const p of properties) {
+      if (p.Address.AddressLine1) propertyIdByAddress.set(p.Address.AddressLine1, String(p.Id));
+    }
+    const marketingProcessDatesByPropertyId = new Map<string, string[]>();
+    for (const proc of marketingProcessesResult.data ?? []) {
+      const address = proc.properties[0]?.address;
+      const propertyId = address ? propertyIdByAddress.get(address) : undefined;
+      if (!propertyId) continue;
+      const list = marketingProcessDatesByPropertyId.get(propertyId) ?? [];
+      list.push(proc.created_at.slice(0, 10));
+      marketingProcessDatesByPropertyId.set(propertyId, list);
+    }
+    for (const list of marketingProcessDatesByPropertyId.values()) list.sort();
+
+    const cycles = buildVacancyCycles(eligibleUnits, allLeases, listingDateByUnitId, marketingProcessDatesByPropertyId, new Date(), 5);
+    const rows = countApplicationsInCycles(cycles, allApplicants);
+
+    const addressesByPropertyId = propertyAddressById(properties);
+    const unitNumberByUnitId = new Map(allUnits.filter((u) => u.UnitNumber).map((u) => [String(u.Id), u.UnitNumber as string]));
+
+    const grouped = groupVacancyRowsByUnit(rows);
+    res.json(
+      grouped.map((g) => ({
+        propertyAddress: addressesByPropertyId.get(g.propertyId) ?? g.propertyId,
+        unitNumber: unitNumberByUnitId.get(g.unitId) ?? null,
+        vacancies: g.vacancies,
+      }))
+    );
+  } catch (err) {
+    logError("GET /api/dashboard/apps-per-move-in/list failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load vacancy/application data from Buildium." });
   }
 });
 

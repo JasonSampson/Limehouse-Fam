@@ -23,6 +23,7 @@ function unit(overrides: Partial<BuildiumUnit>): BuildiumUnit {
     UnitSize: 800,
     MarketRent: 1000,
     IsUnitOccupied: true,
+    IsUnitListed: false,
     ...overrides,
   };
 }

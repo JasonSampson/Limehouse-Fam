@@ -35,6 +35,15 @@ describe("pendingApplicantRows", () => {
     expect(rows[0].unitId).toBeNull();
   });
 
+  // CONFIRMED LIVE 2026-07-12: fetchAllApplicants (unfiltered by status)
+  // surfaced real old/orphaned applicant records with no property link at
+  // all -- fetchPendingApplicants' narrower New/Undecided population never
+  // happened to include one, so this went uncaught until the wider fetch.
+  it("uses null propertyId when the applicant has no property link at all", () => {
+    const rows = pendingApplicantRows([applicant({ PropertyId: null })]);
+    expect(rows[0].propertyId).toBeNull();
+  });
+
   it("picks the most recent submitted date across multiple applications, not the first in array order", () => {
     const rows = pendingApplicantRows([
       applicant({

@@ -159,6 +159,18 @@ const buildiumLeaseSchema = z.object({
   // occupancy.ts for the full derivation and why /leases/renewals wasn't
   // usable here).
   LastUpdatedDateTime: z.string().nullable().optional(),
+  // MoveOutData — ADDED 2026-07-12 for the Apps Per Vacancy drill-down.
+  // CONFIRMED LIVE real field, one entry per tenant on the lease, each
+  // with its own NoticeGivenDate — the date the outgoing tenant actually
+  // gave notice, which is real weeks before MoveOutDate/LeaseToDate. This
+  // matters because real applications for the NEXT tenant routinely start
+  // coming in the moment notice is given, not on the day the old lease
+  // technically ends (confirmed live: a real case, 1149 Birks Lane, had 7
+  // real applicants apply 4+ weeks before the lease's own end date, all
+  // of which the vacancy-cycle logic was silently missing before this).
+  MoveOutData: z
+    .array(z.object({ TenantId: z.number(), MoveOutDate: z.string().nullable(), NoticeGivenDate: z.string().nullable() }))
+    .default([]),
 });
 
 export type BuildiumLease = z.infer<typeof buildiumLeaseSchema>;
@@ -302,10 +314,14 @@ const buildiumApplicantApplicationSchema = z.object({
 // /applicants response, previously silently dropped the same way several
 // other fields on this account have been before their first real use.
 // UnitId is nullable — an applicant can apply to a property generally
-// before a specific unit is assigned.
+// before a specific unit is assigned. PropertyId is ALSO nullable —
+// CONFIRMED LIVE once fetchAllApplicants (no status filter, a much wider
+// population than fetchPendingApplicants' New/Undecided) surfaced 27 real
+// applicant records with no property link at all (old/orphaned records),
+// none of which happened to show up in the narrower pending-only set.
 const buildiumApplicantSchema = z.object({
   Id: z.number(),
-  PropertyId: z.number(),
+  PropertyId: z.number().nullable(),
   UnitId: z.number().nullable(),
   FirstName: z.string().nullable(),
   LastName: z.string().nullable(),
@@ -320,6 +336,49 @@ export async function fetchPendingApplicants(): Promise<BuildiumApplicant[]> {
     "/applicants?applicationstatuses=New,Undecided",
     z.array(buildiumApplicantSchema)
   );
+}
+
+// ADDED 2026-07-12 for the Apps Per Vacancy drill-down — every applicant
+// regardless of outcome (approved/denied/withdrawn all count as real
+// interest in a property), unlike fetchPendingApplicants' New/Undecided
+// filter above. Same endpoint, same schema, just no status filter.
+export async function fetchAllApplicants(): Promise<BuildiumApplicant[]> {
+  return buildiumGetAllPages<BuildiumApplicant>("/applicants", z.array(buildiumApplicantSchema));
+}
+
+const buildiumUnitListingSchema = z.object({
+  ListingDate: z.string().nullable(),
+  AvailableDate: z.string().nullable(),
+});
+
+export type BuildiumUnitListing = z.infer<typeof buildiumUnitListingSchema>;
+
+// ADDED 2026-07-12 for the Apps Per Vacancy drill-down. CONFIRMED LIVE:
+// GET /rentals/units/{id}/listing is a REAL endpoint (distinct 404 body —
+// "No listing found with the unit id" — not the generic "unrecognized
+// endpoint" error), but a listing record only exists while the unit is
+// actively listed (13 of 401 units on this account right now); it's
+// deleted, not archived, the moment the unit comes off the market. This
+// returns null on that specific 404 rather than throwing — a unit simply
+// not being listed right now is an expected, common state, not an error.
+export async function fetchUnitListing(unitId: number): Promise<BuildiumUnitListing | null> {
+  const env = loadEnv();
+  const res = await fetch(`${env.BUILDIUM_BASE_URL}/rentals/units/${unitId}/listing`, { headers: buildiumHeaders() });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text().catch(() => "<no body>");
+    throw new BuildiumApiError(`Buildium API error ${res.status} on /rentals/units/${unitId}/listing`, res.status, body);
+  }
+  const json = await res.json();
+  const parsed = buildiumUnitListingSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new BuildiumApiError(
+      `Buildium API response for /rentals/units/${unitId}/listing did not match expected shape: ${parsed.error.message}`,
+      res.status,
+      JSON.stringify(json)
+    );
+  }
+  return parsed.data;
 }
 
 // ============================================================================
@@ -369,6 +428,10 @@ export async function fetchProperties(): Promise<BuildiumProperty[]> {
 // authoritative occupancy signal — better than deriving occupancy from
 // active-lease counts, which the Dashboard's occupancy summary previously
 // had to do without this field.
+// IsUnitListed — ADDED 2026-07-12 for the Apps Per Vacancy drill-down:
+// CONFIRMED LIVE real field on /rentals/units, true for exactly the units
+// that have a live listing record at GET /rentals/units/{id}/listing (13
+// of 401 on this account as of this writing).
 const buildiumUnitSchema = z.object({
   Id: z.number(),
   PropertyId: z.number(),
@@ -376,6 +439,7 @@ const buildiumUnitSchema = z.object({
   UnitSize: z.number().nullable(),
   MarketRent: z.number().nullable(),
   IsUnitOccupied: z.boolean(),
+  IsUnitListed: z.boolean(),
 });
 
 export type BuildiumUnit = z.infer<typeof buildiumUnitSchema>;

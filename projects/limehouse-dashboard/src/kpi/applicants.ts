@@ -8,7 +8,7 @@ import type { BuildiumApplicant } from "../buildium/client.js";
 // first in array order.
 export interface ApplicantRow {
   applicantId: string;
-  propertyId: string;
+  propertyId: string | null;
   unitId: string | null;
   applicantName: string;
   status: string;
@@ -24,7 +24,7 @@ export function pendingApplicantRows(applicants: BuildiumApplicant[]): Applicant
       const submittedDate = dates.length > 0 ? dates.sort().reverse()[0] : null;
       return {
         applicantId: String(a.Id),
-        propertyId: String(a.PropertyId),
+        propertyId: a.PropertyId !== null ? String(a.PropertyId) : null,
         unitId: a.UnitId !== null ? String(a.UnitId) : null,
         applicantName: `${a.FirstName ?? ""} ${a.LastName ?? ""}`.trim(),
         status: a.Status,

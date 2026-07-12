@@ -29,6 +29,7 @@ function lease(overrides: Partial<BuildiumLease>): BuildiumLease {
     IsEvictionPending: false,
     PaymentDueDay: 1,
     CurrentTenants: null,
+    MoveOutData: [],
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ function unit(overrides: Partial<BuildiumUnit>): BuildiumUnit {
     UnitSize: 800,
     MarketRent: 1000,
     IsUnitOccupied: false,
+    IsUnitListed: false,
     ...overrides,
   };
 }

@@ -164,6 +164,18 @@ export async function fetchApplicationProcesses(): Promise<LeadSimpleResult<Lead
   return withConnectionGuard(() => fetchAllProcessesForType(APPLICATIONS_PROCESS_TYPE_ID));
 }
 
+// CONFIRMED LIVE 2026-07-12: real process type id for "04 Marketing
+// Process" — used for the Apps Per Vacancy drill-down to anchor a real
+// vacancy cycle that predates Buildium's own lease history for a unit
+// (see src/kpi/vacancyApplications.ts). This process type has existed
+// since 2022-06-16 — real records don't and can't reach back further than
+// that, since the workflow itself didn't exist before then.
+export const MARKETING_PROCESS_TYPE_ID = "b8241168-fd3c-46fe-ae44-4f242beab643";
+
+export async function fetchMarketingProcesses(): Promise<LeadSimpleResult<LeadSimpleProcess[]>> {
+  return withConnectionGuard(() => fetchAllProcessesForType(MARKETING_PROCESS_TYPE_ID));
+}
+
 export interface ApplicationProcessingTimeSummary {
   averageHours: number | null;
   closedCount: number;

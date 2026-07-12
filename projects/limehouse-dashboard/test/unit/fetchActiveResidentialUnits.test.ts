@@ -62,6 +62,7 @@ function unit(overrides: Partial<Record<string, unknown>>) {
     UnitSize: 800,
     MarketRent: 1000,
     IsUnitOccupied: true,
+    IsUnitListed: false,
     ...overrides,
   };
 }

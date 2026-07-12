@@ -894,12 +894,13 @@ function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, apps
           appsSubmitted && moveIns && moveIns.moveIns > 0
             ? tileHtml({
                 id: "apps-per-move-in",
-                label: "Apps Per Move-In",
+                label: "Apps Per Vacancy",
                 value: (appsSubmitted.appsSubmitted / moveIns.moveIns).toFixed(1),
                 sourceTags: ["BD"],
                 live: true,
+                clickable: true,
               })
-            : couldNotLoadTile({ id: "apps-per-move-in", label: "Apps Per Move-In", sourceTags: ["BD"] })
+            : couldNotLoadTile({ id: "apps-per-move-in", label: "Apps Per Vacancy", sourceTags: ["BD"] })
         }
         ${
           leaseMix
@@ -1442,6 +1443,57 @@ async function handleTileClick(tileId) {
       ],
       emptyText: "No applications awaiting a decision right now.",
     });
+    return;
+  }
+
+  // Apps Per Vacancy — ADDED 2026-07-12, per Jason directly. A genuinely
+  // different, more detailed view than the tile's own headline ratio
+  // above (currently-pending applications ÷ move-ins this period, left
+  // unchanged) — see src/kpi/vacancyApplications.ts for the full
+  // derivation. Every real vacancy cycle in the last 5 years, one row
+  // each, with how many applications came in during that specific window.
+  const APPS_PER_VACANCY_NOTE =
+    "Each row is one real vacancy — the gap between a tenant moving out and the next one moving in, going back 5 years, for every active property. The start date uses whichever real signal is earliest: the outgoing tenant's actual notice-given date (real applications for the next tenant routinely start coming in the moment notice is given, not on the day the old lease technically ends), Buildium's real listing date for a property currently vacant and listed, or the lease's own end date as the fallback. For a vacancy older than Buildium's own lease history for that unit, a real LeadSimple Marketing Process record can anchor an extra row on its own — this can't reach earlier than mid-2022, since that's when LeadSimple's marketing workflow itself started. \"Applications\" counts every application submitted during that window, regardless of outcome (approved, denied, or withdrawn all count as real interest) — this is a different, more detailed number than the ratio shown on the tile itself. Each property gets one row, with its Vacancy/Applications column pairs ordered newest to oldest, left to right.";
+
+  if (tileId === "apps-per-move-in") {
+    // Uses a custom fetch instead of simpleDrillDown because the number of
+    // "Vacancy"/"Applications" column pairs is data-dependent (as many
+    // pairs as the property with the most vacancy cycles needs) — decided
+    // per Jason directly, so each vacancy gets its own pair of real
+    // columns instead of one combined text column.
+    openLoadingModal("Apps Per Vacancy");
+    try {
+      const rows = await apiGet("/api/dashboard/apps-per-move-in/list");
+      const maxVacancies = rows.reduce((max, r) => Math.max(max, r.vacancies.length), 0);
+      const columns = [
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Unit", render: (r) => r.unitNumber ?? "—" },
+      ];
+      for (let i = 0; i < maxVacancies; i++) {
+        columns.push({
+          label: "Vacancy",
+          render: (r) => {
+            const v = r.vacancies[i];
+            if (!v) return "—";
+            const end = v.end ? formatMonthDayYear(v.end) : "Ongoing";
+            return `${formatMonthDayYear(v.start)}–${end}`;
+          },
+        });
+        columns.push({
+          label: "Applications",
+          render: (r) => r.vacancies[i]?.applicationCount ?? "—",
+        });
+      }
+      openDrillDownModal({
+        title: "Apps Per Vacancy",
+        note: APPS_PER_VACANCY_NOTE,
+        columns,
+        rows,
+        emptyText: "No vacancy cycles found in the last 5 years.",
+      });
+    } catch (err) {
+      openDrillDownModal({ title: "Apps Per Vacancy", columns: [], rows: [], emptyText: `Couldn't load: ${err.message}` });
+    }
     return;
   }
 

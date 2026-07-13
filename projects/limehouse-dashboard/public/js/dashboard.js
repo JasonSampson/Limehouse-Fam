@@ -1196,12 +1196,31 @@ function renderLeasingFunnelChart(leasingFunnel) {
   });
 }
 
+// Shades of the Limehouse brand green (same hue as --lime-green in
+// dashboard.css, derived from the logo) instead of the vendor's
+// green/blue/gray scheme — CHANGED 2026-07-13, per Jason directly: "use
+// our company colors ... with varying similar shades." Darkest shade goes
+// on the top (largest) source, lightening down the list, so rank still
+// reads visually — same effect the vendor's green-then-fading-grays
+// achieved, just built from one brand hue instead of borrowing several.
+// Scales to any row count (RentEngine returns however many sources
+// actually have activity — currently 8, up to 12 seen on the vendor site)
+// rather than a hardcoded palette running out.
+function limeGreenShade(index, total) {
+  const hue = 140;
+  const saturation = 45;
+  const minLightness = 20; // near --lime-green-dark
+  const maxLightness = 72; // pale mint, still readably green
+  const t = total > 1 ? index / (total - 1) : 0;
+  const lightness = minLightness + t * (maxLightness - minLightness);
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
 // New Prospects by Source — horizontal bars, one row per source. Handles
 // an ARBITRARY/variable list of sources (RentEngine returns however many
-// actually have activity for this account — currently 8, up to 12 seen on
-// the vendor site) rather than a hardcoded list. Sources come back
-// pre-sorted by count from summarizeProspectsBySource on the server; top
-// source in brand green, the rest alternating blue/gray per spec.
+// actually have activity for this account) rather than a hardcoded list.
+// Sources come back pre-sorted by count from summarizeProspectsBySource on
+// the server.
 function renderProspectsBySourceChart(prospectsBySource) {
   if (!prospectsBySource) {
     return notConnectedBox("Couldn't load", "Prospect source data didn't come back from RentEngine just now.");
@@ -1212,12 +1231,13 @@ function renderProspectsBySourceChart(prospectsBySource) {
   if (!prospectsBySource.sources || prospectsBySource.sources.length === 0) {
     return `<p class="loading-text">No prospects recorded in RentEngine for this period yet.</p>`;
   }
+  const total = prospectsBySource.sources.length;
   return horizontalBarListHtml({
     rows: prospectsBySource.sources.map((s, i) => ({
       label: s.source,
       value: s.count,
       displayValue: formatNumber(s.count),
-      color: i === 0 ? "#1e5631" : i % 2 === 0 ? "#8b93a1" : "#2f6fb0",
+      color: limeGreenShade(i, total),
     })),
   });
 }

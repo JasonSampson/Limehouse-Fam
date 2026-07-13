@@ -24,6 +24,11 @@ import type { BuildiumTenantWithLeases } from "../buildium/client.js";
 // are merged into one row using the earliest move-in and latest move-out
 // across the group, per Jason directly ("treat each unit they've lived in
 // as its own separate tenancy").
+//
+// A per-lease "Current" Tenants[] entry is only trusted if that lease's own
+// CurrentTenants also includes the tenant — see the GHOST-CURRENT GUARD
+// below for why: FIXED 2026-07-13, Jason spotted real tenants showing
+// "Current" years after they'd actually left.
 export interface TenantStayRow {
   tenantId: string;
   tenantName: string | null;
@@ -40,6 +45,11 @@ function monthsBetween(fromDateStr: string, to: Date): number {
   return Math.max(days / 30.44, 0); // 30.44 = average days/month across a year, avoids calendar-month edge cases
 }
 
+// AtWill (month-to-month) leases carry a far-future sentinel LeaseToDate
+// ("2060-01-01") rather than a real end date — same convention as the Apps
+// Per Vacancy rebuild (src/kpi/vacancyApplications.ts).
+const SENTINEL_YEAR_CUTOFF = "2050-01-01";
+
 interface TenantUnitGroup {
   tenantId: number;
   tenantName: string | null;
@@ -52,6 +62,7 @@ interface TenantUnitGroup {
 }
 
 export function buildTenantStayRows(tenants: BuildiumTenantWithLeases[], asOfDate: Date): TenantStayRow[] {
+  const todayStr = asOfDate.toISOString().slice(0, 10);
   const groups = new Map<string, TenantUnitGroup>();
 
   for (const tenant of tenants) {
@@ -59,6 +70,34 @@ export function buildTenantStayRows(tenants: BuildiumTenantWithLeases[], asOfDat
     for (const lease of tenant.Leases) {
       const tenantOnLease = lease.Tenants.find((t) => t.Id === tenant.Id);
       if (!tenantOnLease || tenantOnLease.MoveInDate === null) continue; // no real move-in signal — skip rather than guess
+
+      // GHOST-CURRENT GUARD — FIXED 2026-07-13, per Jason directly: he
+      // spotted real tenants (Neil Strom, Stine Strom, Michael MacQuarrie,
+      // Laramie Jamison) showing as "Current" years after they'd actually
+      // left. CONFIRMED LIVE the cause: Buildium's own CurrentTenants field
+      // (this dashboard's ground truth for "who's actually there right
+      // now" everywhere else — occupancy, delinquency, every other
+      // drill-down) does NOT include these tenants, even though
+      // Tenants[].Status still says "Current" — the same stale-Active-flag
+      // ghost-lease bug fetchActiveLeases() already works around (real
+      // case: lease 774300, LeaseStatus stuck "Active", LeaseToDate
+      // 2018-04-22, CurrentTenants empty, zero MoveOutData). Affects 52 of
+      // 403 "Current" tenant records account-wide, confirmed live — not
+      // just the 4 Jason happened to spot. A ghost "Current" record falls
+      // back to its own lease's real LeaseToDate as the best available end
+      // signal (CONFIRMED LIVE all 52 have one); with no usable LeaseToDate
+      // it would be skipped entirely rather than guessed, though that case
+      // doesn't currently occur.
+      let status = tenantOnLease.Status;
+      let ghostMoveOut: string | null = null;
+      if (status === "Current" && !(lease.CurrentTenants ?? []).some((ct) => ct.Id === tenant.Id)) {
+        if (lease.LeaseToDate !== null && lease.LeaseToDate < SENTINEL_YEAR_CUTOFF && lease.LeaseToDate <= todayStr) {
+          status = "MovedOut";
+          ghostMoveOut = lease.LeaseToDate;
+        } else {
+          continue; // no trustworthy "current" signal AND no usable fallback end date — skip rather than guess
+        }
+      }
 
       const key = `${tenant.Id}:${lease.UnitId}`;
       let group = groups.get(key);
@@ -76,10 +115,10 @@ export function buildTenantStayRows(tenants: BuildiumTenantWithLeases[], asOfDat
         groups.set(key, group);
       }
       group.moveIns.push(tenantOnLease.MoveInDate);
-      group.statuses.push(tenantOnLease.Status);
-      if (tenantOnLease.Status === "MovedOut") {
-        const moveOut = lease.MoveOutData.find((m) => m.TenantId === tenant.Id);
-        if (moveOut?.MoveOutDate) group.moveOuts.push(moveOut.MoveOutDate);
+      group.statuses.push(status);
+      if (status === "MovedOut") {
+        const moveOut = ghostMoveOut ?? lease.MoveOutData.find((m) => m.TenantId === tenant.Id)?.MoveOutDate;
+        if (moveOut) group.moveOuts.push(moveOut);
       }
     }
   }

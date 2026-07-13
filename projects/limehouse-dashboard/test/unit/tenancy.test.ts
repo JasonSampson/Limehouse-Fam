@@ -18,7 +18,11 @@ function leaseFor(
     LeaseToDate: null,
     IsEvictionPending: false,
     PaymentDueDay: 1,
-    CurrentTenants: null,
+    // Real CurrentTenants for a "Current" status by default, matching how
+    // a genuinely current tenant looks live -- a test wanting to simulate
+    // the ghost-Current bug (ghost lease claims Current but CurrentTenants
+    // doesn't include the tenant) overrides this to [] explicitly.
+    CurrentTenants: status === "Current" ? [{ Id: tenantId, FirstName: null, LastName: null, Email: null }] : null,
     MoveOutData: moveOut ? [{ TenantId: tenantId, MoveOutDate: moveOut, NoticeGivenDate: null }] : [],
     Tenants: [{ Id: tenantId, Status: status, MoveInDate: moveIn }],
     ...leaseOverrides,
@@ -139,6 +143,60 @@ describe("buildTenantStayRows", () => {
     const t2 = tenant({ Id: 10, Leases: [leaseFor(10, { status: "Current", moveIn: "2025-01-12" })] }); // 18 months
     const rows = buildTenantStayRows([t1, t2], asOf);
     expect(rows.map((r) => r.tenantId)).toEqual(["10", "9"]);
+  });
+
+  // GHOST-CURRENT GUARD — real bug Jason spotted live (Neil Strom, Stine
+  // Strom, Michael MacQuarrie, Laramie Jamison all showing "Current" years
+  // after they'd actually left). Root cause confirmed live: a lease stuck
+  // on LeaseStatus "Active" long after its own LeaseToDate passed still
+  // reports Tenants[].Status "Current", even though its CurrentTenants
+  // (this dashboard's ground truth everywhere else) is empty.
+  it("treats a ghost 'Current' record (CurrentTenants doesn't include the tenant) as ended on the lease's real LeaseToDate", () => {
+    const t = tenant({
+      Id: 11,
+      Leases: [
+        leaseFor(11, {
+          status: "Current",
+          moveIn: "2015-11-12",
+          LeaseToDate: "2018-04-22", // real end date, years in the past
+          CurrentTenants: [], // Buildium's real ground truth: NOT actually there
+        }),
+      ],
+    });
+    const rows = buildTenantStayRows([t], asOf);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].movedOut).toBe("2018-04-22"); // NOT null/"Current"
+  });
+
+  it("skips a ghost 'Current' record with no usable LeaseToDate to fall back on, rather than guessing", () => {
+    const t = tenant({
+      Id: 12,
+      Leases: [leaseFor(12, { status: "Current", moveIn: "2015-11-12", LeaseToDate: null, CurrentTenants: [] })],
+    });
+    const rows = buildTenantStayRows([t], asOf);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("does not flag a ghost when the lease's own LeaseToDate is still in the future", () => {
+    // a lease whose contract genuinely hasn't ended yet isn't a stale ghost
+    // just because CurrentTenants happens to be empty -- no usable real
+    // end signal here either way, so this is skipped, not guessed as ended.
+    const t = tenant({
+      Id: 13,
+      Leases: [leaseFor(13, { status: "Current", moveIn: "2026-01-12", LeaseToDate: "2026-12-31", CurrentTenants: [] })],
+    });
+    const rows = buildTenantStayRows([t], asOf);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("does not flag a real month-to-month Current tenant (sentinel LeaseToDate) as a ghost", () => {
+    const t = tenant({
+      Id: 14,
+      Leases: [leaseFor(14, { status: "Current", moveIn: "2020-01-12", LeaseToDate: "2060-01-01" })],
+    });
+    const rows = buildTenantStayRows([t], asOf);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].movedOut).toBeNull();
   });
 });
 

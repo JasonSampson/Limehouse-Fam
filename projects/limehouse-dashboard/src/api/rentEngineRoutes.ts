@@ -352,10 +352,15 @@ rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => 
 // (src/rentengine/leasingPerformanceCache.ts), just re-shaped as a record
 // list instead of an aggregate. Same shared cache as the summary tiles —
 // no extra RentEngine calls for this drill-down.
+//
+// address/status — ADDED 2026-07-13, per Jason directly, to match the
+// vendor's own drill-down (Address/Status/Health/Days columns; ours only
+// ever showed a bare unit_id). Joined in from fetchUnits() (already fetched
+// elsewhere on this dashboard) by unit id — no extra RentEngine calls.
 rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const shared = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
     if (!shared.connected) {
       res.json({ connected: false, units: [] });
       return;
@@ -365,13 +370,19 @@ rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, 
       res.status(502).json({ error: "Failed to load unit performance data from RentEngine.", detail: shared.error });
       return;
     }
+    const unitsById = new Map((unitsResult.data ?? []).map((u) => [u.id, u]));
     res.json({
       connected: true,
-      units: shared.rows.map((r) => ({
-        unitId: r.unit_id,
-        daysOnMarket: r.days_on_market,
-        propertyHealth: r.property_health,
-      })),
+      units: shared.rows.map((r) => {
+        const unit = unitsById.get(r.unit_id);
+        return {
+          unitId: r.unit_id,
+          address: unit?.address?.formatted_address ?? null,
+          status: unit?.status ?? null,
+          daysOnMarket: r.days_on_market,
+          propertyHealth: r.property_health,
+        };
+      }),
     });
   } catch (err) {
     logError("GET /api/rentengine/units/leasing-performance failed", { error: String(err) });

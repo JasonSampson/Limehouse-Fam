@@ -250,6 +250,15 @@ export async function fetchProspects(fromDate: string, toDate: string): Promise<
 // `prospect.status` field below already guards against — status is now a
 // plain string here for the same reason, so a 5th/6th/7th real value
 // RentEngine adds later doesn't take the whole fetch down again.
+// address — ADDED 2026-07-13 for the Avg/Median Days on Market drill-down,
+// per Jason directly. CONFIRMED LIVE real field on every unit (e.g. real
+// case, unit 41121: {formatted_address: "9117 Chesapeake Blvd #5", ...}) —
+// was already being fetched and silently dropped since it wasn't in this
+// schema. This is the ONLY real address source for RentEngine's own
+// per-unit leasing-performance rows (unit_id there has no matching Buildium
+// UnitId — confirmed live, RentEngine uses its own separate ID space, e.g.
+// 41121 vs Buildium's 803831-range IDs — so there is no Buildium-side join
+// available; this field is the only way to show a real address here).
 const unitSchema = z.object({
   id: z.number(),
   status: z.string(),
@@ -257,6 +266,11 @@ const unitSchema = z.object({
   earliest_showing_date: z.string().nullable(),
   earliest_move_in_date: z.string().nullable(),
   updated_at: z.string(),
+  address: z
+    .object({
+      formatted_address: z.string().nullable(),
+    })
+    .nullable(),
 });
 export type RentEngineUnit = z.infer<typeof unitSchema>;
 

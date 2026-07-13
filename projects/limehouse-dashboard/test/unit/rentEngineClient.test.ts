@@ -34,6 +34,7 @@ function unit(overrides: Partial<RentEngineUnit>): RentEngineUnit {
     earliest_showing_date: null,
     earliest_move_in_date: null,
     updated_at: "2026-07-01T00:00:00Z",
+    address: null,
     ...overrides,
   };
 }

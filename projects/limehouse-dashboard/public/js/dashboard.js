@@ -1719,16 +1719,23 @@ async function handleTileClick(tileId) {
     return;
   }
 
+  // Address/Status columns ADDED 2026-07-13, per Jason directly, to match
+  // the vendor's own drill-down (Address/Status/Health/Days) — previously
+  // this only showed a bare RentEngine unit_id, since RentEngine's
+  // leasing-performance rows carry no address of their own. See
+  // src/api/rentEngineRoutes.ts for where address/status get joined in.
   if (tileId === "avg-dom" || tileId === "median-dom" || tileId === "units-on-market") {
     await simpleDrillDown({
       tileId,
-      title: "Units — Days on Market / Health",
+      title: "Days on Market",
       url: `/api/rentengine/units/leasing-performance?period=${period}`,
       rowsKey: "units",
+      note: "True days_on_market from RentEngine's per-unit leasing-performance report — resets to 0 whenever a unit is re-listed, so this isn't a running total of every day a unit has ever sat vacant. RentEngine itself only has data going back to 2/11/2026 (when Limehouse's account started there), so it can't reflect anything before that.",
       columns: [
-        { label: "Unit ID", key: "unitId" },
-        { label: "Days on Market", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
-        { label: "Property Health", key: "propertyHealth" },
+        { label: "Address", render: (r) => r.address ?? `Unit ${r.unitId}` },
+        { label: "Status", render: (r) => r.status ?? "—" },
+        { label: "Health", render: (r) => r.propertyHealth ?? "—" },
+        { label: "Days", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
       ],
       emptyText: "No unit data available.",
     });

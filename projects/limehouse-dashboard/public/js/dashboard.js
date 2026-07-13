@@ -1106,7 +1106,7 @@ function renderDaysOnMarketTile(daysOnMarket, field, id, label) {
     id,
     label,
     value: formatNumber(value),
-    sub: `${daysOnMarket.unitsWithData} of ${daysOnMarket.unitsTotal} tracked units`,
+    sub: `${daysOnMarket.unitsWithData} of ${daysOnMarket.unitsTotal} on market`,
     sourceTags: ["RE"],
     live: true,
     clickable: true,

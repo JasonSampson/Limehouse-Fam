@@ -602,6 +602,15 @@ main {
 
 .hbar-row-change.up { color: var(--lime-green); }
 .hbar-row-change.down { color: var(--lime-red); }
+.hbar-row-change.neutral { color: var(--text-muted); }
+
+.hbar-row.clickable {
+  cursor: pointer;
+}
+
+.hbar-row.clickable:hover .hbar-row-label {
+  color: var(--brand);
+}
 
 .hbar-track {
   background: #eef0f3;

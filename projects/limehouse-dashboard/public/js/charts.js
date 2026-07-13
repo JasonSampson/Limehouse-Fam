@@ -451,7 +451,13 @@ function renderRingGauge({ canvasId, percent, color }) {
 // to that row's value relative to the largest value in the list.
 // ---------------------------------------------------------------------
 function horizontalBarListHtml({ rows, className = "" }) {
-  // rows: [{ label, value, displayValue, color, change }]
+  // rows: [{ label, value, displayValue, color, change, tileId }]
+  // tileId is optional — ADDED 2026-07-13 for the Leasing Funnel chart's
+  // per-stage drill-downs. When present, the row gets the same
+  // data-tile-id attribute a regular tile uses, so the existing
+  // wireTileClicks()/handleTileClick() dispatch picks it up with no
+  // separate click-wiring path. Rows without a tileId (Delinquency Aging,
+  // New Prospects by Source) are unaffected.
   const maxValue = Math.max(...rows.map((r) => r.value), 1);
   return `
     <div class="hbar-list">
@@ -461,8 +467,10 @@ function horizontalBarListHtml({ rows, className = "" }) {
           const changeHtml = r.change
             ? `<span class="hbar-row-change ${r.change.direction}">${r.change.text}</span>`
             : "";
+          const tileAttr = r.tileId ? ` data-tile-id="${r.tileId}"` : "";
+          const clickableClass = r.tileId ? " clickable" : "";
           return `
-          <div class="hbar-row ${className}">
+          <div class="hbar-row ${className}${clickableClass}"${tileAttr}>
             <div class="hbar-row-top">
               <span class="hbar-row-label">${r.label}</span>
               <span><span class="hbar-row-value">${r.displayValue}</span>${changeHtml}</span>

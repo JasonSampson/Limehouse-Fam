@@ -41,8 +41,8 @@ describe("syncCallActivityForPeriod", () => {
     mockedFetchProspects.mockResolvedValue({
       connected: true,
       data: [
-        { id: 1, status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-01T00:00:00Z" },
-        { id: 2, status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-02T00:00:00Z" },
+        { id: 1, name: "Test Prospect", status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-01T00:00:00Z" },
+        { id: 2, name: "Test Prospect", status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-02T00:00:00Z" },
       ],
       error: null,
     });
@@ -70,8 +70,8 @@ describe("syncCallActivityForPeriod", () => {
     mockedFetchProspects.mockResolvedValue({
       connected: true,
       data: [
-        { id: 1, status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-01T00:00:00Z" },
-        { id: 2, status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-02T00:00:00Z" },
+        { id: 1, name: "Test Prospect", status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-01T00:00:00Z" },
+        { id: 2, name: "Test Prospect", status: "New", source: "Zillow", unit_of_interest: null, created_at: "2026-07-02T00:00:00Z" },
       ],
       error: null,
     });

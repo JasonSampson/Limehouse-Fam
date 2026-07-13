@@ -5,6 +5,7 @@ import {
   fetchUnits,
   summarizeProspectsBySource,
   summarizeLeasingFunnel,
+  leasingFunnelStageRows,
   summarizeUnitsOnMarket,
   isUnitOnMarket,
   summarizeDaysOnMarket,
@@ -110,6 +111,40 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel", requireLogin, async (req,
     requestedFrom: from,
     requestedTo: to,
     funnel: summarizeLeasingFunnel(result.data),
+  });
+});
+
+const leasingFunnelStageSchema = z.enum(["prospects", "showingsScheduled", "showingsCompleted", "applications", "moveIns"]);
+
+// Leasing Funnel drill-down — ADDED 2026-07-13, per Jason directly, to
+// match the vendor's own chart (clicking a stage bar opens the real
+// prospects behind that count). One route for all 5 stages, reusing the
+// same fetchProspects call the summary above already makes — no extra
+// RentEngine calls. "prospects" (no filter) is included here too, even
+// though it duplicates what /api/rentengine/prospects above already
+// returns, so all 5 Leasing Funnel bars go through one consistent
+// implementation instead of the first bar being a special case.
+rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  const stageParsed = leasingFunnelStageSchema.safeParse(req.query.stage);
+  if (!stageParsed.success) {
+    res.status(400).json({ error: "Invalid or missing stage query param." });
+    return;
+  }
+  const result = await fetchProspects(from, to);
+  if (!result.connected) {
+    res.json({ connected: false, prospects: [] });
+    return;
+  }
+  if (result.error || !result.data) {
+    logError("GET /api/rentengine/leasing-funnel/stage failed", { error: result.error });
+    res.status(502).json({ error: "Failed to load prospect data from RentEngine.", detail: result.error });
+    return;
+  }
+  const rows = leasingFunnelStageRows(result.data, stageParsed.data);
+  res.json({
+    connected: true,
+    prospects: rows.map((p) => ({ name: p.name, source: p.source, status: p.status, createdAt: p.created_at })),
   });
 });
 
@@ -355,7 +390,15 @@ rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res)
   }
   res.json({
     connected: true,
-    prospects: result.data.map((p) => ({ id: p.id, source: p.source, status: p.status, createdAt: p.created_at })),
+    // name — ADDED 2026-07-13, matching the vendor's own drill-down Name
+    // column (see leasing-funnel/stage below, added the same day).
+    prospects: result.data.map((p) => ({
+      id: p.id,
+      name: p.name,
+      source: p.source,
+      status: p.status,
+      createdAt: p.created_at,
+    })),
   });
 });
 

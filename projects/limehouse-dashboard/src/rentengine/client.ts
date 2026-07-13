@@ -223,6 +223,15 @@ export function dedupeById<T extends { id: number }>(rows: T[]): T[] {
 // API adding more fields later).
 const prospectSchema = z.object({
   id: z.number(),
+  // name — ADDED 2026-07-13 for the Leasing Funnel drill-downs, per Jason
+  // directly, to match the vendor's Name column. CORRECTED same day:
+  // first pass assumed this was always a non-null string (having seen
+  // "Unknown" rendered on the vendor's site) — CONFIRMED LIVE that's the
+  // vendor's own frontend fallback text, not the real API value; RentEngine
+  // genuinely returns null for some prospects with no name on file, and a
+  // non-nullable schema here was silently crashing the whole /prospects
+  // fetch (same failure mode status was already guarded against above).
+  name: z.string().nullable(),
   status: z.string(), // 16 confirmed real enum values — see file header. Kept as string, not z.enum, so an unexpected 17th value doesn't crash parsing; summarizeLeasingFunnel below silently excludes anything unrecognized from every stage bucket rather than crashing.
   source: z.string(), // messier than any fixed list — see normalizeProspectSource
   unit_of_interest: z.number().nullable(),
@@ -457,6 +466,31 @@ export function summarizeLeasingFunnel(prospects: RentEngineProspect[]): Leasing
   }
 
   return { prospects: prospects.length, showingsScheduled, showingsCompleted, applications, moveIns };
+}
+
+// Per-stage record list behind each Leasing Funnel bar — ADDED 2026-07-13,
+// per Jason directly, to match the vendor's own drill-down (clicking a
+// stage opens the real prospects behind that count). Reuses the exact
+// same status sets summarizeLeasingFunnel above buckets on, and the same
+// already-fetched prospect rows — no extra RentEngine calls. A prospect
+// that reached a later stage still shows up in every earlier stage's list
+// too (see the funnel-membership comment above), matching how the summary
+// counts already work.
+export type LeasingFunnelStage = "prospects" | "showingsScheduled" | "showingsCompleted" | "applications" | "moveIns";
+
+export function leasingFunnelStageRows(prospects: RentEngineProspect[], stage: LeasingFunnelStage): RentEngineProspect[] {
+  switch (stage) {
+    case "prospects":
+      return prospects;
+    case "showingsScheduled":
+      return prospects.filter((p) => SHOWING_SCHEDULED_STATUSES.has(p.status));
+    case "showingsCompleted":
+      return prospects.filter((p) => SHOWING_COMPLETED_STATUSES.has(p.status));
+    case "applications":
+      return prospects.filter((p) => APPLICATION_STATUSES.has(p.status));
+    case "moveIns":
+      return prospects.filter((p) => MOVE_IN_STATUSES.has(p.status));
+  }
 }
 
 // ============================================================================

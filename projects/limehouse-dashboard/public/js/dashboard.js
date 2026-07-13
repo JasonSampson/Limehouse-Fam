@@ -1169,10 +1169,22 @@ function leasingFunnelRangeSuffix(leasingFunnel) {
 
 // Leasing Funnel — list of stages, each with a horizontal bar whose WIDTH
 // is proportional to that stage's count relative to the top stage
-// (Prospects). No period-over-period % change is shown — the real
-// endpoint doesn't return a comparison figure, and RentEngine's account
-// history (starts 2026-02-11) is too short to safely derive one without
-// risking a misleading comparison against a partial prior period.
+// (Prospects). CHANGED 2026-07-13, per Jason directly:
+//   - Each stage after the first now shows its count as a % of the
+//     PREVIOUS stage (not a period-over-period comparison, which the old
+//     comment here wrongly assumed this was) — matches the vendor's own
+//     chart exactly (e.g. Showings scheduled as a % of Prospects). All 5
+//     numbers are already on hand, so this is just arithmetic, no new
+//     data. Shown in muted "neutral" styling, not green/red up/down,
+//     since a stage being e.g. 154% of the one before it isn't a
+//     good/bad signal — it just means some prospects reach a later stage
+//     without every step being logged in between.
+//   - Colored with shades of the Limehouse brand green (limeGreenShade),
+//     same treatment as New Prospects by Source, instead of one flat
+//     blue.
+//   - Each bar is now clickable (see handleTileClick below), matching the
+//     vendor's own chart, which opens the real prospect list behind each
+//     stage's count.
 function renderLeasingFunnelChart(leasingFunnel) {
   if (!leasingFunnel) {
     return notConnectedBox("Couldn't load", "The leasing funnel numbers didn't come back from RentEngine just now.");
@@ -1182,17 +1194,31 @@ function renderLeasingFunnelChart(leasingFunnel) {
   }
   const funnel = leasingFunnel.funnel;
   const stages = [
-    { label: "Prospects", value: funnel.prospects },
-    { label: "Showings scheduled", value: funnel.showingsScheduled },
-    { label: "Showings completed", value: funnel.showingsCompleted },
-    { label: "Applications", value: funnel.applications },
-    { label: "Move-ins", value: funnel.moveIns },
+    { label: "Prospects", value: funnel.prospects, tileId: "leasing-funnel-prospects" },
+    { label: "Showings scheduled", value: funnel.showingsScheduled, tileId: "leasing-funnel-showings-scheduled" },
+    { label: "Showings completed", value: funnel.showingsCompleted, tileId: "leasing-funnel-showings-completed" },
+    { label: "Applications", value: funnel.applications, tileId: "leasing-funnel-applications" },
+    { label: "Move-ins", value: funnel.moveIns, tileId: "leasing-funnel-move-ins" },
   ];
   if (stages.every((s) => s.value === 0)) {
     return `<p class="loading-text">No leasing activity in RentEngine for this period yet.</p>`;
   }
+  const total = stages.length;
   return horizontalBarListHtml({
-    rows: stages.map((s) => ({ label: s.label, value: s.value, displayValue: formatNumber(s.value), color: "#2f6fb0" })),
+    rows: stages.map((s, i) => {
+      const previous = i > 0 ? stages[i - 1].value : null;
+      const change = previous
+        ? { direction: "neutral", text: `${Math.round((s.value / previous) * 100)}% ↓` }
+        : null;
+      return {
+        label: s.label,
+        value: s.value,
+        displayValue: formatNumber(s.value),
+        color: limeGreenShade(i, total),
+        change,
+        tileId: s.tileId,
+      };
+    }),
   });
 }
 
@@ -1702,12 +1728,45 @@ async function handleTileClick(tileId) {
       title: "New Prospects",
       url: `/api/rentengine/prospects?period=${period}`,
       rowsKey: "prospects",
+      // Name column ADDED 2026-07-13, matching the vendor's own Prospects
+      // drill-down, once RentEngine's real name field got added to our
+      // prospect schema for the Leasing Funnel drill-downs below.
       columns: [
+        { label: "Name", render: (r) => r.name ?? "—" },
         { label: "Source", key: "source" },
         { label: "Status", key: "status" },
         { label: "Created", key: "createdAt" },
       ],
       emptyText: "No new prospects in this period.",
+    });
+    return;
+  }
+
+  // Leasing Funnel drill-downs — ADDED 2026-07-13, per Jason directly, to
+  // match the vendor's own chart (clicking a stage bar opens the real
+  // prospects behind that count). One route/handler for all 5 stages —
+  // see leasingFunnelStageRows in src/rentengine/client.ts.
+  const LEASING_FUNNEL_STAGES = {
+    "leasing-funnel-prospects": { stage: "prospects", title: "Prospects" },
+    "leasing-funnel-showings-scheduled": { stage: "showingsScheduled", title: "Showings Scheduled" },
+    "leasing-funnel-showings-completed": { stage: "showingsCompleted", title: "Showings Completed" },
+    "leasing-funnel-applications": { stage: "applications", title: "Applications" },
+    "leasing-funnel-move-ins": { stage: "moveIns", title: "Move-ins" },
+  };
+  if (LEASING_FUNNEL_STAGES[tileId]) {
+    const { stage, title } = LEASING_FUNNEL_STAGES[tileId];
+    await simpleDrillDown({
+      tileId,
+      title: `Leasing Funnel — ${title}`,
+      url: `/api/rentengine/leasing-funnel/stage?period=${period}&stage=${stage}`,
+      rowsKey: "prospects",
+      note: "A prospect counts toward every stage they've reached, not just their current status — someone who already applied also counts toward Showings Scheduled and Showings Completed, even if those individual steps aren't separately logged.",
+      columns: [
+        { label: "Name", render: (r) => r.name ?? "—" },
+        { label: "Source", key: "source" },
+        { label: "Created", key: "createdAt" },
+      ],
+      emptyText: "No prospects reached this stage in this period.",
     });
     return;
   }

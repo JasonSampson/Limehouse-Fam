@@ -3,6 +3,7 @@ import {
   normalizeProspectSource,
   summarizeProspectsBySource,
   summarizeLeasingFunnel,
+  leasingFunnelStageRows,
   summarizeUnitsOnMarket,
   summarizeDaysOnMarket,
   summarizePropertyHealthFromReporting,
@@ -18,6 +19,7 @@ import {
 function prospect(overrides: Partial<RentEngineProspect>): RentEngineProspect {
   return {
     id: 1,
+    name: "Test Prospect",
     status: "New",
     source: "Zillow",
     unit_of_interest: null,
@@ -174,6 +176,41 @@ describe("summarizeLeasingFunnel", () => {
       applications: 0,
       moveIns: 0,
     });
+  });
+});
+
+// Per-stage record lists behind the Leasing Funnel drill-downs — must stay
+// in lockstep with summarizeLeasingFunnel's own counts above, since both
+// are built from the same status sets.
+describe("leasingFunnelStageRows", () => {
+  const prospects = [
+    prospect({ id: 1, status: "New" }),
+    prospect({ id: 2, status: "Contacted" }),
+    prospect({ id: 3, status: "Showing Desired" }),
+    prospect({ id: 4, status: "Application Received" }),
+    prospect({ id: 5, status: "Moved In" }),
+  ];
+
+  it("returns every prospect for the prospects stage, unfiltered", () => {
+    expect(leasingFunnelStageRows(prospects, "prospects")).toHaveLength(5);
+  });
+
+  it("matches summarizeLeasingFunnel's counts for every other stage", () => {
+    const summary = summarizeLeasingFunnel(prospects);
+    expect(leasingFunnelStageRows(prospects, "showingsScheduled")).toHaveLength(summary.showingsScheduled);
+    expect(leasingFunnelStageRows(prospects, "showingsCompleted")).toHaveLength(summary.showingsCompleted);
+    expect(leasingFunnelStageRows(prospects, "applications")).toHaveLength(summary.applications);
+    expect(leasingFunnelStageRows(prospects, "moveIns")).toHaveLength(summary.moveIns);
+  });
+
+  it("includes a prospect who reached a later stage in every earlier stage's list too", () => {
+    const movedIn = prospects.find((p) => p.status === "Moved In")!;
+    expect(leasingFunnelStageRows(prospects, "showingsScheduled")).toContain(movedIn);
+    expect(leasingFunnelStageRows(prospects, "applications")).toContain(movedIn);
+  });
+
+  it("returns an empty list for a stage nothing has reached", () => {
+    expect(leasingFunnelStageRows([prospect({ status: "New" })], "moveIns")).toEqual([]);
   });
 });
 

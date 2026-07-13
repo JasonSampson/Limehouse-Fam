@@ -9,6 +9,8 @@ import {
   isUnitOnMarket,
   summarizeDaysOnMarket,
   summarizeMarketingActivityFromReporting,
+  summarizeShowingCompletionRate,
+  showingCompletionRateExplainRows,
   fetchMarketingSourcesReport,
   fetchShowingsReport,
   fetchCallsReport,
@@ -123,12 +125,9 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel", requireLogin, async (req,
 // portfolio-wide. See src/rentengine/client.ts summarizeUnitsOnMarket for
 // the Available+occupied judgment call this number depends on.
 //
-// FIXED 2026-07-05: "Completion Rate" used to be flagged unavailable here
-// ("no confirmed real definition"). It turns out the reporting API's
-// showings_scheduled/showings_completed fields (already summed for the
-// marketing-activity route below) ARE the vendor's real Completion Rate —
-// confirmed live, matches vendor site ballpark. That field now lives on
-// GET /api/rentengine/marketing-activity (completionRate), not here.
+// Completion Rate now lives on its own route, GET
+// /api/rentengine/completion-rate — see that route's comment below for why
+// it was split out of marketing-activity.
 rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_req, res) => {
   const result = await fetchUnits();
 
@@ -180,7 +179,6 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
         newProspects: null,
         showingsScheduled: null,
         showingsCompleted: null,
-        completionRate: null,
         totalCalls: null,
         outboundTexts: null,
       });
@@ -197,7 +195,6 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
       newProspects: summary.newProspects,
       showingsScheduled: summary.showingsScheduled,
       showingsCompleted: summary.showingsCompleted,
-      completionRate: summary.completionRate,
       totalCalls: summary.totalCalls,
       outboundTexts: summary.outboundTexts,
       callActivitySynced: true,
@@ -244,6 +241,95 @@ rentEngineRoutes.get("/api/rentengine/days-on-market", requireLogin, async (req,
   } catch (err) {
     logError("GET /api/rentengine/days-on-market failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load days-on-market data from RentEngine." });
+  }
+});
+
+// Completion Rate — SPLIT OFF marketing-activity 2026-07-13, per Jason
+// directly. The blanket version (showings summed across every tracked
+// unit, Leased/On Hold/Incomplete included) doesn't match the vendor's
+// real Completion Rate tile — CONFIRMED against the vendor's own
+// drill-down that they scope to units actually available for showing
+// (status not Leased/On Hold/Incomplete). Reuses
+// summarizeShowingCompletionRate, which already computes exactly this and
+// was already vendor-confirmed for the Team Performance "Portfolio
+// Assistant KPI" build a day earlier — never wired back to this Dashboard
+// tile until now. Same shared cache as the other RentEngine tiles.
+rentEngineRoutes.get("/api/rentengine/completion-rate", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  try {
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    if (!shared.connected || !unitsResult.connected) {
+      res.json({ connected: false, showingsScheduled: null, showingsCompleted: null, ratePercent: null });
+      return;
+    }
+    if (shared.error || !shared.rows) {
+      logError("GET /api/rentengine/completion-rate failed", { error: shared.error });
+      res.status(502).json({ error: "Failed to load leasing-performance data from RentEngine.", detail: shared.error });
+      return;
+    }
+    if (unitsResult.error || !unitsResult.data) {
+      logError("GET /api/rentengine/completion-rate failed", { error: unitsResult.error });
+      res.status(502).json({ error: "Failed to load unit data from RentEngine.", detail: unitsResult.error });
+      return;
+    }
+    const summary = summarizeShowingCompletionRate(shared.rows, unitsResult.data);
+    res.json({
+      connected: true,
+      showingsScheduled: summary.showingsScheduled,
+      showingsCompleted: summary.showingsCompleted,
+      ratePercent: summary.ratePercent,
+      cached: shared.cached,
+      cachedAt: shared.cachedAt,
+      stale: shared.stale,
+    });
+  } catch (err) {
+    logError("GET /api/rentengine/completion-rate failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load completion rate data from RentEngine." });
+  }
+});
+
+// Completion Rate drill-down — same on-market-for-showing scoping as the
+// summary above, via showingCompletionRateExplainRows, joined with
+// address/status from fetchUnits() (same join pattern as the Units on
+// Market / Days on Market drill-downs). Matches the vendor's exact
+// columns: Address, Status, Scheduled, Completed, Rate.
+rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  try {
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    if (!shared.connected || !unitsResult.connected) {
+      res.json({ connected: false, units: [] });
+      return;
+    }
+    if (shared.error || !shared.rows) {
+      logError("GET /api/rentengine/completion-rate/units failed", { error: shared.error });
+      res.status(502).json({ error: "Failed to load leasing-performance data from RentEngine.", detail: shared.error });
+      return;
+    }
+    if (unitsResult.error || !unitsResult.data) {
+      logError("GET /api/rentengine/completion-rate/units failed", { error: unitsResult.error });
+      res.status(502).json({ error: "Failed to load unit data from RentEngine.", detail: unitsResult.error });
+      return;
+    }
+    const unitsById = new Map(unitsResult.data.map((u) => [u.id, u]));
+    const rows = showingCompletionRateExplainRows(shared.rows, unitsResult.data);
+    res.json({
+      connected: true,
+      units: rows.map((r) => {
+        const unit = unitsById.get(r.unitId);
+        return {
+          unitId: r.unitId,
+          address: unit?.address?.formatted_address ?? null,
+          status: unit?.status ?? null,
+          showingsScheduled: r.showingsScheduled,
+          showingsCompleted: r.showingsCompleted,
+          ratePercent: r.showingsScheduled > 0 ? Math.round((r.showingsCompleted / r.showingsScheduled) * 1000) / 10 : null,
+        };
+      }),
+    });
+  } catch (err) {
+    logError("GET /api/rentengine/completion-rate/units failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load completion rate data from RentEngine." });
   }
 });
 

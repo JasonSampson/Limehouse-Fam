@@ -806,13 +806,6 @@ export interface MarketingActivityFromReportingSummary {
   applicationsSubmitted: number;
   totalCalls: number;
   outboundTexts: number;
-  // Percentage (0-100), null when showingsScheduled is 0 (nothing to
-  // divide by, not a real 0%). showingsScheduled/showingsCompleted were
-  // already being summed here from real RentEngine reporting data — this
-  // was previously left uncomputed and the dashboard's Completion Rate
-  // tile showed "Not a RentEngine concept", which was wrong; the vendor's
-  // own site shows this exact ratio. CONFIRMED LIVE 2026-07-05.
-  completionRate: number | null;
 }
 
 // Sums the per-unit reporting fields into portfolio-wide totals — this
@@ -822,10 +815,20 @@ export interface MarketingActivityFromReportingSummary {
 // same pass, since that job also backs the existing marketing-activity
 // cache contract other code may still depend on — Tron should confirm the
 // frontend is fully moved over before that job is retired.
+//
+// completionRate REMOVED 2026-07-13, per Jason directly: this blanket
+// version (showings summed across EVERY tracked unit, Leased included) was
+// the Dashboard tab's Completion Rate tile for a while, but CONFIRMED LIVE
+// against the vendor's own drill-down that their real Completion Rate
+// scopes to on-market units only (status not Leased/On Hold/Incomplete) —
+// exactly what summarizeShowingCompletionRate below already computes
+// (built a day later for the Team Performance KPI, never wired back to
+// this Dashboard tile until now). The Dashboard tile now calls that
+// function directly instead — see /api/rentengine/completion-rate.
 export function summarizeMarketingActivityFromReporting(
   rows: RentEngineLeasingPerformance[]
 ): MarketingActivityFromReportingSummary {
-  const totals = rows.reduce(
+  return rows.reduce(
     (acc, r) => ({
       newProspects: acc.newProspects + r.new_prospects,
       showingsScheduled: acc.showingsScheduled + r.showings_scheduled,
@@ -836,8 +839,6 @@ export function summarizeMarketingActivityFromReporting(
     }),
     { newProspects: 0, showingsScheduled: 0, showingsCompleted: 0, applicationsSubmitted: 0, totalCalls: 0, outboundTexts: 0 }
   );
-  const completionRate = totals.showingsScheduled > 0 ? (totals.showingsCompleted / totals.showingsScheduled) * 100 : null;
-  return { ...totals, completionRate };
 }
 
 // ============================================================================

@@ -15,10 +15,9 @@
 //   - "Not tracked in Buildium/RentEngine" (solid border, notAvailableBox)
 //     — confirmed with Q that no field or timestamp exists to compute this
 //     at all, for any period, even going forward without new tracking that
-//     doesn't exist yet. As of 2026-07-04 this only still applies to
-//     Completion Rate (no matching concept in RentEngine's API at all,
-//     confirmed on Q's second pass too). These will never silently start
-//     working — treat them as permanent, not pending.
+//     doesn't exist yet. Completion Rate no longer falls in this bucket —
+//     CORRECTED 2026-07-05, it's real and live (see the Marketing &
+//     Showings section comment below).
 // Owners-gained-this-period still has no backend feed at all yet and keeps
 // the "Not connected yet" wording.
 
@@ -64,6 +63,7 @@ async function loadDashboard() {
     prospectsBySourceResult,
     unitsOnMarketResult,
     marketingActivityResult,
+    completionRateResult,
     daysOnMarketResult,
     moveInsResult,
     avgDaysVacantResult,
@@ -88,6 +88,7 @@ async function loadDashboard() {
     apiGet(`/api/rentengine/prospects-by-source?period=${period}`),
     apiGet("/api/rentengine/units-on-market"),
     apiGet(`/api/rentengine/marketing-activity?period=${period}`),
+    apiGet(`/api/rentengine/completion-rate?period=${period}`),
     apiGet("/api/rentengine/days-on-market"),
     apiGet(`/api/dashboard/move-ins?period=${period}`),
     apiGet("/api/dashboard/avg-days-vacant"),
@@ -140,6 +141,7 @@ async function loadDashboard() {
   const prospectsBySource = unwrap(prospectsBySourceResult);
   const unitsOnMarket = unwrap(unitsOnMarketResult);
   const marketingActivity = unwrap(marketingActivityResult);
+  const completionRate = unwrap(completionRateResult);
   const daysOnMarket = unwrap(daysOnMarketResult);
   const moveIns = unwrap(moveInsResult);
   const avgDaysVacant = unwrap(avgDaysVacantResult);
@@ -156,7 +158,7 @@ async function loadDashboard() {
     ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
     ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
-    ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, daysOnMarket })}
+    ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, completionRate, daysOnMarket })}
   `;
 
   wireTileClicks();
@@ -979,10 +981,14 @@ function renderRenewalsMonthlyChart(renewalsMonthly) {
 //     Prospects is live; Total Calls/Outbound Texts depend on a background
 //     sync job and read as "Not connected yet" (real dashed-border
 //     wording, since this WILL show a number once that sync completes)
-//     until callActivitySynced is true. completionRate (FIXED 2026-07-05)
-//     is showingsCompleted/showingsScheduled*100 from the same reporting
-//     rows already fetched here — was wrongly flagged as "not a
-//     RentEngine concept" before; it is, it just wasn't being computed.
+//     until callActivitySynced is true.
+//   - completionRate: /api/rentengine/completion-rate (SPLIT OFF
+//     marketing-activity 2026-07-13, per Jason directly) — scoped to units
+//     actually available for showing (status not Leased/On Hold/
+//     Incomplete), confirmed against the vendor's own drill-down. The old
+//     blanket version (every tracked unit, Leased included) undercounted
+//     the real rate — 31.9% (44/138) here vs the vendor's scoped 59.6%
+//     (28/47) on the same day.
 //   - daysOnMarket: /api/rentengine/days-on-market — CORRECTED 2026-07-04,
 //     real and live via RentEngine's Reporting API (was wrongly marked
 //     unavailable before; Jason was right to push back).
@@ -997,7 +1003,7 @@ function renderRenewalsMonthlyChart(renewalsMonthly) {
 // RentEngine's real Reporting API (showings_completed field, period-scoped,
 // summed across units) and matches the vendor's number — this tile now
 // reads from there instead.
-function renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, daysOnMarket }) {
+function renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, completionRate, daysOnMarket }) {
   return `
     <div class="section">
       <p class="section-title">Marketing &amp; Showings</p>
@@ -1020,18 +1026,19 @@ function renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnM
             : couldNotLoadTile({ id: "units-on-market", label: "Units on Market", sourceTags: ["RE"] })
         }
         ${
-          marketingActivity && marketingActivity.connected && marketingActivity.completionRate !== null
+          completionRate && completionRate.connected && completionRate.ratePercent !== null
             ? tileHtml({
                 id: "completion-rate",
                 label: "Completion Rate",
-                value: formatPercent(marketingActivity.completionRate),
-                sub: `${formatNumber(marketingActivity.showingsCompleted)} of ${formatNumber(
-                  marketingActivity.showingsScheduled
+                value: formatPercent(completionRate.ratePercent),
+                sub: `${formatNumber(completionRate.showingsCompleted)} of ${formatNumber(
+                  completionRate.showingsScheduled
                 )} showings`,
                 sourceTags: ["RE"],
                 live: true,
+                clickable: true,
               })
-            : marketingActivity && !marketingActivity.connected
+            : completionRate && !completionRate.connected
             ? tileHtml({ id: "completion-rate", label: "Completion Rate", sourceTags: ["RE"], notConnected: true })
             : couldNotLoadTile({ id: "completion-rate", label: "Completion Rate", sourceTags: ["RE"] })
         }
@@ -1764,6 +1771,30 @@ async function handleTileClick(tileId) {
         { label: "Days", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
       ],
       emptyText: "No units currently on the market.",
+    });
+    return;
+  }
+
+  // Completion Rate — SPLIT OFF marketing-activity 2026-07-13, per Jason
+  // directly, and given a real drill-down (previously had none). Scoped to
+  // units actually available for showing (status not Leased/On Hold/
+  // Incomplete) — same scoping as summarizeShowingCompletionRate in
+  // src/rentengine/client.ts, matching the vendor's own note.
+  if (tileId === "completion-rate") {
+    await simpleDrillDown({
+      tileId,
+      title: "Completion Rate",
+      url: `/api/rentengine/completion-rate/units?period=${period}`,
+      rowsKey: "units",
+      note: "Sum of showings completed ÷ sum of showings scheduled, across units whose status makes them available for showing (not Leased, On Hold, or Incomplete) within the selected period. RentEngine does not split showings into accompanied vs. self-guided, so self-showings cannot be excluded.",
+      columns: [
+        { label: "Address", render: (r) => r.address ?? `Unit ${r.unitId}` },
+        { label: "Status", render: (r) => r.status ?? "—" },
+        { label: "Scheduled", key: "showingsScheduled" },
+        { label: "Completed", key: "showingsCompleted" },
+        { label: "Rate", render: (r) => (r.ratePercent === null ? "—" : `${r.ratePercent}%`) },
+      ],
+      emptyText: "No showings in this period.",
     });
     return;
   }

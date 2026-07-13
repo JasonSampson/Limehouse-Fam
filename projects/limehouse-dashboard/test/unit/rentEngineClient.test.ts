@@ -342,11 +342,11 @@ describe("summarizePropertyHealthFromReporting", () => {
   });
 });
 
-// FIXED 2026-07-05: completionRate (showingsCompleted/showingsScheduled*100)
-// was previously never computed anywhere, even though both inputs were
-// already being summed here — the dashboard's Completion Rate tile showed
-// "Not a RentEngine concept" instead of a real number. This is the vendor's
-// own definition, confirmed live.
+// completionRate REMOVED from this function 2026-07-13 — see the comment on
+// summarizeMarketingActivityFromReporting in client.ts for why (the
+// blanket showingsScheduled/showingsCompleted summed here don't match the
+// vendor's real Completion Rate, which scopes to on-market-for-showing
+// units only; that's summarizeShowingCompletionRate below instead).
 describe("summarizeMarketingActivityFromReporting", () => {
   it("sums fields across all units", () => {
     const rows = [
@@ -361,11 +361,10 @@ describe("summarizeMarketingActivityFromReporting", () => {
       applicationsSubmitted: 1,
       totalCalls: 8,
       outboundTexts: 14,
-      completionRate: (2 / 3) * 100,
     });
   });
 
-  it("returns all zeros and a null completion rate for an empty list", () => {
+  it("returns all zeros for an empty list", () => {
     const result = summarizeMarketingActivityFromReporting([]);
     expect(result).toEqual({
       newProspects: 0,
@@ -374,21 +373,7 @@ describe("summarizeMarketingActivityFromReporting", () => {
       applicationsSubmitted: 0,
       totalCalls: 0,
       outboundTexts: 0,
-      completionRate: null,
     });
-  });
-
-  it("computes completion rate as a 0-100 percentage, not a 0-1 ratio", () => {
-    const rows = [leasingPerformance({ showings_scheduled: 4, showings_completed: 3 })];
-    const result = summarizeMarketingActivityFromReporting(rows);
-    expect(result.completionRate).toBe(75);
-  });
-
-  it("returns null (not zero, not NaN) when showingsScheduled is 0, even if showingsCompleted is nonzero", () => {
-    // Shouldn't happen with real data, but guards the division-by-zero case explicitly.
-    const rows = [leasingPerformance({ showings_scheduled: 0, showings_completed: 0 })];
-    const result = summarizeMarketingActivityFromReporting(rows);
-    expect(result.completionRate).toBeNull();
   });
 });
 

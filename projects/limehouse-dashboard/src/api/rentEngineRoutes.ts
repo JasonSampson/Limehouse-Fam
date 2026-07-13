@@ -6,6 +6,7 @@ import {
   summarizeProspectsBySource,
   summarizeLeasingFunnel,
   summarizeUnitsOnMarket,
+  isUnitOnMarket,
   summarizeDaysOnMarket,
   summarizeMarketingActivityFromReporting,
   fetchMarketingSourcesReport,
@@ -347,11 +348,13 @@ rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => 
 // neither is acceptable, so this tile intentionally has no click handler
 // wired on the frontend rather than a fake or slow drill-down.
 
-// Days on Market / Median DOM / Units on Market — share ONE drill-down:
-// the real per-unit leasing-performance rows already being fetched
+// Avg Days on Market / Median DOM — share ONE drill-down: the real per-unit
+// leasing-performance rows already being fetched
 // (src/rentengine/leasingPerformanceCache.ts), just re-shaped as a record
 // list instead of an aggregate. Same shared cache as the summary tiles —
-// no extra RentEngine calls for this drill-down.
+// no extra RentEngine calls for this drill-down. Units on Market has its
+// own separate drill-down below (SPLIT OFF 2026-07-13 — see that route's
+// comment for why sharing this one was wrong).
 //
 // address/status — ADDED 2026-07-13, per Jason directly, to match the
 // vendor's own drill-down (Address/Status/Health/Days columns; ours only
@@ -387,5 +390,48 @@ rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, 
   } catch (err) {
     logError("GET /api/rentengine/units/leasing-performance failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load unit performance data from RentEngine." });
+  }
+});
+
+// Units on Market drill-down — ADDED 2026-07-13, per Jason directly. Was
+// sharing the Days on Market drill-down above (which lists EVERY tracked
+// unit, not just on-market ones) — clicking "Units on Market: N" didn't
+// actually show N rows. This is scoped to real on-market units, using the
+// SAME isUnitOnMarket predicate as the tile's own summarizeUnitsOnMarket
+// count (src/rentengine/client.ts) so the two can never disagree. Base
+// list built from fetchUnits() (not the leasing-performance rows) so a
+// brand-new listing that hasn't shown up in a reporting window yet still
+// appears here with "—" days rather than being silently missing.
+rentEngineRoutes.get("/api/rentengine/units/on-market", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  try {
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    if (!unitsResult.connected) {
+      res.json({ connected: false, units: [] });
+      return;
+    }
+    if (unitsResult.error || !unitsResult.data) {
+      logError("GET /api/rentengine/units/on-market failed", { error: unitsResult.error });
+      res.status(502).json({ error: "Failed to load unit data from RentEngine.", detail: unitsResult.error });
+      return;
+    }
+    const performanceByUnitId = new Map((shared.rows ?? []).map((r) => [r.unit_id, r]));
+    const onMarket = unitsResult.data.filter((u) => isUnitOnMarket(u.status));
+    res.json({
+      connected: true,
+      units: onMarket.map((u) => {
+        const perf = performanceByUnitId.get(u.id);
+        return {
+          unitId: u.id,
+          address: u.address?.formatted_address ?? null,
+          status: u.status,
+          daysOnMarket: perf?.days_on_market ?? null,
+          propertyHealth: perf?.property_health ?? null,
+        };
+      }),
+    });
+  } catch (err) {
+    logError("GET /api/rentengine/units/on-market failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load unit data from RentEngine." });
   }
 });

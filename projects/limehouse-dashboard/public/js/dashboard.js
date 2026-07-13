@@ -1010,7 +1010,7 @@ function renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnM
                 id: "units-on-market",
                 label: "Units on Market",
                 value: formatNumber(unitsOnMarket.unitsOnMarket),
-                sub: `of ${formatNumber(unitsOnMarket.totalUnitsTracked)} RentEngine-tracked units`,
+                sub: `of ${formatNumber(unitsOnMarket.totalUnitsTracked)} RE-tracked units`,
                 sourceTags: ["RE"],
                 live: true,
                 clickable: true,
@@ -1724,7 +1724,7 @@ async function handleTileClick(tileId) {
   // this only showed a bare RentEngine unit_id, since RentEngine's
   // leasing-performance rows carry no address of their own. See
   // src/api/rentEngineRoutes.ts for where address/status get joined in.
-  if (tileId === "avg-dom" || tileId === "median-dom" || tileId === "units-on-market") {
+  if (tileId === "avg-dom" || tileId === "median-dom") {
     await simpleDrillDown({
       tileId,
       title: "Days on Market",
@@ -1738,6 +1738,32 @@ async function handleTileClick(tileId) {
         { label: "Days", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
       ],
       emptyText: "No unit data available.",
+    });
+    return;
+  }
+
+  // Units on Market — SPLIT OFF 2026-07-13, per Jason directly, from the
+  // Days on Market drill-down above (which lists EVERY tracked unit, not
+  // just on-market ones) into its own drill-down scoped to real on-market
+  // units. Same isUnitOnMarket predicate as the tile's own count (see
+  // src/rentengine/client.ts) — status is exactly Available or On Hold,
+  // corrected 2026-07-13 after Jason's own manual count caught a real
+  // "Incomplete" draft listing being wrongly included (see that file's
+  // comment for the full story).
+  if (tileId === "units-on-market") {
+    await simpleDrillDown({
+      tileId,
+      title: "Units on Market",
+      url: `/api/rentengine/units/on-market?period=${period}`,
+      rowsKey: "units",
+      note: "Every RentEngine unit whose status is Available or On Hold — not just Available, and not every non-Leased status either (a unit still in RentEngine's Incomplete/draft state, never actually published, doesn't count). Days and Health come from RentEngine's separate per-unit leasing-performance report, so a unit shows \"—\" there if it hasn't appeared in that report yet.",
+      columns: [
+        { label: "Address", render: (r) => r.address ?? `Unit ${r.unitId}` },
+        { label: "Status", render: (r) => r.status ?? "—" },
+        { label: "Health", render: (r) => r.propertyHealth ?? "—" },
+        { label: "Days", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
+      ],
+      emptyText: "No units currently on the market.",
     });
     return;
   }

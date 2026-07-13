@@ -463,31 +463,51 @@ export function summarizeLeasingFunnel(prospects: RentEngineProspect[]): Leasing
 // Units on Market
 // ============================================================================
 //
-// JUDGMENT CALL (flagged per the research brief, not silently resolved):
-// status="Available" is used as the sole criterion for "on market," even
-// though ~28% of Available units in this account (17 of 61 in the sample
-// pulled 2026-07-03) also have is_occupied=true. Investigation of those
-// records shows a consistent pattern — a future earliest_move_in_date is
-// set on every one of them, meaning these are units with a CURRENT tenant
-// still in place but ALREADY leased to a future tenant; RentEngine
-// continues marketing/showing them until the actual move-out, which is
-// exactly what "on market" should mean for a PM tracking marketing
-// pipeline. The alternative (status="Available" AND is_occupied=false)
-// would undercount real active marketing effort by excluding every
-// pre-leased-but-still-occupied unit. Conversely, some status="Leased" +
-// is_occupied=false records look like stale listings (old updated_at,
-// null earliest_move_in_date) — these are excluded because their status
-// says Leased, and there's no reliable field to distinguish "genuinely
-// re-available" from "stale record" without more investigation than this
-// build warrants; worth asking Jason/RentEngine support about as a
-// possible data-quality gap on RentEngine's side, not a bug in this code.
+// FIXED 2026-07-13, per Jason directly: was filtering to status==="Available"
+// only, which silently dropped every real "On Hold" unit (2 real cases
+// confirmed live: 9117 Chesapeake Boulevard #4, 1318 River Birch Run South
+// — both genuinely still being marketed, just paused). CONFIRMED LIVE
+// against the vendor site's own drill-down note for this exact tile: "All
+// RentEngine units whose status is not 'Leased' (Available + On Hold). The
+// 'is_occupied' flag is intentionally ignored because it lags reality."
+//
+// CORRECTED same day, per Jason directly: first pass generalized that note
+// into status !== "Leased" (anything non-Leased counts), treating "Available
+// + On Hold" as just an example. It wasn't — Jason's own manual count (12)
+// caught a real case this broke: a unit with status "Incomplete" (1316
+// Wellfleet Court #1) got counted as on-market even though it has NO real
+// marketing history at all (confirmed live: never once appeared in
+// RentEngine's leasing-performance report — null days_on_market, null
+// property_health) — a draft listing RentEngine knows about but that was
+// never actually published. The vendor's parenthetical is the real,
+// exhaustive rule, not an example: only Available or On Hold count.
+//
+// The is_occupied judgment call (still valid, cross-confirmed by the
+// vendor's own note above): ~28% of Available units in this account (17 of
+// 61 in the sample pulled 2026-07-03) also have is_occupied=true.
+// Investigation of those records shows a consistent pattern — a future
+// earliest_move_in_date is set on every one of them, meaning these are
+// units with a CURRENT tenant still in place but ALREADY leased to a
+// future tenant; RentEngine continues marketing/showing them until the
+// actual move-out, which is exactly what "on market" should mean for a PM
+// tracking marketing pipeline. The alternative (status="Available" AND
+// is_occupied=false) would undercount real active marketing effort by
+// excluding every pre-leased-but-still-occupied unit.
 export interface UnitsOnMarketSummary {
   unitsOnMarket: number;
   totalUnitsTracked: number;
 }
 
+// Single source of truth for "is this unit on the market" — used by the
+// summary count above AND the drill-down route (src/api/rentEngineRoutes.ts
+// /api/rentengine/units/on-market), so the two can never drift apart the
+// way they briefly did on 2026-07-13.
+export function isUnitOnMarket(status: string): boolean {
+  return status === "Available" || status === "On Hold";
+}
+
 export function summarizeUnitsOnMarket(units: RentEngineUnit[]): UnitsOnMarketSummary {
-  const onMarket = units.filter((u) => u.status === "Available");
+  const onMarket = units.filter((u) => isUnitOnMarket(u.status));
   return { unitsOnMarket: onMarket.length, totalUnitsTracked: units.length };
 }
 

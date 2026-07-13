@@ -180,6 +180,16 @@ describe("summarizeLeasingFunnel", () => {
 // CONFIRMED LIVE 2026-07-03: status="Available" is used regardless of
 // is_occupied, per the documented judgment call in client.ts (pre-leased
 // units keep marketing until move-out).
+//
+// FIXED 2026-07-13, per Jason directly: the status filter was too narrow
+// (Available only), silently dropping real "On Hold" units.
+//
+// CORRECTED same day, per Jason directly: the first fix over-corrected to
+// "any non-Leased status counts," which wrongly counted a real "Incomplete"
+// unit (1316 Wellfleet Court #1, a draft listing with zero real marketing
+// history — never once appeared in RentEngine's leasing-performance
+// report) as on-market. Jason's own manual count (12, not 13) caught this.
+// Settled on the vendor's literal rule: exactly Available or On Hold.
 describe("summarizeUnitsOnMarket", () => {
   it("counts status=Available units as on-market even if currently occupied (pre-leased)", () => {
     const units = [
@@ -201,12 +211,14 @@ describe("summarizeUnitsOnMarket", () => {
     expect(summarizeUnitsOnMarket([])).toEqual({ unitsOnMarket: 0, totalUnitsTracked: 0 });
   });
 
-  // ADDED 2026-07-10: confirms the crash-fix (status loosened from a
-  // strict Leased/Available enum to a plain string) didn't change this
-  // function's behavior -- an On Hold or Incomplete unit still correctly
-  // doesn't count as on-market, same as any other non-Available status.
-  it("does not count On Hold or Incomplete units as on-market", () => {
-    const units = [unit({ id: 1, status: "On Hold" }), unit({ id: 2, status: "Incomplete" })];
+  it("counts On Hold as on-market — real case, 9117 Chesapeake Boulevard #4 and 1318 River Birch Run South were being silently dropped", () => {
+    const units = [unit({ id: 1, status: "On Hold" })];
+    const result = summarizeUnitsOnMarket(units);
+    expect(result.unitsOnMarket).toBe(1);
+  });
+
+  it("does not count Incomplete (or any other non-Available/On-Hold status) as on-market — real case, a draft listing with no marketing history", () => {
+    const units = [unit({ id: 1, status: "Incomplete" }), unit({ id: 2, status: "Archived" })];
     const result = summarizeUnitsOnMarket(units);
     expect(result).toEqual({ unitsOnMarket: 0, totalUnitsTracked: 2 });
   });

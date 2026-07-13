@@ -10,6 +10,7 @@ import {
   vacantUnitDaysRows,
   averageDaysVacant,
   renewalRateRows,
+  monthlyRenewalCounts,
   securityDepositWithheldRows,
 } from "../../src/kpi/leaseRows.js";
 import type { BuildiumLease, BuildiumUnit } from "../../src/buildium/client.js";
@@ -241,6 +242,51 @@ describe("renewalRateRows", () => {
     ];
     const rows = renewalRateRows(leases, new Map(), asOf);
     expect(rows.map((r) => r.leaseId)).toEqual(["2", "1"]);
+  });
+});
+
+// ADDED 2026-07-13, per Jason directly: the "Renewals — Trailing 12 Mo"
+// chart card was still showing "Not connected yet" even though the
+// Renewals tile right next to it is live — this buckets the SAME
+// renewalRateRows "renewed" rows by month for that chart.
+describe("monthlyRenewalCounts", () => {
+  const asOf = new Date("2026-07-13T00:00:00Z");
+
+  function renewedRow(fromDate: string) {
+    return { leaseId: "1", propertyId: "1", unitNumber: null, outcome: "renewed" as const, fromDate, toDate: null };
+  }
+
+  it("returns exactly 12 months, oldest to newest, ending at asOfDate's month", () => {
+    const counts = monthlyRenewalCounts([], asOf);
+    expect(counts).toHaveLength(12);
+    expect(counts[0].month).toBe("2025-08");
+    expect(counts[11].month).toBe("2026-07");
+  });
+
+  it("counts renewed rows by the month of fromDate", () => {
+    const rows = [renewedRow("2026-07-01"), renewedRow("2026-07-15"), renewedRow("2026-06-01")];
+    const counts = monthlyRenewalCounts(rows, asOf);
+    expect(counts.find((m) => m.month === "2026-07")?.count).toBe(2);
+    expect(counts.find((m) => m.month === "2026-06")?.count).toBe(1);
+  });
+
+  it("zero-fills a month with no renewals rather than omitting it", () => {
+    const counts = monthlyRenewalCounts([renewedRow("2026-07-01")], asOf);
+    expect(counts.find((m) => m.month === "2026-01")?.count).toBe(0);
+  });
+
+  it("excludes moved_out rows and rows with no fromDate", () => {
+    const rows = [
+      { leaseId: "1", propertyId: "1", unitNumber: null, outcome: "moved_out" as const, fromDate: "2026-07-01", toDate: "2026-07-01" },
+      { leaseId: "2", propertyId: "1", unitNumber: null, outcome: "renewed" as const, fromDate: null, toDate: null },
+    ];
+    const counts = monthlyRenewalCounts(rows, asOf);
+    expect(counts.reduce((sum, m) => sum + m.count, 0)).toBe(0);
+  });
+
+  it("excludes a renewal outside the trailing 12 months", () => {
+    const counts = monthlyRenewalCounts([renewedRow("2024-01-01")], asOf);
+    expect(counts.reduce((sum, m) => sum + m.count, 0)).toBe(0);
   });
 });
 

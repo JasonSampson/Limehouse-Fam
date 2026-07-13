@@ -267,6 +267,39 @@ export function renewalRateRows(
   return rows.sort((a, b) => (b.toDate ?? "").localeCompare(a.toDate ?? ""));
 }
 
+// Renewals — Trailing 12 Mo chart (Leasing Pipeline) — ADDED 2026-07-13,
+// per Jason directly: he noticed this chart card was still showing the
+// "Not connected yet" placeholder even though the Renewals tile right next
+// to it is live — src/kpi/tenancy.ts's sibling chart helper
+// (emphasizedBarChartHtml in public/js/charts.js) was already built for
+// this exact chart and just never wired up. Buckets the SAME "renewed" rows
+// renewalRateRows already produces (by the month of fromDate, the real
+// rent-effective/renewal date) into the trailing 12 CALENDAR months ending
+// at asOfDate's month — zero-filled for any month with no renewals, so the
+// chart always has exactly 12 bars.
+export interface MonthlyRenewalCount {
+  month: string; // "YYYY-MM"
+  count: number;
+}
+
+export function monthlyRenewalCounts(rows: RenewalRateRow[], asOfDate: Date): MonthlyRenewalCount[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.outcome !== "renewed" || !row.fromDate) continue;
+    const month = row.fromDate.slice(0, 7);
+    counts.set(month, (counts.get(month) ?? 0) + 1);
+  }
+
+  const months: string[] = [];
+  const cursor = new Date(Date.UTC(asOfDate.getUTCFullYear(), asOfDate.getUTCMonth(), 1));
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() - i, 1));
+    months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+  }
+
+  return months.map((month) => ({ month, count: counts.get(month) ?? 0 }));
+}
+
 // Avg SD Withheld drill-down — REBUILT 2026-07-10, matching the vendor's
 // own real methodology (see summarizeSecurityDepositWithheld in
 // rentCollection.ts for the full derivation). One row per Past lease that:

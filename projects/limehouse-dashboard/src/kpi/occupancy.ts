@@ -91,41 +91,17 @@ export function summarizeLeaseMix(activeLeases: BuildiumLease[]): LeaseMixSummar
   };
 }
 
-// Renewals coming up: leases ending within `withinDays` of `asOfDate`.
-// FLOW-classified in the sense that "within N days" depends on a lookahead
-// window, but per the brief's own examples ("60 days and 30 days before
-// expiration") the window length is a fixed operational rule, not a
-// dashboard period selector — so this does NOT take a period param, only
-// asOfDate (defaults to now) and the window length.
-export interface UpcomingRenewalRow {
-  leaseId: string;
-  propertyId: string;
-  unitNumber: string | null;
-  leaseToDate: string;
-  daysUntilExpiration: number;
-}
-
-export function upcomingRenewals(activeLeases: BuildiumLease[], asOfDate: Date, withinDays: number): UpcomingRenewalRow[] {
-  const asOfMs = asOfDate.getTime();
-  const rows: UpcomingRenewalRow[] = [];
-
-  for (const lease of activeLeases) {
-    if (!lease.LeaseToDate) continue; // month-to-month leases have no end date
-    const endMs = new Date(lease.LeaseToDate).getTime();
-    const daysUntil = Math.round((endMs - asOfMs) / (1000 * 60 * 60 * 24));
-    if (daysUntil >= 0 && daysUntil <= withinDays) {
-      rows.push({
-        leaseId: String(lease.Id),
-        propertyId: String(lease.PropertyId),
-        unitNumber: lease.UnitNumber,
-        leaseToDate: lease.LeaseToDate,
-        daysUntilExpiration: daysUntil,
-      });
-    }
-  }
-
-  return rows.sort((a, b) => a.daysUntilExpiration - b.daysUntilExpiration);
-}
+// Renewals tile (Leasing Pipeline) — REPLACED 2026-07-13, per Jason
+// directly: this used to be "leases ending within 60 days" (a forward-
+// looking upcoming-expiration count). CONFIRMED LIVE against the vendor
+// site that their own "Renewals" tile is NOT that — it's the exact same
+// trailing-12-month "already renewed" count as their Renewal Rate tile and
+// their "Renewals — Trailing 12 Mo" chart (all three show 140). Jason chose
+// to match the vendor's definition exactly rather than keep the 60-day
+// view. See renewalRateRows in src/kpi/leaseRows.ts (outcome === "renewed"
+// rows) — the Renewals tile now reuses that same cached computation rather
+// than a separate live one, so it can never disagree with Renewal Rate's
+// own "N renewed" subtext.
 
 function roundPercent(n: number): number {
   return Math.round(n * 10) / 10;

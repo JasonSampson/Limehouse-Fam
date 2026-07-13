@@ -3,7 +3,6 @@ import {
   summarizeOccupancy,
   summarizeOccupancyFromUnits,
   summarizeLeaseMix,
-  upcomingRenewals,
   summarizeRenewalRate,
   mostRecentRentEffectiveDate,
   summarizeDelinquencyRate,
@@ -158,31 +157,10 @@ describe("summarizeLeaseMix", () => {
   });
 });
 
-describe("upcomingRenewals", () => {
-  const asOf = new Date("2026-07-03T00:00:00Z");
-
-  it("includes leases ending within the window, sorted soonest first", () => {
-    const leases = [
-      lease({ Id: 1, LeaseToDate: "2026-09-01" }), // 60 days out
-      lease({ Id: 2, LeaseToDate: "2026-08-02" }), // 30 days out
-      lease({ Id: 3, LeaseToDate: "2027-01-01" }), // way out, excluded
-    ];
-    const result = upcomingRenewals(leases, asOf, 60);
-    expect(result.map((r) => r.leaseId)).toEqual(["2", "1"]);
-  });
-
-  it("excludes month-to-month leases (no LeaseToDate)", () => {
-    const leases = [lease({ LeaseToDate: null })];
-    const result = upcomingRenewals(leases, asOf, 60);
-    expect(result).toEqual([]);
-  });
-
-  it("excludes leases that already expired (negative days)", () => {
-    const leases = [lease({ LeaseToDate: "2026-06-01" })];
-    const result = upcomingRenewals(leases, asOf, 60);
-    expect(result).toEqual([]);
-  });
-});
+// upcomingRenewals removed 2026-07-13, per Jason directly — the Renewals
+// tile now matches the vendor's own definition (trailing-12-month already-
+// renewed leases, via renewalRateRows) instead of a 60-day upcoming window.
+// See test/unit/leaseRows.test.ts's renewalRateRows tests.
 
 // Avg Tenancy moved to test/unit/tenancy.test.ts 2026-07-12, per Jason
 // directly — rebuilt around every real tenant (past and current), not just

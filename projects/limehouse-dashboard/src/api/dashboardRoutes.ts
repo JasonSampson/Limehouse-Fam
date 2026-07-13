@@ -26,7 +26,6 @@ import {
 import {
   summarizeOccupancy,
   summarizeLeaseMix,
-  upcomingRenewals,
   earliestTrackableMonth,
   monthsSinceEarliestTrackable,
   summarizeMonthlyOccupancy,
@@ -57,6 +56,7 @@ import {
   vacantUnitRows,
   vacantUnitDaysRows,
   averageDaysVacant,
+  monthlyRenewalCounts,
   type RenewalRateRow,
   type SecurityDepositWithheldRow,
 } from "../kpi/leaseRows.js";
@@ -254,23 +254,47 @@ dashboardRoutes.get("/api/dashboard/delinquency/leases", requireLogin, async (_r
   }
 });
 
-const renewalsQuerySchema = z.object({
-  withinDays: z.coerce.number().int().positive().max(365).default(60),
-});
-
-dashboardRoutes.get("/api/dashboard/renewals", requireLogin, async (req, res) => {
-  const parsed = renewalsQuerySchema.safeParse(req.query);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid withinDays query param." });
-    return;
-  }
+// Renewals tile (Leasing Pipeline) — REPLACED 2026-07-13, per Jason
+// directly, to match the vendor's own "Renewals" tile definition exactly:
+// leases that ALREADY renewed in the trailing 12 months, not leases coming
+// up for renewal in the next 60 days (see occupancy.ts for the full
+// derivation). Reads the SAME renewal_rate cache as /api/dashboard/
+// renewal-rate, filtered to outcome === "renewed" — so this tile's count
+// and Renewal Rate's own "N renewed" subtext can never disagree.
+dashboardRoutes.get("/api/dashboard/renewals", requireLogin, async (_req, res) => {
   try {
-    const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
-    const rows = withPropertyAddress(upcomingRenewals(activeLeases, new Date(), parsed.data.withinDays), propertyAddressById(properties));
-    res.json(rows);
+    const cached = await getCachedMetric("renewal_rate", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json([]);
+      return;
+    }
+    const { rows } = cached.value as { summary: unknown; rows: RenewalRateRow[] };
+    const renewed = rows.filter((r) => r.outcome === "renewed");
+    const properties = await fetchProperties();
+    res.json(withPropertyAddress(renewed, propertyAddressById(properties)));
   } catch (err) {
     logError("GET /api/dashboard/renewals failed", { error: String(err) });
-    res.status(502).json({ error: "Failed to load renewal data from Buildium." });
+    res.status(502).json({ error: "Failed to load cached renewal data." });
+  }
+});
+
+// Renewals — Trailing 12 Mo chart (Leasing Pipeline) — ADDED 2026-07-13,
+// per Jason directly: this chart card was still showing "Not connected
+// yet" even though the tile right next to it is live. Reads the SAME
+// renewal_rate cache, bucketed by month — see monthlyRenewalCounts in
+// src/kpi/leaseRows.ts.
+dashboardRoutes.get("/api/dashboard/renewals/monthly", requireLogin, async (_req, res) => {
+  try {
+    const cached = await getCachedMetric("renewal_rate", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json([]);
+      return;
+    }
+    const { rows } = cached.value as { summary: unknown; rows: RenewalRateRow[] };
+    res.json(monthlyRenewalCounts(rows, new Date()));
+  } catch (err) {
+    logError("GET /api/dashboard/renewals/monthly failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load cached monthly renewal data." });
   }
 });
 
@@ -724,11 +748,6 @@ dashboardRoutes.get("/api/dashboard/period-info", requireLogin, (req, res) => {
 // no existing drill-down resolves names either; that's a separate,
 // larger change, not part of this batch).
 // ============================================================================
-
-// Renewal Rate drill-down — same underlying list as the Renewals tile
-// itself (both are "leases renewing within 60 days"), just reached from a
-// different tile. No new route needed — the frontend can call the
-// existing /api/dashboard/renewals?withinDays=60 endpoint directly.
 
 // Avg Rent/Lease drill-down.
 dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit/leases", requireLogin, async (_req, res) => {

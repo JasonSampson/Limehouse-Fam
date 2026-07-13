@@ -50,7 +50,8 @@ async function loadDashboard() {
     occupancyHistoryResult,
     leaseMixResult,
     delinquencyResult,
-    renewals60Result,
+    renewalsResult,
+    renewalsMonthlyResult,
     renewalRateResult,
     ownersResult,
     rentAndDepositResult,
@@ -73,7 +74,8 @@ async function loadDashboard() {
     apiGet("/api/dashboard/occupancy-history"),
     apiGet("/api/dashboard/lease-mix"),
     apiGet("/api/dashboard/delinquency"),
-    apiGet("/api/dashboard/renewals?withinDays=60"),
+    apiGet("/api/dashboard/renewals"),
+    apiGet("/api/dashboard/renewals/monthly"),
     apiGet("/api/dashboard/renewal-rate"),
     apiGet("/api/dashboard/owners"),
     apiGet("/api/dashboard/financials/rent-and-deposit"),
@@ -97,7 +99,8 @@ async function loadDashboard() {
   const occupancyHistory = unwrap(occupancyHistoryResult);
   const leaseMix = unwrap(leaseMixResult);
   const delinquency = unwrap(delinquencyResult);
-  const renewals60 = unwrap(renewals60Result);
+  const renewals = unwrap(renewalsResult);
+  const renewalsMonthly = unwrap(renewalsMonthlyResult);
   const renewalRate = unwrap(renewalRateResult);
   const owners = unwrap(ownersResult);
   const rentAndDeposit = unwrap(rentAndDepositResult);
@@ -152,7 +155,7 @@ async function loadDashboard() {
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
     ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
     ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant })}
-    ${renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, appsSubmitted })}
+    ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, daysOnMarket })}
   `;
 
@@ -548,6 +551,11 @@ function formatMonthDayYear(yyyyMmDd) {
   return `${Number(month)}/${Number(day)}/${year}`;
 }
 
+function formatDayMonthYear(yyyyMmDd) {
+  const [year, month, day] = yyyyMmDd.split("-");
+  return `${day}/${month}/${year}`;
+}
+
 // ---------------------------------------------------------------------
 // OCCUPANCY & DOORS
 // ---------------------------------------------------------------------
@@ -823,18 +831,18 @@ function renderChurnTile(doors) {
 // LEASING PIPELINE
 // ---------------------------------------------------------------------
 
-function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, appsSubmitted }) {
+function renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted }) {
   return `
     <div class="section">
       <p class="section-title">Leasing Pipeline</p>
       <div class="tile-grid">
         ${
-          renewals60
+          renewals
             ? tileHtml({
                 id: "renewals",
                 label: "Renewals",
-                value: formatNumber(renewals60.length),
-                sub: "Due within 60 days",
+                value: formatNumber(renewals.length),
+                sub: "Trailing 12 months",
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -930,13 +938,30 @@ function renderLeasingPipeline({ leaseMix, renewals60, avgTenancy, moveIns, apps
       </div>
       <div class="chart-card">
         <p class="chart-card-title">Renewals — Trailing 12 Mo</p>
-        ${notConnectedBox(
-          "Not connected yet",
-          "12-month renewal history isn't wired up yet — Renewals tile above is live."
-        )}
+        ${renderRenewalsMonthlyChart(renewalsMonthly)}
       </div>
     </div>
   `;
+}
+
+// ADDED 2026-07-13, per Jason directly: this chart card was still showing
+// the "Not connected yet" placeholder even though the Renewals tile right
+// next to it is live — emphasizedBarChartHtml (public/js/charts.js) was
+// already built for exactly this chart and just never wired up. Same
+// "renewed" population as the Renewals tile above, one bar per calendar
+// month, most recent month emphasized.
+function renderRenewalsMonthlyChart(renewalsMonthly) {
+  if (!renewalsMonthly) {
+    return notConnectedBox("Couldn't load", "The monthly renewal counts didn't come back just now — Renewals tile above may still be live.");
+  }
+  if (renewalsMonthly.length === 0) {
+    return `<p class="loading-text">No renewal history available yet.</p>`;
+  }
+  return emphasizedBarChartHtml({
+    canvasId: "renewals-monthly-chart",
+    labels: renewalsMonthly.map((m) => formatMonthInitial(m.month)),
+    data: renewalsMonthly.map((m) => m.count),
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -1243,26 +1268,30 @@ async function handleTileClick(tileId) {
     return;
   }
 
+  // Renewals — REPLACED 2026-07-13, per Jason directly, to match the
+  // vendor's own "Renewals" tile exactly: leases that ALREADY renewed in
+  // the trailing 12 months (same population as the "renewed" half of
+  // Renewal Rate below), not leases coming up for renewal in the next 60
+  // days. See src/kpi/leaseRows.ts's renewalRateRows.
   if (tileId === "renewals") {
     await simpleDrillDown({
       tileId,
-      title: "Renewals — Next 60 Days",
-      url: "/api/dashboard/renewals?withinDays=60",
+      title: "Renewals — Trailing 12 Months",
+      url: "/api/dashboard/renewals",
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
-        { label: "Lease End", key: "leaseToDate" },
-        { label: "Days Left", key: "daysUntilExpiration" },
+        { label: "From", render: (r) => (r.fromDate ? formatDayMonthYear(r.fromDate) : "—") },
+        { label: "To", render: (r) => (r.toDate ? formatDayMonthYear(r.toDate) : "—") },
       ],
-      emptyText: "No renewals due in the next 60 days.",
+      emptyText: "No renewals in the trailing 12 months — trigger a Renewal Rate sync first if this looks wrong.",
     });
     return;
   }
 
-  // Renewal Rate — REBUILT 2026-07-05: this is now a different population
-  // than the "Renewals" (next 60 days) tile above — trailing-12-month
-  // renewed-vs-moved-out leases, not upcoming ones. See renewalRateRows in
-  // src/kpi/leaseRows.ts.
+  // Renewal Rate — the SAME trailing-12-month population as Renewals above,
+  // plus the "moved out" side too (with an Outcome column to tell them
+  // apart), since the rate itself needs both halves to compute a percentage.
   if (tileId === "renewal-rate") {
     await simpleDrillDown({
       tileId,
@@ -1272,8 +1301,8 @@ async function handleTileClick(tileId) {
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Outcome", render: (r) => (r.outcome === "renewed" ? "Renewed" : "Moved Out") },
-        { label: "From", key: "fromDate" },
-        { label: "To", key: "toDate" },
+        { label: "From", render: (r) => (r.fromDate ? formatDayMonthYear(r.fromDate) : "—") },
+        { label: "To", render: (r) => (r.toDate ? formatDayMonthYear(r.toDate) : "—") },
       ],
       emptyText: "No renewal/move-out activity in the trailing 12 months — trigger a Renewal Rate sync first if this looks wrong.",
     });

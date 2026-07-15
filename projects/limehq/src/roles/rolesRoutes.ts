@@ -73,12 +73,23 @@ const SHARED_CSS = `
   .nav-brand {
     font-family: 'Quicksand', sans-serif;
     font-weight: 700;
-    font-size: 1.4rem;
+    font-size: 1.6rem;
     text-decoration: none;
     letter-spacing: -0.3px;
+    line-height: 1;
   }
   .lime-part { color: #74b62e; }
   .hq-part   { color: #009344; }
+  .q-wrap { position: relative; display: inline-block; }
+  .lime-in-q-nav {
+    position: absolute;
+    top: 53%;
+    left: 51%;
+    transform: translate(-50%, -50%);
+    width: 15px;
+    height: 15px;
+    pointer-events: none;
+  }
 
   .nav-right {
     display: flex;
@@ -118,7 +129,7 @@ const SHARED_CSS = `
   /* ── Page content ───────────────────────────────────────────────── */
   .main {
     padding: 2rem 1.25rem;
-    max-width: 960px;
+    max-width: 1600px;
     margin: 0 auto;
   }
 
@@ -163,6 +174,67 @@ const SHARED_CSS = `
   }
   .btn-primary:hover { background: #67a228; }
 
+  /* ── Secondary button ───────────────────────────────────────────── */
+  .btn-secondary {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    background: #fff;
+    color: #444;
+    border: 1.5px solid #ddd;
+    border-radius: 7px;
+    font-family: 'Quicksand', sans-serif;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-secondary:hover { background: #f5f5f5; }
+
+  /* ── Form ───────────────────────────────────────────────────────── */
+  .form-group { margin-bottom: 1.1rem; }
+  .form-group label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #444;
+    margin-bottom: 0.3rem;
+  }
+  .form-group input[type="text"] {
+    width: 100%;
+    padding: 0.6rem 0.875rem;
+    border: 1.5px solid #ddd;
+    border-radius: 7px;
+    font-family: 'Quicksand', sans-serif;
+    font-size: 1rem;
+    color: #222;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    background: #fff;
+  }
+  .form-group input:focus {
+    outline: none;
+    border-color: #74b62e;
+    box-shadow: 0 0 0 3px rgba(116,182,46,0.15);
+  }
+  .form-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+    align-items: center;
+  }
+
+  /* ── Error banner ───────────────────────────────────────────────── */
+  .error-banner {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 7px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    color: #dc2626;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
   /* ── Banners ────────────────────────────────────────────────────── */
   .success-banner {
     background: #f0fdf4;
@@ -188,12 +260,16 @@ const SHARED_CSS = `
   .perm-table th.role-header {
     font-weight: 700;
     font-size: 0.8rem;
-    text-align: center;
     color: #009344;
     white-space: nowrap;
-    padding: 0.6rem 0.75rem;
+    padding: 0.5rem 0.4rem 0.75rem;
     border-bottom: 2px solid #eee;
     vertical-align: bottom;
+    text-align: left;
+    writing-mode: vertical-lr;
+    transform: rotate(180deg);
+    height: 200px;
+    min-width: 32px;
   }
   .perm-table th.label-header {
     text-align: left;
@@ -268,7 +344,7 @@ function layout(
 <body>
   <nav class="nav">
     <a href="/launcher" class="nav-brand">
-      <span class="lime-part">lime</span><span class="hq-part">HQ</span>
+      <span class="lime-part">lime</span><span class="hq-part">H</span><span class="hq-part q-wrap">Q<svg class="lime-in-q-nav" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="white"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="white"/></svg></span>
     </a>
     <div class="nav-right">
       ${manageStaffLink}
@@ -441,6 +517,101 @@ function buildGrid(
 }
 
 // ------------------------------------------------------------------ //
+// New-role form helper                                                //
+// ------------------------------------------------------------------ //
+
+function newRoleForm(errorMsg: string | null): string {
+  return `
+    <div class="card" style="max-width:480px">
+      <div class="page-header">
+        <h1 class="page-title">Create New Role</h1>
+      </div>
+      ${errorMsg ? `<div class="error-banner">${esc(errorMsg)}</div>` : ""}
+      <form method="POST" action="/roles/new">
+        <div class="form-group">
+          <label for="name">Role Name</label>
+          <input type="text" id="name" name="name" required
+                 placeholder="e.g. Leasing Agent"
+                 maxlength="60" autocomplete="off"/>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">Create Role</button>
+          <a href="/roles" class="btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>`;
+}
+
+// ------------------------------------------------------------------ //
+// GET /roles/new  — new-role form                                     //
+// ------------------------------------------------------------------ //
+
+router.get("/new", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.role_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to create roles.");
+    const [displayName, canManageStaff] = await Promise.all([
+      getDisplayName(req.user.userId),
+      hasPermission(req.user.userId, "limehq.staff_management.view"),
+    ]);
+    res.send(layout("Create New Role", displayName, newRoleForm(null), canManageStaff));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// POST /roles/new  — create role                                      //
+// ------------------------------------------------------------------ //
+
+router.post("/new", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.role_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to create roles.");
+
+    const name = String((req.body as Record<string, string>).name ?? "").trim();
+    if (!name) {
+      const [displayName, canManageStaff] = await Promise.all([
+        getDisplayName(req.user.userId),
+        hasPermission(req.user.userId, "limehq.staff_management.view"),
+      ]);
+      res.status(400).send(layout("Create New Role", displayName, newRoleForm("Role name is required."), canManageStaff));
+      return;
+    }
+    if (name.length > 60) {
+      const [displayName, canManageStaff] = await Promise.all([
+        getDisplayName(req.user.userId),
+        hasPermission(req.user.userId, "limehq.staff_management.view"),
+      ]);
+      res.status(400).send(layout("Create New Role", displayName, newRoleForm("Role name must be 60 characters or less."), canManageStaff));
+      return;
+    }
+
+    const pool = getAppPool();
+    try {
+      await pool.query(
+        `INSERT INTO role_templates (name, system_role_key) VALUES ($1, NULL)`,
+        [name],
+      );
+    } catch (err: unknown) {
+      if (typeof err === "object" && err !== null && (err as { code?: string }).code === "23505") {
+        const [displayName, canManageStaff] = await Promise.all([
+          getDisplayName(req.user.userId),
+          hasPermission(req.user.userId, "limehq.staff_management.view"),
+        ]);
+        res.status(400).send(layout("Create New Role", displayName, newRoleForm(`A role named "${name}" already exists.`), canManageStaff));
+        return;
+      }
+      throw err;
+    }
+
+    res.redirect(302, "/roles?created=1");
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
 // GET /roles                                                          //
 // ------------------------------------------------------------------ //
 
@@ -461,9 +632,12 @@ router.get("/", async (req, res, next) => {
     ]);
 
     const saved = req.query["saved"] === "1";
+    const created = req.query["created"] === "1";
     const successBanner = saved
       ? `<div class="success-banner">Permissions saved successfully.</div>`
-      : "";
+      : created
+        ? `<div class="success-banner">New role created. Set its permissions below and click Save.</div>`
+        : "";
 
     const grid = buildGrid(catalog, roles, granted, canEdit);
 
@@ -474,10 +648,15 @@ router.get("/", async (req, res, next) => {
     const formOpen = canEdit ? `<form method="POST" action="/roles">` : `<div>`;
     const formClose = canEdit ? `</form>` : `</div>`;
 
+    const newRoleBtn = canEdit
+      ? `<a href="/roles/new" class="btn-primary" style="font-size:0.875rem;padding:0.5rem 1rem;margin-top:0;width:auto">+ New Role</a>`
+      : "";
+
     const content = `
       <div class="card">
         <div class="page-header">
           <h1 class="page-title">Roles &amp; Permissions</h1>
+          ${newRoleBtn}
         </div>
         ${successBanner}
         ${formOpen}

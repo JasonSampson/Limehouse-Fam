@@ -80,12 +80,23 @@ const SHARED_CSS = `
   .nav-brand {
     font-family: 'Quicksand', sans-serif;
     font-weight: 700;
-    font-size: 1.4rem;
+    font-size: 1.6rem;
     text-decoration: none;
     letter-spacing: -0.3px;
+    line-height: 1;
   }
   .lime-part { color: #74b62e; }
   .hq-part   { color: #009344; }
+  .q-wrap { position: relative; display: inline-block; }
+  .lime-in-q-nav {
+    position: absolute;
+    top: 53%;
+    left: 51%;
+    transform: translate(-50%, -50%);
+    width: 15px;
+    height: 15px;
+    pointer-events: none;
+  }
 
   .nav-right {
     display: flex;
@@ -263,6 +274,18 @@ const SHARED_CSS = `
     align-items: center;
   }
 
+  /* ── Banners ────────────────────────────────────────────────────── */
+  .success-banner {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    color: #166534;
+    border-radius: 7px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    font-weight: 600;
+    font-size: 0.875rem;
+  }
+
   /* ── Error message ──────────────────────────────────────────────── */
   .error-banner {
     background: #fef2f2;
@@ -299,7 +322,7 @@ function layout(title: string, displayName: string, content: string): string {
 <body>
   <nav class="nav">
     <a href="/launcher" class="nav-brand">
-      <span class="lime-part">lime</span><span class="hq-part">HQ</span>
+      <span class="lime-part">lime</span><span class="hq-part">H</span><span class="hq-part q-wrap">Q<svg class="lime-in-q-nav" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="white"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="white"/></svg></span>
     </a>
     <div class="nav-right">
       <span class="nav-user">${esc(displayName)}</span>
@@ -640,7 +663,8 @@ router.get("/:id/edit", async (req, res, next) => {
       throw new ApiError(403, "The Owner account cannot be edited.");
     }
 
-    res.send(layout("Edit Staff Member", displayName, editStaffForm(target, roles, null)));
+    const passwordReset = req.query["reset"] === "1";
+    res.send(layout("Edit Staff Member", displayName, editStaffForm(target, roles, null, passwordReset)));
   } catch (err) {
     next(err);
   }
@@ -650,14 +674,19 @@ function editStaffForm(
   target: StaffRow,
   roles: RoleTemplate[],
   errorMsg: string | null,
+  passwordReset = false,
 ): string {
   const checkedAttr = target.active ? " checked" : "";
+  const resetBanner = passwordReset
+    ? `<div class="success-banner">Password reset successfully.</div>`
+    : "";
   return `
     <div class="card" style="max-width:520px">
       <div class="page-header">
         <h1 class="page-title">Edit Staff Member</h1>
       </div>
       ${errorMsg ? `<div class="error-banner">${esc(errorMsg)}</div>` : ""}
+      ${resetBanner}
       <form method="POST" action="/staff/${esc(target.id)}">
         <div class="form-group">
           <label for="display_name">Full Name</label>
@@ -683,11 +712,100 @@ function editStaffForm(
         </div>
         <div class="form-actions">
           <button type="submit" class="btn-primary">Save Changes</button>
+          <a href="/staff/${esc(target.id)}/reset-password" class="btn-secondary">Reset Password</a>
           <a href="/staff" class="btn-secondary">Cancel</a>
         </div>
       </form>
     </div>`;
 }
+
+// ------------------------------------------------------------------ //
+// GET /staff/:id/reset-password  — reset-password form               //
+// ------------------------------------------------------------------ //
+
+router.get("/:id/reset-password", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to reset passwords.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+
+    const [displayName, target] = await Promise.all([
+      getDisplayName(req.user.userId),
+      fetchOneStaff(id),
+    ]);
+
+    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") throw new ApiError(403, "The Owner password cannot be reset here.");
+
+    res.send(layout("Reset Password", displayName, resetPasswordForm(target, null)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+function resetPasswordForm(target: StaffRow, errorMsg: string | null): string {
+  return `
+    <div class="card" style="max-width:480px">
+      <div class="page-header">
+        <h1 class="page-title">Reset Password</h1>
+      </div>
+      <p style="font-size:0.9rem;color:#555;margin-bottom:1.25rem">
+        Setting a new password for <strong>${esc(target.display_name)}</strong>.
+        They will need to use this new password the next time they sign in.
+      </p>
+      ${errorMsg ? `<div class="error-banner">${esc(errorMsg)}</div>` : ""}
+      <form method="POST" action="/staff/${esc(target.id)}/reset-password">
+        <div class="form-group">
+          <label for="new_password">New Password</label>
+          <input type="password" id="new_password" name="new_password"
+                 required autocomplete="new-password" minlength="8"
+                 placeholder="8 characters minimum"/>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">Set New Password</button>
+          <a href="/staff/${esc(target.id)}/edit" class="btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>`;
+}
+
+// ------------------------------------------------------------------ //
+// POST /staff/:id/reset-password  — apply new password               //
+// ------------------------------------------------------------------ //
+
+router.post("/:id/reset-password", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to reset passwords.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+
+    const target = await fetchOneStaff(id);
+    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") throw new ApiError(403, "The Owner password cannot be reset here.");
+
+    const newPassword = String((req.body as Record<string, string>).new_password ?? "").trim();
+    if (newPassword.length < 8) {
+      const displayName = await getDisplayName(req.user.userId);
+      res.status(400).send(layout("Reset Password", displayName, resetPasswordForm(target, "Password must be at least 8 characters.")));
+      return;
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    const pool = getAppPool();
+    await pool.query(
+      `UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`,
+      [passwordHash, id],
+    );
+
+    res.redirect(302, `/staff/${id}/edit?reset=1`);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ------------------------------------------------------------------ //
 // POST /staff/:id  — update staff member                             //

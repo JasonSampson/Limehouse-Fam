@@ -1,20 +1,32 @@
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 
-// Load .env into process.env exactly once, before validation below. Every
-// entry point imports loadEnv()/this module, so this is the single
-// chokepoint — same pattern as late-rent-notices and limehouse-dashboard.
 loadDotenv();
 
-// Runtime validation of all environment variables — fails fast and loudly
-// at startup instead of producing a confusing error three layers deep.
-// Minimal on purpose: this is Scotty's scaffolding pass only. Q adds
-// whatever this schema still needs (session cookie secret, etc.) once
-// Neo's data model and Oracle's auth spec are actually implemented.
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   PORT: z.coerce.number().int().positive().default(3300),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+
+  // Session cookie signing secret. Must be at least 32 characters.
+  SESSION_COOKIE_SECRET: z.string().min(32, "SESSION_COOKIE_SECRET must be at least 32 characters"),
+
+  // Separate secret for short-lived handoff tokens issued to target apps.
+  // Must differ from SESSION_COOKIE_SECRET so a compromised handoff token
+  // cannot be replayed as a session cookie.
+  HANDOFF_TOKEN_SECRET: z.string().min(32, "HANDOFF_TOKEN_SECRET must be at least 32 characters"),
+
+  // Target app base URLs for the handoff redirect. Optional — the handoff
+  // route returns 503 for any app whose URL is not configured.
+  // Empty string is treated the same as absent (undefined).
+  LATE_RENT_NOTICES_URL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
+  DASHBOARD_URL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;

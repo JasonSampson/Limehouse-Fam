@@ -2,11 +2,234 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>LimeHQ</title>
+  <title>LimeHQ — Sign In</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    @font-face {
+      font-family: 'Quicksand';
+      src: url('/fonts/Quicksand-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Quicksand';
+      src: url('/fonts/Quicksand-Medium.ttf') format('truetype');
+      font-weight: 500;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Quicksand';
+      src: url('/fonts/Quicksand-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Quicksand', system-ui, sans-serif;
+      background: #f0f4f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 2.5rem 2rem 2rem;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 2px 20px rgba(0, 0, 0, 0.09);
+    }
+
+    /* ── Logo wordmark ────────────────────────────────────────── */
+    .logo {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 2rem;
+    }
+
+    .logo-text {
+      font-family: 'Quicksand', sans-serif;
+      font-weight: 700;
+      font-size: 5.5rem;
+      line-height: 1;
+      letter-spacing: -0.5px;
+    }
+
+    .lime-part  { color: #74b62e; }
+    .dark-part  { color: #009344; }
+
+    /* The Q gets a relative container so the lime SVG can be
+       positioned inside its bowl without affecting text layout. */
+    .q-wrap {
+      position: relative;
+      display: inline-block;
+    }
+
+    .lime-in-q {
+      position: absolute;
+      top: 53%;
+      left: 51%;
+      transform: translate(-50%, -50%);
+      width: 56px;
+      height: 56px;
+      pointer-events: none;
+    }
+
+    /* ── Form ─────────────────────────────────────────────────── */
+    .form-subtitle {
+      text-align: center;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #666;
+      margin-bottom: 1.5rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #444;
+      margin-bottom: 0.3rem;
+    }
+
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: 0.6rem 0.875rem;
+      border: 1.5px solid #ddd;
+      border-radius: 7px;
+      font-family: 'Quicksand', sans-serif;
+      font-size: 1rem;
+      color: #222;
+      margin-bottom: 1rem;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #74b62e;
+      box-shadow: 0 0 0 3px rgba(116, 182, 46, 0.15);
+    }
+
+    button {
+      width: 100%;
+      padding: 0.7rem;
+      background: #74b62e;
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      font-family: 'Quicksand', sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: background 0.15s;
+    }
+
+    button:hover:not(:disabled) { background: #67a228; }
+    button:disabled { background: #aad473; cursor: not-allowed; }
+
+    #error-msg {
+      margin-top: 1rem;
+      font-size: 0.875rem;
+      color: #dc2626;
+      text-align: center;
+      display: none;
+    }
+  </style>
 </head>
 <body>
-  <h1>LimeHQ</h1>
-  <p>Scaffolding only — the real sign-in page and project launcher aren't built yet.</p>
+  <div class="card">
+
+    <!-- Wordmark: "lime" light green · "H" dark green · "Q" dark green with lime inside -->
+    <div class="logo">
+      <div class="logo-text">
+        <span class="lime-part">lime</span><span class="dark-part">H</span><span class="dark-part q-wrap">Q
+          <!-- Lime cross-section (citrus slice) inside the Q bowl -->
+          <svg class="lime-in-q" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <!-- Dark green rind (matches icon's outer arc color) -->
+            <circle cx="50" cy="50" r="49" fill="#009344"/>
+            <!-- White pith ring (matches icon's gap between rind and flesh) -->
+            <circle cx="50" cy="50" r="43" fill="white"/>
+            <!-- Lime flesh -->
+            <circle cx="50" cy="50" r="41" fill="#74b62e"/>
+            <!-- 5 diameters equally spaced at 36° → 10 equal segments -->
+            <line x1="50" y1="9"  x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+            <line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/>
+            <!-- Centre pip -->
+            <circle cx="50" cy="50" r="5" fill="white"/>
+          </svg>
+        </span>
+      </div>
+    </div>
+
+    <p class="form-subtitle">Sign in to your account</p>
+
+    <form id="login-form">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" autocomplete="username" required />
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required />
+
+      <button type="submit" id="submit-btn">Sign in</button>
+      <p id="error-msg"></p>
+    </form>
+  </div>
+
+  <script>
+    const form      = document.getElementById('login-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const errorMsg  = document.getElementById('error-msg');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorMsg.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+
+      try {
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            email:    document.getElementById('email').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.ok) {
+          window.location.href = '/launcher';
+        } else if (res.status === 429) {
+          const secs = data.retryAfterSeconds ?? 900;
+          const mins = Math.ceil(secs / 60);
+          showError(`Too many failed attempts. Account locked for ${mins} minute(s).`);
+        } else {
+          showError(data.error ?? 'Invalid email or password');
+        }
+      } catch {
+        showError('Network error — please try again.');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign in';
+      }
+    });
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = 'block';
+    }
+  </script>
 </body>
 </html>

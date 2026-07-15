@@ -900,6 +900,7 @@ const MODULE_LABEL: Record<string, string> = {
   dashboard: "Dashboard",
   late_rent_notices: "Late Rent Notices",
   limehq: "LimeHQ",
+  limona: "Limona",
 };
 
 function buildPermissionsChecklist(

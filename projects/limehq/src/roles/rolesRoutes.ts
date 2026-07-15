@@ -475,6 +475,7 @@ function buildGrid(
       dashboard: "Dashboard",
       late_rent_notices: "Late Rent Notices",
       limehq: "LimeHQ",
+      limona: "Limona",
     };
     const moduleDisplay = moduleLabel[module] ?? module.replace(/_/g, " ");
     tbodyRows.push(

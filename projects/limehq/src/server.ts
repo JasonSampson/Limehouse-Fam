@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { loadEnv } from "./config/env.js";
 import { logInfo, logError } from "./lib/appLogger.js";
 import { authRouter } from "./auth/authRoutes.js";
+import { staffRouter } from "./staff/staffRoutes.js";
 import { ApiError } from "./lib/apiError.js";
+import { requireSession } from "./auth/requireSession.js";
+import { hasPermission } from "./auth/permissions.js";
 
 const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,13 +26,34 @@ app.get("/health", (_req, res) => {
 // Auth routes: login, logout, re-auth, me, handoff.
 app.use("/auth", authRouter);
 
+// Staff management routes — protected, session-required.
+app.use("/staff", staffRouter);
+
 // Static files (login page, fonts, etc.) served before catch-all routes.
 const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
 
-// Launcher placeholder — Tron will replace this with the real app-tile page.
-app.get("/launcher", (_req, res) => {
-  res.send(`<!doctype html>
+// Launcher — session required. Only shows links the logged-in user has permission to see.
+app.get("/launcher", requireSession, async (req, res, next) => {
+  try {
+    const [canViewNotices, canManageStaff] = await Promise.all([
+      hasPermission(req.user.userId, "late_rent_notices.notices.view"),
+      hasPermission(req.user.userId, "limehq.staff_management.view"),
+    ]);
+
+    const links: string[] = [];
+    if (canViewNotices) {
+      links.push(`<a href="http://localhost:3100">Late Rent Notices →</a>`);
+    }
+    if (canManageStaff) {
+      links.push(`<a href="/staff">Manage Staff →</a>`);
+    }
+
+    const linksHtml = links.length
+      ? `<div style="display:flex;flex-direction:column;gap:.75rem;margin-top:1rem">${links.join("")}</div>`
+      : `<p style="color:#999;font-size:.9rem">No apps are available for your account yet.</p>`;
+
+    res.send(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
@@ -45,18 +69,22 @@ app.get("/launcher", (_req, res) => {
     h1 { color: #009344; font-size: 1.5rem; margin: 0 0 .5rem; }
     p  { color: #555; margin: 0 0 1.5rem; font-size: .95rem; }
     a  { display: inline-block; padding: .6rem 1.25rem; background: #74b62e;
-         color: #fff; border-radius: 7px; text-decoration: none; font-weight: 700; }
+         color: #fff; border-radius: 7px; text-decoration: none; font-weight: 700;
+         margin: 0; }
     a:hover { background: #67a228; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>You're in.</h1>
-    <p>The app launcher is being built. In the meantime you can head straight to Late Rent Notices.</p>
-    <a href="http://localhost:3100">Late Rent Notices →</a>
+    <p>The app launcher is being built. Quick links:</p>
+    ${linksHtml}
   </div>
 </body>
 </html>`);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Global error handler — catches ApiError and unexpected errors alike.

@@ -40,10 +40,9 @@ app.use(express.static(publicDir));
 // Launcher — session required. Only shows links the logged-in user has permission to see.
 app.get("/launcher", requireSession, async (req, res, next) => {
   try {
-    const [canViewNotices, canManageStaff, canManageRoles] = await Promise.all([
+    const [canViewNotices, canManageStaff] = await Promise.all([
       hasPermission(req.user.userId, "late_rent_notices.notices.view"),
       hasPermission(req.user.userId, "limehq.staff_management.view"),
-      hasPermission(req.user.userId, "limehq.role_management.view"),
     ]);
 
     const links: string[] = [];
@@ -51,10 +50,7 @@ app.get("/launcher", requireSession, async (req, res, next) => {
       links.push(`<a href="http://localhost:3100">Late Rent Notices →</a>`);
     }
     if (canManageStaff) {
-      links.push(`<a href="/staff">Manage Staff →</a>`);
-    }
-    if (canManageRoles) {
-      links.push(`<a href="/roles">Roles &amp; Permissions →</a>`);
+      links.push(`<a href="/staff">Manage Staff &amp; Permissions →</a>`);
     }
 
     const linksHtml = links.length

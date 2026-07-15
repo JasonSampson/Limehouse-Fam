@@ -8,10 +8,7 @@ import { ApiError } from "../lib/apiError.js";
 
 const router = Router();
 
-// Parse URL-encoded form bodies (standard HTML form submissions).
 router.use(express.urlencoded({ extended: false }));
-
-// Require a valid session on every staff route.
 router.use(requireSession);
 
 // ------------------------------------------------------------------ //
@@ -298,6 +295,123 @@ const SHARED_CSS = `
     font-weight: 600;
   }
 
+  /* ── Permissions page ───────────────────────────────────────────── */
+  .person-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid #eee;
+    flex-wrap: wrap;
+  }
+  .back-link {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #009344;
+    text-decoration: none;
+    width: 100%;
+    margin-bottom: -0.25rem;
+  }
+  .back-link:hover { text-decoration: underline; }
+  .person-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: #e6f4ec;
+    color: #009344;
+    font-weight: 700;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .person-info { flex: 1; min-width: 0; }
+  .person-name { font-size: 1.05rem; font-weight: 700; color: #222; }
+  .person-meta { font-size: 0.85rem; color: #666; margin-top: 0.15rem; }
+
+  .template-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .template-label { font-size: 0.875rem; font-weight: 600; color: #444; white-space: nowrap; }
+  .template-bar select {
+    padding: 0.45rem 0.75rem;
+    border: 1.5px solid #ddd;
+    border-radius: 7px;
+    font-family: 'Quicksand', sans-serif;
+    font-size: 0.9rem;
+    color: #222;
+    background: #fff;
+    flex: 1;
+    min-width: 180px;
+    max-width: 280px;
+  }
+  .template-bar select:focus {
+    outline: none;
+    border-color: #74b62e;
+    box-shadow: 0 0 0 3px rgba(116,182,46,0.15);
+  }
+
+  .checklist-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .perm-module { }
+  .perm-module-name {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #fff;
+    background: #009344;
+    padding: 0.35rem 0.75rem;
+    border-radius: 5px;
+    margin-bottom: 0.6rem;
+  }
+  .perm-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.25rem;
+    border-bottom: 1px solid #f5f5f5;
+  }
+  .perm-row:last-child { border-bottom: none; }
+  .perm-row input[type="checkbox"] {
+    width: 1.05rem;
+    height: 1.05rem;
+    accent-color: #74b62e;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .perm-row input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
+  .perm-row label {
+    font-size: 0.875rem;
+    color: #333;
+    cursor: pointer;
+    margin: 0;
+    font-weight: 500;
+  }
+  .save-btn {
+    width: auto;
+    margin-top: 0;
+    padding: 0.6rem 1.75rem;
+  }
+  .owner-note {
+    background: #f0f4f0;
+    border-radius: 7px;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    color: #555;
+    margin-bottom: 1rem;
+  }
+
   /* ── Responsive ─────────────────────────────────────────────────── */
   @media (max-width: 600px) {
     .main { padding: 1.25rem 0.75rem; }
@@ -459,13 +573,16 @@ router.get("/", async (req, res, next) => {
           !isOwner && canEdit
             ? `<a href="/staff/${esc(u.id)}/edit" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Edit</a>`
             : "";
+        const permBtn = !isOwner
+          ? `<a href="/staff/${esc(u.id)}/permissions" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Permissions</a>`
+          : "";
         return `
       <tr>
         <td>${esc(u.display_name)}</td>
         <td>${esc(u.email)}</td>
         <td>${esc(u.role_name)}${ownerBadge}</td>
         <td>${activeBadge}</td>
-        <td style="text-align:right">${editBtn}</td>
+        <td style="text-align:right;white-space:nowrap;display:flex;gap:0.4rem;justify-content:flex-end">${editBtn}${permBtn}</td>
       </tr>`;
       })
       .join("");
@@ -599,14 +716,15 @@ router.post("/", async (req, res, next) => {
     const passwordHash = await hashPassword(password);
     const pool = getAppPool();
 
+    let newUserId: number;
     try {
-      await pool.query(
+      const insertResult = await pool.query<{ id: number }>(
         `INSERT INTO users (email, password_hash, display_name, role_template_id, active)
-         VALUES ($1, $2, $3, $4, true)`,
+         VALUES ($1, $2, $3, $4, true) RETURNING id`,
         [email.toLowerCase(), passwordHash, display_name, role_template_id],
       );
+      newUserId = insertResult.rows[0].id;
     } catch (err: unknown) {
-      // Postgres unique violation code
       if (typeof err === "object" && err !== null && (err as { code?: string }).code === "23505") {
         const [displayName, roles] = await Promise.all([
           getDisplayName(req.user.userId),
@@ -628,7 +746,8 @@ router.post("/", async (req, res, next) => {
       throw err;
     }
 
-    res.redirect(302, "/staff");
+    // Send admin straight to the new person's permissions page.
+    res.redirect(302, `/staff/${newUserId}/permissions?new=1`);
   } catch (err) {
     next(err);
   }
@@ -718,6 +837,274 @@ function editStaffForm(
       </form>
     </div>`;
 }
+
+// ------------------------------------------------------------------ //
+// Permissions-page DB helpers                                         //
+// ------------------------------------------------------------------ //
+
+interface CatalogRow {
+  permission_key: string;
+  label: string;
+  module: string;
+  sort_order: number;
+}
+
+interface RoleTemplateWithPerms {
+  id: number;
+  name: string;
+  system_role_key: string | null;
+  granted_keys: string[];
+}
+
+async function fetchCatalog(): Promise<CatalogRow[]> {
+  const pool = getAppPool();
+  const r = await pool.query<CatalogRow>(
+    `SELECT permission_key, label, module, sort_order
+     FROM permission_catalog ORDER BY sort_order`,
+  );
+  return r.rows;
+}
+
+async function fetchUserGrantedKeys(userId: number): Promise<Set<string>> {
+  const pool = getAppPool();
+  const r = await pool.query<{ permission_key: string }>(
+    `SELECT permission_key FROM user_permission_overrides
+     WHERE user_id = $1 AND granted = true`,
+    [userId],
+  );
+  return new Set(r.rows.map((x) => x.permission_key));
+}
+
+async function fetchRoleTemplatesWithPerms(): Promise<RoleTemplateWithPerms[]> {
+  const pool = getAppPool();
+  const roles = await pool.query<{ id: number; name: string; system_role_key: string | null }>(
+    `SELECT id, name, system_role_key FROM role_templates
+     ORDER BY (CASE WHEN system_role_key = 'owner' THEN 0 ELSE 1 END), name`,
+  );
+  const perms = await pool.query<{ role_template_id: number; permission_key: string }>(
+    `SELECT role_template_id, permission_key FROM role_template_permissions WHERE granted = true`,
+  );
+  const permsByRole = new Map<number, string[]>();
+  for (const p of perms.rows) {
+    const arr = permsByRole.get(p.role_template_id) ?? [];
+    arr.push(p.permission_key);
+    permsByRole.set(p.role_template_id, arr);
+  }
+  return roles.rows.map((r) => ({
+    ...r,
+    granted_keys: permsByRole.get(r.id) ?? [],
+  }));
+}
+
+const MODULE_LABEL: Record<string, string> = {
+  dashboard: "Dashboard",
+  late_rent_notices: "Late Rent Notices",
+  limehq: "LimeHQ",
+};
+
+function buildPermissionsChecklist(
+  catalog: CatalogRow[],
+  grantedKeys: Set<string>,
+  canEdit: boolean,
+  userId: number,
+): string {
+  const moduleOrder: string[] = [];
+  const byModule = new Map<string, CatalogRow[]>();
+  for (const row of catalog) {
+    if (!byModule.has(row.module)) {
+      moduleOrder.push(row.module);
+      byModule.set(row.module, []);
+    }
+    byModule.get(row.module)!.push(row);
+  }
+
+  const sections = moduleOrder.map((mod) => {
+    const label = MODULE_LABEL[mod] ?? mod.replace(/_/g, " ");
+    const items = (byModule.get(mod) ?? [])
+      .map((p) => {
+        const checked = grantedKeys.has(p.permission_key) ? " checked" : "";
+        const disabled = !canEdit ? " disabled" : "";
+        const fieldName = `perm_${p.permission_key}`;
+        return `
+          <div class="perm-row">
+            <input type="checkbox" id="${esc(fieldName)}" name="${esc(fieldName)}"
+                   value="on"${checked}${disabled}
+                   data-key="${esc(p.permission_key)}"/>
+            <label for="${esc(fieldName)}">${esc(p.label)}</label>
+          </div>`;
+      })
+      .join("");
+    return `
+      <div class="perm-module">
+        <div class="perm-module-name">${esc(label)}</div>
+        ${items}
+      </div>`;
+  });
+
+  return sections.join("");
+}
+
+// ------------------------------------------------------------------ //
+// GET /staff/:id/permissions                                          //
+// ------------------------------------------------------------------ //
+
+router.get("/:id/permissions", async (req, res, next) => {
+  try {
+    const canView = await hasPermission(req.user.userId, "limehq.staff_management.view");
+    if (!canView) throw new ApiError(403, "You do not have permission to manage staff.");
+    const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+
+    const [displayName, target, catalog, grantedKeys, roleTemplates] = await Promise.all([
+      getDisplayName(req.user.userId),
+      fetchOneStaff(id),
+      fetchCatalog(),
+      fetchUserGrantedKeys(id),
+      fetchRoleTemplatesWithPerms(),
+    ]);
+
+    if (!target) throw new ApiError(404, "Staff member not found.");
+
+    const isOwner = target.system_role_key === "owner";
+    const isNew = req.query["new"] === "1";
+    const saved = req.query["saved"] === "1";
+
+    const initials = target.display_name
+      .split(" ")
+      .map((w: string) => w[0] ?? "")
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+
+    const templatesJson = JSON.stringify(
+      roleTemplates.map((r) => ({ id: r.id, name: r.name, keys: r.granted_keys })),
+    );
+
+    const bannerHtml = isNew
+      ? `<div class="success-banner">Staff member added. Set their permissions below, then save.</div>`
+      : saved
+        ? `<div class="success-banner">Permissions saved.</div>`
+        : "";
+
+    const ownerNote = isOwner
+      ? `<div class="owner-note">Owners always have all permissions — nothing to configure.</div>`
+      : "";
+
+    const checklist = isOwner
+      ? ""
+      : buildPermissionsChecklist(catalog, grantedKeys, canEdit, id);
+
+    const templateDropdown = !isOwner && canEdit
+      ? `<div class="template-bar">
+          <label for="role-template-select" class="template-label">Start from a role template:</label>
+          <select id="role-template-select">
+            <option value="">— pick a template —</option>
+            ${roleTemplates
+              .filter((r) => r.system_role_key !== "owner")
+              .map((r) => `<option value="${esc(r.id)}">${esc(r.name)}</option>`)
+              .join("")}
+          </select>
+          <button type="button" id="apply-template-btn" class="btn-secondary">Apply</button>
+        </div>`
+      : "";
+
+    const saveBtn = !isOwner && canEdit
+      ? `<button type="submit" class="btn-primary save-btn">Save Permissions</button>`
+      : "";
+
+    const formOpen  = !isOwner && canEdit ? `<form method="POST" action="/staff/${esc(id)}/permissions">` : `<div>`;
+    const formClose = !isOwner && canEdit ? `</form>` : `</div>`;
+
+    const content = `
+      <div class="card">
+        <div class="person-header">
+          <a href="/staff" class="back-link">← Manage Staff</a>
+          <div class="person-avatar">${esc(initials)}</div>
+          <div class="person-info">
+            <div class="person-name">${esc(target.display_name)}</div>
+            <div class="person-meta">${esc(target.email)} · ${esc(target.role_name)}</div>
+          </div>
+        </div>
+        ${bannerHtml}
+        ${ownerNote}
+        ${templateDropdown}
+        ${formOpen}
+          <div class="checklist-grid">
+            ${checklist}
+          </div>
+          ${saveBtn}
+        ${formClose}
+      </div>`;
+
+    const templateScript = !isOwner && canEdit ? `
+      <script>
+        const TEMPLATES = ${templatesJson};
+        document.getElementById('apply-template-btn').addEventListener('click', () => {
+          const sel = document.getElementById('role-template-select');
+          const roleId = parseInt(sel.value, 10);
+          if (!roleId) return;
+          const tmpl = TEMPLATES.find(t => t.id === roleId);
+          if (!tmpl) return;
+          const keySet = new Set(tmpl.keys);
+          document.querySelectorAll('input[type="checkbox"][data-key]').forEach(cb => {
+            cb.checked = keySet.has(cb.dataset.key);
+          });
+        });
+      </script>` : "";
+
+    res.send(layout("Permissions", displayName, content) + templateScript);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// POST /staff/:id/permissions                                         //
+// ------------------------------------------------------------------ //
+
+router.post("/:id/permissions", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to edit permissions.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+
+    const target = await fetchOneStaff(id);
+    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") throw new ApiError(403, "Owner permissions cannot be edited.");
+
+    const catalog = await fetchCatalog();
+    const body = req.body as Record<string, string>;
+    const pool = getAppPool();
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const row of catalog) {
+        const isGranted = body[`perm_${row.permission_key}`] === "on";
+        await client.query(
+          `INSERT INTO user_permission_overrides (user_id, permission_key, granted)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, permission_key) DO UPDATE SET granted = $3, updated_at = now()`,
+          [id, row.permission_key, isGranted],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.redirect(302, `/staff/${id}/permissions?saved=1`);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ------------------------------------------------------------------ //
 // GET /staff/:id/reset-password  — reset-password form               //

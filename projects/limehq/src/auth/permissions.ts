@@ -25,53 +25,50 @@ export async function getUserWithRole(userId: number): Promise<UserWithRole | nu
   return result.rows[0] ?? null;
 }
 
-// Resolution order (re-queried from DB on every call):
-// 1. user_permission_overrides for (userId, key) — if a row exists, its
-//    granted value wins regardless of the role.
-// 2. role_template_permissions for the user's assigned role — present +
-//    granted = true, absent = false (default-deny).
+// Permissions are now fully per-person. Migration 0008 seeded
+// user_permission_overrides for every existing user from their role template.
+// New users start with no rows (no access) until explicitly granted on their
+// permissions page. Owners always have all permissions regardless of rows.
 export async function hasPermission(userId: number, key: string): Promise<boolean> {
   const pool = getAppPool();
 
-  const override = await pool.query<{ granted: boolean }>(
-    `SELECT granted
-     FROM user_permission_overrides
+  const userRow = await pool.query<{ system_role_key: string | null }>(
+    `SELECT rt.system_role_key
+     FROM users u JOIN role_templates rt ON rt.id = u.role_template_id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  if (userRow.rows[0]?.system_role_key === "owner") return true;
+
+  const result = await pool.query<{ granted: boolean }>(
+    `SELECT granted FROM user_permission_overrides
      WHERE user_id = $1 AND permission_key = $2`,
     [userId, key],
   );
-  if (override.rows.length > 0) {
-    return override.rows[0].granted;
-  }
-
-  const roleGrant = await pool.query<{ granted: boolean }>(
-    `SELECT rtp.granted
-     FROM role_template_permissions rtp
-     JOIN users u ON u.role_template_id = rtp.role_template_id
-     WHERE u.id = $1 AND rtp.permission_key = $2`,
-    [userId, key],
-  );
-  if (roleGrant.rows.length > 0) {
-    return roleGrant.rows[0].granted;
-  }
-
-  return false; // default-deny
+  return result.rows[0]?.granted ?? false;
 }
 
-// Used by GET /auth/me. Fetches the full effective permission set in one
-// query instead of calling hasPermission() per key, which would be N+1.
-// Logic: override wins if present, otherwise role grant, otherwise false.
+// Full effective permission set for a user — used by GET /auth/me.
 export async function getEffectivePermissions(userId: number): Promise<string[]> {
   const pool = getAppPool();
+
+  const userRow = await pool.query<{ system_role_key: string | null }>(
+    `SELECT rt.system_role_key
+     FROM users u JOIN role_templates rt ON rt.id = u.role_template_id
+     WHERE u.id = $1`,
+    [userId],
+  );
+  if (userRow.rows[0]?.system_role_key === "owner") {
+    const all = await pool.query<{ permission_key: string }>(
+      `SELECT permission_key FROM permission_catalog ORDER BY sort_order`,
+    );
+    return all.rows.map((r) => r.permission_key);
+  }
+
   const result = await pool.query<{ permission_key: string }>(
-    `SELECT pc.permission_key
-     FROM permission_catalog pc
-     LEFT JOIN user_permission_overrides upo
-       ON upo.user_id = $1 AND upo.permission_key = pc.permission_key
-     LEFT JOIN role_template_permissions rtp
-       ON rtp.permission_key = pc.permission_key
-      AND rtp.role_template_id = (SELECT role_template_id FROM users WHERE id = $1)
-     WHERE COALESCE(upo.granted, rtp.granted, false) = true
-     ORDER BY pc.sort_order`,
+    `SELECT permission_key FROM user_permission_overrides
+     WHERE user_id = $1 AND granted = true
+     ORDER BY permission_key`,
     [userId],
   );
   return result.rows.map((r) => r.permission_key);

@@ -7,6 +7,7 @@ import { loadEnv } from "./config/env.js";
 import { logInfo, logError } from "./lib/appLogger.js";
 import { authRouter } from "./auth/authRoutes.js";
 import { staffRouter } from "./staff/staffRoutes.js";
+import { rolesRouter } from "./roles/rolesRoutes.js";
 import { ApiError } from "./lib/apiError.js";
 import { requireSession } from "./auth/requireSession.js";
 import { hasPermission } from "./auth/permissions.js";
@@ -29,6 +30,9 @@ app.use("/auth", authRouter);
 // Staff management routes — protected, session-required.
 app.use("/staff", staffRouter);
 
+// Roles & Permissions routes — protected, session-required.
+app.use("/roles", rolesRouter);
+
 // Static files (login page, fonts, etc.) served before catch-all routes.
 const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
@@ -36,9 +40,10 @@ app.use(express.static(publicDir));
 // Launcher — session required. Only shows links the logged-in user has permission to see.
 app.get("/launcher", requireSession, async (req, res, next) => {
   try {
-    const [canViewNotices, canManageStaff] = await Promise.all([
+    const [canViewNotices, canManageStaff, canManageRoles] = await Promise.all([
       hasPermission(req.user.userId, "late_rent_notices.notices.view"),
       hasPermission(req.user.userId, "limehq.staff_management.view"),
+      hasPermission(req.user.userId, "limehq.role_management.view"),
     ]);
 
     const links: string[] = [];
@@ -47,6 +52,9 @@ app.get("/launcher", requireSession, async (req, res, next) => {
     }
     if (canManageStaff) {
       links.push(`<a href="/staff">Manage Staff →</a>`);
+    }
+    if (canManageRoles) {
+      links.push(`<a href="/roles">Roles &amp; Permissions →</a>`);
     }
 
     const linksHtml = links.length

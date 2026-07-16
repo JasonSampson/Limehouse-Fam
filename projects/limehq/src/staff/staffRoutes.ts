@@ -95,36 +95,33 @@ const SHARED_CSS = `
     pointer-events: none;
   }
 
-  .nav-right {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+  .nav-right { display: flex; align-items: center; gap: 1rem; }
+  .user-menu { position: relative; }
+  .user-menu-trigger {
+    background: none; border: none; font-family: 'Quicksand', sans-serif;
+    font-size: .875rem; font-weight: 600; color: #333;
+    cursor: pointer; display: flex; align-items: center; gap: .3rem;
+    padding: .3rem .5rem; border-radius: 7px;
   }
-  .nav-user {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #555;
+  .user-menu-trigger:hover { background: #f0f4f0; }
+  .user-menu-caret { font-size: .65rem; color: #888; }
+  .user-menu-dropdown {
+    position: absolute; right: 0; top: calc(100% + .4rem);
+    background: #fff; border: 1px solid #e0e8e0; border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.12); min-width: 175px; z-index: 100;
+    padding: .3rem; display: none;
   }
-  .btn-chpw {
-    background: none; border: none; font-family: inherit;
-    font-size: .85rem; font-weight: 600; color: #74b62e;
-    cursor: pointer; text-decoration: underline; padding: 0;
-    white-space: nowrap;
+  .user-menu-dropdown.open { display: block; }
+  .user-menu-item {
+    display: block; width: 100%; text-align: left;
+    padding: .55rem .875rem; border-radius: 7px;
+    font-family: 'Quicksand', sans-serif; font-size: .875rem; font-weight: 600;
+    color: #333; text-decoration: none;
+    background: none; border: none; cursor: pointer; transition: background .1s;
   }
-  .btn-chpw:hover { color: #009344; }
-  .btn-signout {
-    background: none;
-    border: 1.5px solid #ddd;
-    border-radius: 7px;
-    padding: 0.35rem 0.875rem;
-    font-family: 'Quicksand', sans-serif;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: #555;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-  }
-  .btn-signout:hover { background: #f5f5f5; border-color: #ccc; }
+  .user-menu-item:hover { background: #f0f4f0; color: #333; }
+  .user-menu-signout { color: #dc2626; }
+  .user-menu-signout:hover { background: #fef2f2; }
 
   /* ── Page content ───────────────────────────────────────────────── */
   .main {
@@ -446,23 +443,38 @@ function layout(title: string, displayName: string, content: string): string {
       <span class="lime-part">lime</span><span class="hq-part">H</span><span class="hq-part q-wrap">Q<svg class="lime-in-q-nav" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="white"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="white"/></svg></span>
     </a>
     <div class="nav-right">
-      <span class="nav-user">${esc(displayName)}</span>
-      <a href="/account/password" class="btn-chpw">Change password</a>
-      <form method="POST" action="/auth/logout" id="signout-form" style="margin:0">
-        <button type="submit" class="btn-signout">Sign out</button>
-      </form>
+      <div class="user-menu">
+        <button class="user-menu-trigger" id="user-menu-btn" aria-haspopup="true" aria-expanded="false">
+          ${esc(displayName)} <span class="user-menu-caret">▾</span>
+        </button>
+        <div class="user-menu-dropdown" id="user-menu-dropdown">
+          <a href="/account/password" class="user-menu-item">Change password</a>
+          <button class="user-menu-item user-menu-signout" id="signout-btn">Sign out</button>
+        </div>
+      </div>
     </div>
   </nav>
   <main class="main">
     ${content}
   </main>
   <script>
-    // Intercept sign-out, POST it, then redirect to the login page.
-    document.getElementById('signout-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
-      window.location.href = '/';
-    });
+    (function() {
+      const btn = document.getElementById('user-menu-btn');
+      const dd  = document.getElementById('user-menu-dropdown');
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        dd.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(dd.classList.contains('open')));
+      });
+      document.addEventListener('click', function() {
+        dd.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+      document.getElementById('signout-btn').addEventListener('click', async function() {
+        await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        window.location.href = '/';
+      });
+    })();
   </script>
 </body>
 </html>`;

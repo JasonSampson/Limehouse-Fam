@@ -34,17 +34,19 @@ async function verifySessionToken(token: string): Promise<StaffUser> {
 
 export const SESSION_COOKIE_NAME = "lh_session";
 
-const sessionCookieOptions = {
-  httpOnly: true,
-  secure: true,
-  sameSite: "strict" as const,
-  maxAge: SESSION_TTL_SECONDS * 1000,
-  path: "/",
-};
+function sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: loadEnv().NODE_ENV === "production",
+    sameSite: "strict" as const,
+    maxAge: SESSION_TTL_SECONDS * 1000,
+    path: "/",
+  };
+}
 
 export async function issueSession(res: Response, user: StaffUser): Promise<void> {
   const token = await createSessionToken(user);
-  res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions);
+  res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions());
 }
 
 export function clearSession(res: Response): void {

@@ -1,57 +1,54 @@
 import { Router } from "express";
-import { generatePkcePair, generateState } from "../auth/pkce.js";
-import { buildAuthorizeUrl, exchangeCodeForToken, verifyIdToken } from "../auth/entra.js";
+import { jwtVerify } from "jose";
 import { issueSession, clearSession, requireLogin, type AuthedRequest } from "../auth/session.js";
-import { resolveLogin } from "../auth/loginResolver.js";
-import { logError, logWarn } from "../lib/logger.js";
+import { findByEmail, bumpLastLogin } from "../db/staffUsers.js";
+import { loadEnv } from "../config/env.js";
+import { logError } from "../lib/logger.js";
 
 export const authRoutes = Router();
 
-// PKCE verifier/state travel in a short-lived, httpOnly cookie scoped to the
-// auth flow only — never stored server-side.
-authRoutes.get("/auth/login", (req, res) => {
-  const { verifier, challenge } = generatePkcePair();
-  const state = generateState();
-
-  res.cookie("lh_pkce_verifier", verifier, { httpOnly: true, secure: true, sameSite: "strict", maxAge: 10 * 60 * 1000 });
-  res.cookie("lh_oauth_state", state, { httpOnly: true, secure: true, sameSite: "strict", maxAge: 10 * 60 * 1000 });
-
-  res.redirect(buildAuthorizeUrl(state, challenge));
-});
-
-authRoutes.get("/auth/callback", async (req, res) => {
+// Accepts a short-lived handoff token from LimeHQ and issues a dashboard
+// session. LimeHQ redirects here after a successful login so staff don't
+// need a separate dashboard password.
+authRoutes.get("/auth/limehq-callback", async (req, res) => {
+  const token = req.query.token;
+  if (typeof token !== "string") {
+    res.status(400).send("Invalid sign-in link.");
+    return;
+  }
   try {
-    const { code, state } = req.query as { code?: string; state?: string };
-    const expectedState = req.cookies?.lh_oauth_state;
-    const verifier = req.cookies?.lh_pkce_verifier;
+    const env = loadEnv();
+    const secret = new TextEncoder().encode(env.LIMEHQ_HANDOFF_SECRET);
+    const { payload } = await jwtVerify(token, secret);
+    const email = payload.email as string;
 
-    if (!code || !state || !verifier || state !== expectedState) {
-      res.status(400).send("Invalid or expired login attempt. Please try signing in again.");
+    const user = await findByEmail(email);
+    if (!user || !user.active) {
+      res.status(403).send("Your LimeHQ account does not have access to this dashboard. Contact Jason.");
       return;
     }
 
-    const { idToken } = await exchangeCodeForToken(code, verifier);
-    const identity = await verifyIdToken(idToken);
-
-    const resolution = await resolveLogin(identity);
-    res.clearCookie("lh_pkce_verifier");
-    res.clearCookie("lh_oauth_state");
-
-    if (resolution.outcome === "rejected") {
-      logWarn("unauthorized login attempt", { email: identity.email });
-      res.status(403).send("Your account is not authorized to access this dashboard. Contact Jason.");
-      return;
-    }
-
-    await issueSession(res, { id: resolution.user.id, role: resolution.user.role });
+    await bumpLastLogin(user.id);
+    await issueSession(res, { id: user.id, role: user.role });
     res.redirect("/");
   } catch (err) {
-    logError("auth callback failed", { error: err instanceof Error ? err.message : String(err) });
-    res.status(500).send("Login failed. Please try again or contact Jason.");
+    logError("limehq-callback failed", {
+      type: err instanceof Error ? err.constructor.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      code: (err as Record<string, unknown>).code ?? null,
+      raw: String(err),
+    });
+    res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
   }
 });
 
-authRoutes.post("/auth/logout", (req, res) => {
+// Redirect any direct login attempts to LimeHQ — it's the single front door.
+authRoutes.get("/auth/login", (_req, res) => {
+  const env = loadEnv();
+  res.redirect(`${env.LIMEHQ_URL}/auth/handoff?app=dashboard`);
+});
+
+authRoutes.post("/auth/logout", (_req, res) => {
   clearSession(res);
   res.status(204).end();
 });

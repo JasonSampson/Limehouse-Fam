@@ -55,7 +55,7 @@ app.use(async (req, res, next) => {
   // un-normalizable path has no business reaching express.static unchecked.
   const effectivePath = normalizePath(req.path);
   if (effectivePath === null) {
-    res.redirect("/login.html");
+    res.redirect(`${env.LIMEHQ_URL}/auth/handoff?app=dashboard`);
     return;
   }
 
@@ -66,7 +66,7 @@ app.use(async (req, res, next) => {
 
   const user = await getSessionUser(req);
   if (!user) {
-    res.redirect("/login.html");
+    res.redirect(`${env.LIMEHQ_URL}/auth/handoff?app=dashboard`);
     return;
   }
 

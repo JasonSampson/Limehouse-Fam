@@ -52,15 +52,13 @@ const envSchema = z.object({
   // sign-in (see src/auth/session.ts). Not related to Entra itself.
   SESSION_COOKIE_SECRET: z.string().min(16, "SESSION_COOKIE_SECRET must be at least 16 chars"),
 
-  // Microsoft Entra SSO — this project's OWN app registration, separate from
-  // late-rent-notices' (different redirect URI, own client secret so it can
-  // be revoked independently). Jason must register this dashboard as its own
-  // app in the Microsoft 365 admin center; these four values come from that
-  // registration. Same naming convention as late-rent-notices' env.ts.
-  ENTRA_TENANT_ID: z.string().min(1, "ENTRA_TENANT_ID is required"),
-  ENTRA_CLIENT_ID: z.string().min(1, "ENTRA_CLIENT_ID is required"),
-  ENTRA_CLIENT_SECRET: z.string().min(1, "ENTRA_CLIENT_SECRET is required"),
-  ENTRA_REDIRECT_URI: z.string().url("ENTRA_REDIRECT_URI must be a full URL"),
+  // Shared secret with LimeHQ — used to verify handoff tokens so the dashboard
+  // can trust that a login request really came from LimeHQ. Must match
+  // HANDOFF_TOKEN_SECRET in LimeHQ's .env exactly.
+  LIMEHQ_HANDOFF_SECRET: z.string().min(16, "LIMEHQ_HANDOFF_SECRET must be at least 16 chars"),
+
+  // Where LimeHQ is running — used to redirect unauthenticated users to log in.
+  LIMEHQ_URL: z.string().url().default("http://localhost:3300"),
 });
 
 export type Env = z.infer<typeof envSchema>;

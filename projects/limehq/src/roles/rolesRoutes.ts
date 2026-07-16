@@ -112,6 +112,13 @@ const SHARED_CSS = `
     font-weight: 600;
     color: #555;
   }
+  .btn-chpw {
+    background: none; border: none; font-family: inherit;
+    font-size: .85rem; font-weight: 600; color: #74b62e;
+    cursor: pointer; text-decoration: underline; padding: 0;
+    white-space: nowrap;
+  }
+  .btn-chpw:hover { color: #009344; }
   .btn-signout {
     background: none;
     border: 1.5px solid #ddd;
@@ -349,6 +356,7 @@ function layout(
     <div class="nav-right">
       ${manageStaffLink}
       <span class="nav-user">${esc(displayName)}</span>
+      <a href="/account/password" class="btn-chpw">Change password</a>
       <form method="POST" action="/auth/logout" id="signout-form" style="margin:0">
         <button type="submit" class="btn-signout">Sign out</button>
       </form>

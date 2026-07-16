@@ -11,6 +11,7 @@ import { rolesRouter } from "./roles/rolesRoutes.js";
 import { ApiError } from "./lib/apiError.js";
 import { requireSession } from "./auth/requireSession.js";
 import { SESSION_COOKIE_NAME } from "./auth/session.js";
+import { accountRouter } from "./auth/accountRoutes.js";
 import { hasPermission } from "./auth/permissions.js";
 import { getAppPool } from "./db/pool.js";
 
@@ -34,6 +35,9 @@ app.use("/staff", staffRouter);
 
 // Roles & Permissions routes — protected, session-required.
 app.use("/roles", rolesRouter);
+
+// Account self-service (change password) — protected, session-required.
+app.use("/", accountRouter);
 
 // Static files (login page, fonts, etc.) served before catch-all routes.
 const publicDir = path.join(__dirname, "..", "public");
@@ -121,18 +125,6 @@ app.get(
       },
     ];
 
-    const LIME_SVG = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="50" cy="50" r="49" fill="#009344"/>
-      <circle cx="50" cy="50" r="43" fill="#ffffff"/>
-      <circle cx="50" cy="50" r="41" fill="#74b62e"/>
-      <line x1="50" y1="9" x2="50" y2="91" stroke="#009344" stroke-width="2.5"/>
-      <line x1="50" y1="50" x2="86.8" y2="26.8" stroke="#009344" stroke-width="2.5"/>
-      <line x1="50" y1="50" x2="13.2" y2="26.8" stroke="#009344" stroke-width="2.5"/>
-      <line x1="50" y1="50" x2="13.2" y2="73.2" stroke="#009344" stroke-width="2.5"/>
-      <line x1="50" y1="50" x2="86.8" y2="73.2" stroke="#009344" stroke-width="2.5"/>
-      <circle cx="50" cy="50" r="5" fill="#009344"/>
-    </svg>`;
-
     const tileCards = tiles
       .filter((t) => t.available)
       .map((t) => {
@@ -202,15 +194,29 @@ app.get(
       justify-content: space-between;
     }
     .nav-brand {
-      display: flex;
-      align-items: center;
-      gap: .45rem;
-      font-size: 1.6rem;
+      font-family: 'Quicksand', sans-serif;
       font-weight: 700;
-      color: #009344;
+      font-size: 1.6rem;
       text-decoration: none;
+      letter-spacing: -0.3px;
+      line-height: 1;
     }
-    .nav-brand svg { width: 28px; height: 28px; flex-shrink: 0; }
+    .lime-part { color: #74b62e; }
+    .hq-part   { color: #009344; }
+    .q-wrap { position: relative; display: inline-block; }
+    .lime-in-q-nav {
+      position: absolute;
+      top: 53%; left: 51%;
+      transform: translate(-50%, -50%);
+      width: 15px; height: 15px;
+      pointer-events: none;
+    }
+    .btn-chpw {
+      background: none; border: none; font-family: inherit;
+      font-size: .85rem; font-weight: 600; color: #74b62e;
+      cursor: pointer; text-decoration: underline; padding: 0;
+    }
+    .btn-chpw:hover { color: #009344; }
     .nav-right {
       display: flex;
       align-items: center;
@@ -319,14 +325,10 @@ app.get(
 </head>
 <body>
   <nav class="nav">
-    <a class="nav-brand" href="/launcher">
-      <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        ${LIME_SVG.replace(/<svg[^>]*>|<\/svg>/g, "")}
-      </svg>
-      LimeHQ
-    </a>
+    <a href="/launcher" class="nav-brand"><span class="lime-part">lime</span><span class="hq-part">H</span><span class="hq-part q-wrap">Q<svg class="lime-in-q-nav" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="white"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="white"/></svg></span></a>
     <div class="nav-right">
       <span class="nav-user">${displayName}</span>
+      <a href="/account/password" class="btn-chpw">Change password</a>
       <form method="POST" action="/auth/logout" id="signout-form" style="margin:0">
         <button type="submit" class="btn-signout">Sign out</button>
       </form>

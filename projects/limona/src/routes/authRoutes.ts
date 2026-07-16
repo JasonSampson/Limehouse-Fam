@@ -1,6 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
+import { jwtVerify } from "jose";
 import { getPool } from "../db/pool.js";
 import { loadEnv } from "../config/env.js";
 import { createSessionCookieValue, sessionCookieOptions, SESSION_COOKIE_NAME } from "../auth/session.js";
@@ -10,6 +11,39 @@ export const authRoutes = Router();
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+});
+
+// Accepts a short-lived handoff token from LimeHQ and issues a Limona session.
+// LimeHQ redirects here after a successful login so staff don't need a
+// separate Limona password.
+authRoutes.get("/auth/limehq-callback", async (req, res) => {
+  const token = req.query.token;
+  if (typeof token !== "string") {
+    res.status(400).send("Invalid sign-in link.");
+    return;
+  }
+  try {
+    const env = loadEnv();
+    const secret = new TextEncoder().encode(env.LIMEHQ_HANDOFF_SECRET);
+    const { payload } = await jwtVerify(token, secret);
+    const email = payload.email as string;
+
+    const result = await getPool().query<{ id: string }>(
+      "SELECT id FROM users WHERE lower(email) = lower($1) AND status = 'active'",
+      [email],
+    );
+    const user = result.rows[0];
+    if (!user) {
+      res.status(403).send("Your LimeHQ account does not have access to Limona. Contact Jason.");
+      return;
+    }
+
+    const cookieValue = createSessionCookieValue(user.id);
+    res.cookie(SESSION_COOKIE_NAME, cookieValue, sessionCookieOptions(env));
+    res.redirect("/dashboard.html");
+  } catch {
+    res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
+  }
 });
 
 authRoutes.post("/api/auth/login", async (req, res) => {

@@ -35,6 +35,11 @@ const envSchema = z.object({
   // Where uploaded original files live on disk. Relative paths are resolved
   // from the project root. Must be writable by the process running the app.
   STORAGE_DIR: z.string().default("storage"),
+
+  // Shared secret with LimeHQ — used to verify handoff tokens so Limona
+  // can trust that a login request really came from LimeHQ. Must match
+  // HANDOFF_TOKEN_SECRET in LimeHQ's .env exactly.
+  LIMEHQ_HANDOFF_SECRET: z.string().min(16, "LIMEHQ_HANDOFF_SECRET must be at least 16 chars"),
 });
 
 export type Env = z.infer<typeof envSchema>;

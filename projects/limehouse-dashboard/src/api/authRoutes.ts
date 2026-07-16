@@ -58,5 +58,6 @@ authRoutes.post("/auth/logout", (_req, res) => {
 // are Admin-only). Session already carries id/role — this just echoes it
 // back as JSON.
 authRoutes.get("/api/me", requireLogin, (req: AuthedRequest, res) => {
-  res.json({ id: req.user!.id, role: req.user!.role });
+  const env = loadEnv();
+  res.json({ id: req.user!.id, role: req.user!.role, limehqUrl: env.LIMEHQ_URL });
 });

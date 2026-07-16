@@ -8,7 +8,10 @@ function renderHeader(activeTab) {
 
   el.innerHTML = `
     <div class="app-brand">
-      <img class="app-brand-logo" src="/images/limehouse-logo.png" alt="Limehouse Property Management" />
+      <a href="#" id="limehq-home-link" style="display:inline-flex;align-items:center;gap:0.35rem;text-decoration:none;font-weight:700;font-size:1.4rem;line-height:1;letter-spacing:-0.3px">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width:22px;height:22px;flex-shrink:0"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="#ffffff"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="73.2" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="73.2" stroke="#009344" stroke-width="2.5"/><circle cx="50" cy="50" r="5" fill="#009344"/></svg>
+        <span style="color:#74b62e">lime</span><span style="color:#009344">HQ</span>
+      </a>
       <button class="logout-btn" id="logout-btn">Log out</button>
     </div>
     <div class="sync-line">
@@ -70,6 +73,8 @@ function renderHeader(activeTab) {
 async function renderAdminOnlyTabs(activeTab) {
   try {
     const me = await apiGet("/api/me");
+    const homeLink = document.getElementById("limehq-home-link");
+    if (homeLink && me.limehqUrl) homeLink.href = me.limehqUrl + "/launcher";
     if (me.role !== "admin") return;
 
     const tabs = document.getElementById("app-tabs");

@@ -5,15 +5,16 @@ import { getAppPool } from "../db/pool.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 import { loadEnv } from "../config/env.js";
+import { logError } from "../lib/appLogger.js";
 
 export const authRoutes = Router();
 
 // Accepts a short-lived handoff token from LimeHQ and issues a Late Rent
 // Notices session. LimeHQ redirects here after login so staff don't need
 // a separate password for this app.
-authRoutes.get("/auth/limehq-callback", async (req, res) => {
+authRoutes.post("/auth/limehq-callback", async (req, res) => {
   const trace = startTrace();
-  const token = req.query.token;
+  const token = req.body.token;
   if (typeof token !== "string") {
     res.status(400).send("Invalid sign-in link.");
     return;
@@ -68,7 +69,7 @@ authRoutes.get("/auth/limehq-callback", async (req, res) => {
 
     res.redirect("/");
   } catch (err) {
-    console.error("limehq-callback failed", err instanceof Error ? err.message : String(err));
+    logError("limehq-callback failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
   }
 });

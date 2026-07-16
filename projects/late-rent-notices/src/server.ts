@@ -1,4 +1,5 @@
 import express from "express";
+import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,10 @@ const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
+app.use(helmet());
+// TODO(production): add helmet.hsts({ maxAge: 31536000, includeSubDomains: true }) once behind HTTPS
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
 app.get("/health", (_req, res) => {

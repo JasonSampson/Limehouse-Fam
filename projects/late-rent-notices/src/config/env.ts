@@ -30,7 +30,7 @@ const envSchema = z.object({
   GRAPH_SENDER_MAILBOX: z.string().email(),
 
   PORT: z.coerce.number().int().positive().default(3000),
-  SESSION_COOKIE_SECRET: z.string().min(16, "SESSION_COOKIE_SECRET must be at least 16 chars"),
+  SESSION_COOKIE_SECRET: z.string().min(32, "SESSION_COOKIE_SECRET must be at least 32 characters"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
   // Default true: shadow mode is the required starting state per the plan.

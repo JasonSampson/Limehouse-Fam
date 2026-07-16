@@ -417,7 +417,10 @@ export async function resendBouncedRecipient(
       "not_sent"
     );
   }
-  if (notice.assigned_pm_id !== params.correctingPmId) {
+  // notices.assigned_pm_id is NOT NULL (migration 0010), but node-postgres
+  // returns bigint columns as strings at runtime regardless of the TS type
+  // annotation above — coerce before comparing or this always mismatches.
+  if (Number(notice.assigned_pm_id) !== params.correctingPmId) {
     throw new SendBlockedError("This notice is not assigned to you.", "not_assigned");
   }
   if (notice.amount_due_at_send == null || notice.days_late_at_send == null || notice.sent_at == null) {

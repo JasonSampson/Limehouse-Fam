@@ -56,7 +56,7 @@ export async function runEscalationCheck(jobPool: Pool): Promise<EscalationResul
       await jobPool.query(
         `INSERT INTO escalation_reminders (notice_id, expiry_date, balance_at_check, sent_to_pm_id, sent_at)
          VALUES ($1, ($2::timestamptz + INTERVAL '14 days')::date, 0, $3, now())
-         ON CONFLICT (notice_id) DO NOTHING`,
+         ON CONFLICT (notice_id) WHERE notice_id IS NOT NULL DO NOTHING`,
         [row.notice_id, row.sent_at, row.pm_id]
       );
       continue;
@@ -73,7 +73,7 @@ export async function runEscalationCheck(jobPool: Pool): Promise<EscalationResul
     await jobPool.query(
       `INSERT INTO escalation_reminders (notice_id, expiry_date, balance_at_check, sent_to_pm_id, sent_at)
        VALUES ($1, ($2::timestamptz + INTERVAL '14 days')::date, $3, $4, now())
-       ON CONFLICT (notice_id) DO NOTHING`,
+       ON CONFLICT (notice_id) WHERE notice_id IS NOT NULL DO NOTHING`,
       [row.notice_id, row.sent_at, liveBalance.balance, row.pm_id]
     );
 

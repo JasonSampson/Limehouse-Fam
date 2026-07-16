@@ -31,5 +31,6 @@ meRoutes.get("/api/me", async (req: AuthedRequest, res) => {
     role: me?.role ?? "pm",
     isFallbackDecisionMaker: me?.is_fallback_decision_maker ?? false,
     shadowMode: env.SHADOW_MODE,
+    limehqUrl: env.LIMEHQ_URL,
   });
 });

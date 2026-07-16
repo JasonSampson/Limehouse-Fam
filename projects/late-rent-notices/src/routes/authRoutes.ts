@@ -67,7 +67,8 @@ authRoutes.get("/auth/limehq-callback", async (req, res) => {
     });
 
     res.redirect("/");
-  } catch {
+  } catch (err) {
+    console.error("limehq-callback failed", err instanceof Error ? err.message : String(err));
     res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
   }
 });

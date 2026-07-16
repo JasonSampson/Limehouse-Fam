@@ -232,6 +232,7 @@ router.get("/me", requireSession, async (req, res, next) => {
 const KNOWN_APPS: Record<string, (env: ReturnType<typeof loadEnv>) => string | undefined> = {
   late_rent_notices: (env) => env.LATE_RENT_NOTICES_URL,
   dashboard: (env) => env.DASHBOARD_URL,
+  limona: (env) => env.LIMONA_URL,
 };
 
 router.get("/handoff", requireSession, async (req, res, next) => {

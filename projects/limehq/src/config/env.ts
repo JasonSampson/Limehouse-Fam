@@ -27,6 +27,10 @@ const envSchema = z.object({
     (v) => (v === "" ? undefined : v),
     z.string().url().optional(),
   ),
+  LIMONA_URL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
 });
 
 export type Env = z.infer<typeof envSchema>;

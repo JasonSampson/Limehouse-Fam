@@ -5,7 +5,6 @@ import { verifyPassword, hashPassword } from "./password.js";
 import { getAppPool } from "../db/pool.js";
 
 export const accountRouter = Router();
-accountRouter.use(requireSession);
 
 function esc(s: unknown): string {
   return String(s ?? "")
@@ -105,7 +104,7 @@ const changePasswordSchema = z.object({
   confirm_password: z.string().min(1, "Please confirm your new password."),
 });
 
-accountRouter.get("/account/password", async (req, res, next) => {
+accountRouter.get("/account/password", requireSession, async (req, res, next) => {
   try {
     const pool = getAppPool();
     const result = await pool.query<{ display_name: string }>(
@@ -120,7 +119,7 @@ accountRouter.get("/account/password", async (req, res, next) => {
   }
 });
 
-accountRouter.post("/account/password", async (req, res, next) => {
+accountRouter.post("/account/password", requireSession, async (req, res, next) => {
   try {
     const pool = getAppPool();
     const nameResult = await pool.query<{ display_name: string }>(

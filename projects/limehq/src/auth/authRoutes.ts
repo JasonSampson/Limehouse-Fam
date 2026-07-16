@@ -252,8 +252,18 @@ router.get("/handoff", requireSession, async (req, res, next) => {
     }
 
     const token = await createHandoffToken(req.user.userId, req.user.email);
-    const redirectUrl = `${targetBase}/auth/limehq-callback?token=${encodeURIComponent(token)}`;
-    res.redirect(302, redirectUrl);
+    // POST the token via a hidden form so it never appears in server logs or
+    // the browser's URL bar (BLOCKER 4 — handoff token must not be a query param).
+    // targetBase comes from our own env config; token is a JWT we just signed —
+    // both are safe to interpolate directly into this server-rendered page.
+    res.send(`<!doctype html>
+<html><head><meta charset="utf-8"/></head>
+<body>
+<form id="hf" method="POST" action="${targetBase}/auth/limehq-callback">
+  <input type="hidden" name="token" value="${token}"/>
+</form>
+<script>document.getElementById('hf').submit();</script>
+</body></html>`);
   } catch (err) {
     next(err);
   }

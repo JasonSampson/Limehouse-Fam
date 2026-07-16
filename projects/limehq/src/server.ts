@@ -1,4 +1,5 @@
 import express from "express";
+import helmet from "helmet";
 import type { Request, Response, NextFunction } from "express";
 import cookieParser from "cookie-parser";
 import path from "node:path";
@@ -19,6 +20,8 @@ const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
+app.use(helmet());
+// TODO(production): add helmet.hsts({ maxAge: 31536000, includeSubDomains: true }) once behind HTTPS
 app.use(express.json());
 app.use(cookieParser());
 
@@ -42,6 +45,16 @@ app.use("/", accountRouter);
 // Static files (login page, fonts, etc.) served before catch-all routes.
 const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
+
+/** Escape a value for safe insertion into HTML. */
+function esc(val: string | number | null | undefined): string {
+  return String(val ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
 
 // Launcher — session required. Permission-aware tile grid.
 app.get(
@@ -329,7 +342,7 @@ app.get(
     <div class="nav-right">
       <div class="user-menu">
         <button class="user-menu-trigger" id="user-menu-btn" aria-haspopup="true" aria-expanded="false">
-          ${displayName} <span class="user-menu-caret">▾</span>
+          ${esc(displayName)} <span class="user-menu-caret">▾</span>
         </button>
         <div class="user-menu-dropdown" id="user-menu-dropdown">
           <a href="/account/password" class="user-menu-item">Change password</a>
@@ -358,7 +371,7 @@ app.get(
     </script>
   </nav>
   <main class="main">
-    <h1 class="greeting">${greeting}, ${firstName}.</h1>
+    <h1 class="greeting">${greeting}, ${esc(firstName)}.</h1>
     <p class="sub">What would you like to work on today?</p>
     ${noApps}
     <div class="tile-grid">

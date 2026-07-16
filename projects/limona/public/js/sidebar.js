@@ -87,17 +87,17 @@ function renderSidebar({ activePage, user }) {
     `;
   }).join("");
 
+  const limehqHref = (user?.limehqUrl || "#") + "/launcher";
   root.innerHTML = `
     <div class="sidebar-mascot">
       <img src="/images/limona-avatar.png" alt="Limona" class="sidebar-mascot-icon" />
       <span class="sidebar-mascot-name">Limona</span>
     </div>
     <div class="sidebar-brand">
-      <img src="/images/limehouse-logo.png" alt="Limehouse Property Management" class="sidebar-brand-icon" />
-      <div class="sidebar-brand-text">
-        <div class="sidebar-brand-name">Limehouse</div>
-        <div class="sidebar-brand-subtitle">Admin</div>
-      </div>
+      <a href="${limehqHref}" style="display:inline-flex;align-items:center;gap:0.35rem;text-decoration:none;font-weight:700;font-size:1.15rem;line-height:1;letter-spacing:-0.3px">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width:20px;height:20px;flex-shrink:0"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="#ffffff"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="73.2" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="73.2" stroke="#009344" stroke-width="2.5"/><circle cx="50" cy="50" r="5" fill="#009344"/></svg>
+        <span style="color:#74b62e">lime</span><span style="color:#009344">HQ</span>
+      </a>
     </div>
     <div class="sidebar-nav">${sectionsHtml}</div>
     <div class="sidebar-account">

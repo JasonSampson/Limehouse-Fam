@@ -93,7 +93,8 @@ authRoutes.get("/api/auth/me", (req, res) => {
     res.status(401).json({ error: "Not logged in." });
     return;
   }
-  res.json({ user: { id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role } });
+  const env = loadEnv();
+  res.json({ user: { id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role, limehqUrl: env.LIMEHQ_URL } });
 });
 
 const redeemInviteSchema = z.object({

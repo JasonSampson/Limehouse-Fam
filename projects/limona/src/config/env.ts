@@ -40,6 +40,7 @@ const envSchema = z.object({
   // can trust that a login request really came from LimeHQ. Must match
   // HANDOFF_TOKEN_SECRET in LimeHQ's .env exactly.
   LIMEHQ_HANDOFF_SECRET: z.string().min(16, "LIMEHQ_HANDOFF_SECRET must be at least 16 chars"),
+  LIMEHQ_URL: z.string().url().default("http://localhost:3300"),
 });
 
 export type Env = z.infer<typeof envSchema>;

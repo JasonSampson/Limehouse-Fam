@@ -8,7 +8,7 @@ import {
   UnclassifiedChargeBlockedError,
 } from "./noticeLineItems.js";
 import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
-import { sendGraphMail } from "../email/graphMailer.js";
+import { sendGraphMail, sendPmNotificationEmail } from "../email/graphMailer.js";
 import { generateNoticePdf } from "./generateNoticePdf.js";
 import { renderNoticeBodyToHtml } from "./noticeBodyFormatting.js";
 import { checkLiveBalanceAndVoidIfStale } from "./staleDraftCheck.js";
@@ -107,10 +107,11 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     rent_due_day: number;
     grace_period_days: number;
     assigned_pm_name: string;
+    assigned_pm_email: string;
   }>(
     `SELECT l.buildium_lease_id, l.unit_label, l.rent_due_day, l.grace_period_days,
             (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
-            pm.display_name AS assigned_pm_name
+            pm.display_name AS assigned_pm_name, pm.email AS assigned_pm_email
      FROM leases l
      JOIN properties p ON p.id = l.property_id
      JOIN pm_users pm ON pm.id = $2
@@ -324,11 +325,24 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
 
   if (!allSucceeded) {
     await client.query("UPDATE notices SET pm_bounce_notified_at = now() WHERE id = $1", [params.noticeId]);
-    // Delivery-failure visibility: the assigned PM must be notified
-    // directly, not left to discover a silent bounce. The actual PM
-    // notification email send is handled by the caller (route handler),
-    // which has the PM's contact context already loaded — this function
-    // just guarantees the bounce is recorded and flagged.
+    // Delivery-failure visibility (Asimov + Mason, Va. Code 55.1-1202(F)):
+    // the assigned PM must be notified directly, not left to discover a
+    // silent bounce, AND must be pointed at an approved alternate service
+    // method — a bounced email is not, by itself, legal service on the
+    // tenant. This IS the caller's PM-contact context (lease.assigned_pm_email,
+    // loaded above with everything else for this send) — sent right here,
+    // in the same transaction as the delivery-status update, instead of
+    // pushed back out to the route handler, so pm_bounce_notified_at is
+    // never set without the notification actually having been attempted.
+    await sendPmNotificationEmail(
+      lease.assigned_pm_email,
+      `ACTION NEEDED: 14-day notice email failed to deliver (notice ${params.noticeId})`,
+      `The 14-day pay-or-quit notice email for notice ${params.noticeId} (unit ${lease.unit_label}) ` +
+        `did not deliver successfully.\n\n` +
+        `Email delivery failure alone is not legal service under Virginia law. Please complete service ` +
+        `through an approved alternate method (e.g. certified mail or hand delivery, per your standard ` +
+        `process/attorney guidance) and confirm the tenant's email address on file is correct.`
+    );
   }
 
   await writeAuditLog(client, {
@@ -350,4 +364,223 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   });
 
   return { sent: true, voided: false };
+}
+
+interface ResendBouncedRecipientParams {
+  noticeId: number;
+  recipientId: number;
+  newEmail: string;
+  correctingPmId: number;
+}
+
+// Re-delivers an already-sent notice to ONE recipient whose email bounced,
+// after the PM has corrected the address on file. Deliberately NOT a call
+// into sendNotice() above: this notice already transitioned to status =
+// 'sent' (a permanent legal record), and sendNotice() only operates on
+// status = 'draft'. Re-running the full draft->sent pipeline here would
+// re-verify the live Buildium balance and could void or re-word an already-
+// finalized legal document — wrong for "the tenant's copy never arrived,"
+// which is a delivery problem, not a reason to re-litigate the amount owed.
+// Same rendered content as the original send (frozen amount_due_at_send /
+// days_late_at_send / notice_line_items 'send' snapshot), delivered only to
+// the one corrected address — recipients who already received it
+// successfully are not re-emailed.
+export async function resendBouncedRecipient(
+  client: PoolClient,
+  params: ResendBouncedRecipientParams
+): Promise<{ resent: boolean; stillBounced: boolean }> {
+  const trace = startTrace();
+
+  const noticeResult = await client.query<{
+    id: number;
+    lease_id: number;
+    status: string;
+    letter_template_id: number;
+    assigned_pm_id: number;
+    sent_at: Date | null;
+    amount_due_at_send: string | null;
+    days_late_at_send: number | null;
+  }>(
+    `SELECT id, lease_id, status, letter_template_id, assigned_pm_id, sent_at,
+            amount_due_at_send, days_late_at_send
+     FROM notices WHERE id = $1 FOR UPDATE`,
+    [params.noticeId]
+  );
+  if (noticeResult.rows.length === 0) {
+    throw new SendBlockedError(`Notice ${params.noticeId} not found`, "not_found");
+  }
+  const notice = noticeResult.rows[0];
+  if (notice.status !== "sent") {
+    throw new SendBlockedError(
+      `Notice ${params.noticeId} has not been sent yet (status=${notice.status}); nothing to resend.`,
+      "not_sent"
+    );
+  }
+  if (notice.assigned_pm_id !== params.correctingPmId) {
+    throw new SendBlockedError("This notice is not assigned to you.", "not_assigned");
+  }
+  if (notice.amount_due_at_send == null || notice.days_late_at_send == null || notice.sent_at == null) {
+    throw new SendBlockedError(
+      `Notice ${params.noticeId} is missing its send-time snapshot; cannot rebuild the original notice to resend.`,
+      "missing_send_snapshot"
+    );
+  }
+
+  const recipientResult = await client.query<{
+    id: number;
+    recipient_type: string;
+    email_address: string;
+    delivery_status: string;
+  }>(
+    `SELECT id, recipient_type, email_address, delivery_status
+     FROM notice_recipients WHERE id = $1 AND notice_id = $2 FOR UPDATE`,
+    [params.recipientId, params.noticeId]
+  );
+  if (recipientResult.rows.length === 0) {
+    throw new SendBlockedError("Recipient not found on this notice.", "recipient_not_found");
+  }
+  const recipient = recipientResult.rows[0];
+  if (recipient.delivery_status !== "bounced") {
+    throw new SendBlockedError(
+      "This recipient's email did not bounce — nothing to resend.",
+      "not_bounced"
+    );
+  }
+  const oldEmail = recipient.email_address;
+
+  const leaseResult = await client.query<{
+    unit_label: string;
+    property_address: string;
+    assigned_pm_name: string;
+  }>(
+    `SELECT l.unit_label,
+            (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+            pm.display_name AS assigned_pm_name
+     FROM leases l
+     JOIN properties p ON p.id = l.property_id
+     JOIN pm_users pm ON pm.id = $2
+     WHERE l.id = $1`,
+    [notice.lease_id, notice.assigned_pm_id]
+  );
+  const lease = leaseResult.rows[0];
+
+  const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
+    "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
+    [notice.letter_template_id]
+  );
+  const template = templateResult.rows[0];
+
+  const allRecipientsResult = await client.query<{
+    recipient_type: string;
+    email_address: string;
+    full_name: string | null;
+  }>(
+    `SELECT nr.recipient_type, nr.email_address, lt.full_name
+     FROM notice_recipients nr
+     LEFT JOIN lease_tenants lt ON lt.id = nr.lease_tenant_id
+     WHERE nr.notice_id = $1`,
+    [params.noticeId]
+  );
+  const allToRecipients = allRecipientsResult.rows.filter((r) => r.recipient_type === "to");
+  const ccRecipients = allRecipientsResult.rows.filter((r) => r.recipient_type === "cc");
+
+  const lineItemsResult = await client.query<{ bucket: string; amount: string }>(
+    `SELECT bucket, amount FROM notice_line_items WHERE notice_id = $1 AND snapshot_stage = 'send'`,
+    [params.noticeId]
+  );
+  const sumBucket = (bucket: string) =>
+    lineItemsResult.rows.filter((li) => li.bucket === bucket).reduce((sum, li) => sum + Number(li.amount), 0);
+
+  // Reconstruct the exact due_date used when this notice was originally
+  // sent. due_date itself isn't stored on the notices row — only the
+  // resulting days_late_at_send is — but calculateLateness() derives
+  // daysLate as floor((sentAt - (dueDate + gracePeriodDays)) / 1 day), so
+  // this is the inverse of that arithmetic, not a fresh re-derivation from
+  // today's date (which would drift the due date forward the longer a
+  // bounce goes uncorrected).
+  const sentAtUtcDate = new Date(
+    Date.UTC(notice.sent_at.getUTCFullYear(), notice.sent_at.getUTCMonth(), notice.sent_at.getUTCDate())
+  );
+  const dueDate = new Date(sentAtUtcDate);
+  dueDate.setUTCDate(dueDate.getUTCDate() - notice.days_late_at_send);
+
+  const { amount: courtCosts } = await getEstimatedCourtCosts(client);
+  const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
+
+  const mergeFields: MergeFields = {
+    tenant_name: formatTenantNameList(allToRecipients.map((r) => r.full_name ?? "Tenant")),
+    unit_label: lease.unit_label,
+    amount_due: formatCurrency(Number(notice.amount_due_at_send)),
+    days_late: String(notice.days_late_at_send),
+    due_date: dueDate.toISOString().slice(0, 10),
+    // Original notice date, not today — this is a redelivery of the same
+    // already-sent legal document, not a new notice.
+    notice_date: notice.sent_at.toISOString().slice(0, 10),
+    property_address: lease.property_address,
+    pm_name: lease.assigned_pm_name,
+    rent_amount_due: formatCurrency(sumBucket("rent")),
+    late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
+    misc_amount_due: formatCurrency(sumBucket("other")),
+    court_costs_amount: formatCurrency(courtCosts),
+    attorney_fees_amount: formatCurrency(attorneyFees),
+    total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
+  };
+
+  const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
+  const renderedBody = renderTemplate(template.body_markdown, mergeFields, { escapeForHtml: false });
+  const bodyHtml = renderNoticeBodyToHtml(renderedBody);
+  const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
+
+  const result = await sendGraphMail({
+    subject,
+    bodyHtml,
+    toRecipients: [{ email: params.newEmail }],
+    ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
+    attachments: [
+      {
+        name: `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
+        contentType: "application/pdf",
+        contentBytes: noticePdf,
+      },
+    ],
+  });
+
+  await client.query(
+    "UPDATE notice_recipients SET email_address = $1, delivery_status = $2, bounced_at = $3 WHERE id = $4",
+    [params.newEmail, result.success ? "sent" : "bounced", result.success ? null : new Date(), params.recipientId]
+  );
+
+  // Only clear the notice-level bounced flag once every recipient on it has
+  // successfully delivered — a notice with three tenants where only one
+  // bounced should still read as "bounced" until that one is fixed too.
+  const remainingBounced = await client.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM notice_recipients
+     WHERE notice_id = $1 AND id != $2 AND delivery_status = 'bounced'`,
+    [params.noticeId, params.recipientId]
+  );
+  const stillBounced = !result.success || Number(remainingBounced.rows[0].count) > 0;
+  await client.query("UPDATE notices SET delivery_status = $1 WHERE id = $2", [
+    stillBounced ? "bounced" : "sent",
+    params.noticeId,
+  ]);
+
+  await writeAuditLog(client, {
+    companyId: "limehouse-pm",
+    instanceId: "late-rent-notices",
+    decisionId: `notice-${params.noticeId}`,
+    actorType: "pm",
+    actorId: String(params.correctingPmId),
+    eventType: "notice_recipient.email_corrected",
+    eventSummary: `PM corrected a bounced recipient's email on notice ${params.noticeId} (${oldEmail} -> ${params.newEmail}) and ${result.success ? "resent successfully" : "attempted a resend, which also failed"}.`,
+    eventData: { oldEmail, newEmail: params.newEmail, resendSucceeded: result.success },
+    contextSnapshot: { noticeId: params.noticeId, leaseId: notice.lease_id, recipientId: params.recipientId },
+    privacyCategory: "Disclosure",
+    regulationTags: ["VRLTA"],
+    riskLevel: "high",
+    legalBasis: "lease_section_46_electronic_delivery",
+    retentionPolicy: "retain_7_years_post_tenancy",
+    trace,
+  });
+
+  return { resent: result.success, stillBounced };
 }

@@ -74,6 +74,32 @@ export async function runPmReminderCheck(jobPool: Pool): Promise<PmReminderResul
             `Jason will be notified as the fallback decision-maker for this lease.`
         );
         await jobPool.query("UPDATE notices SET pm_reminder_sent_at = now() WHERE id = $1", [draft.id]);
+
+        // Shadow mode: sendPmNotificationEmail no-ops silently (see
+        // graphMailer.ts) — record that this would have fired but the
+        // actual email was suppressed, so there's a real audit trail entry
+        // for "this would have happened but didn't," not just an
+        // appLogger line that isn't queryable/retained the same way.
+        await writeAuditLog(jobPool, {
+          companyId: "limehouse-pm",
+          instanceId: "late-rent-notices",
+          decisionId: `notice-${draft.id}`,
+          actorType: "system",
+          actorId: "pm_reminder_check",
+          eventType: "pm_reminder.sent",
+          eventSummary: env.SHADOW_MODE
+            ? `SHADOW MODE: PM review reminder for draft notice ${draft.id} was NOT actually emailed.`
+            : `PM review reminder emailed for draft notice ${draft.id}.`,
+          eventData: { shadowModeSuppressed: env.SHADOW_MODE },
+          contextSnapshot: { noticeId: draft.id, assignedPmId: draft.assigned_pm_id },
+          privacyCategory: "Aggregation",
+          regulationTags: [],
+          riskLevel: "low",
+          legalBasis: "operational_followup",
+          retentionPolicy: "retain_7_years_post_tenancy",
+          trace: span,
+        });
+
         remindersSent += 1;
       }
       continue;
@@ -101,8 +127,13 @@ export async function runPmReminderCheck(jobPool: Pool): Promise<PmReminderResul
       actorType: "system",
       actorId: "pm_reminder_check",
       eventType: "fallback.notification_sent",
-      eventSummary: `Notice ${draft.id} unsent past 2-business-day deadline; Jason notified as fallback decision-maker (not yet acted).`,
-      eventData: { secondBusinessDayDeadline: secondBusinessDayDeadline.toISOString() },
+      eventSummary: env.SHADOW_MODE
+        ? `SHADOW MODE: notice ${draft.id} unsent past 2-business-day deadline; Jason was NOT actually notified (Teams alert suppressed).`
+        : `Notice ${draft.id} unsent past 2-business-day deadline; Jason notified as fallback decision-maker (not yet acted).`,
+      eventData: {
+        secondBusinessDayDeadline: secondBusinessDayDeadline.toISOString(),
+        shadowModeSuppressed: env.SHADOW_MODE,
+      },
       contextSnapshot: { noticeId: draft.id, assignedPmId: draft.assigned_pm_id },
       privacyCategory: "N/A",
       regulationTags: [],
@@ -148,6 +179,7 @@ export async function runPmReminderCheck(jobPool: Pool): Promise<PmReminderResul
 // generate a nag about a stale date — the newer entry is the current state
 // of that conversation.
 async function runOverduePromiseCheck(jobPool: Pool, trace: Trace): Promise<number> {
+  const env = loadEnv();
   const candidates = await jobPool.query<OverduePromiseRow>(
     `SELECT ca.id AS contact_attempt_id, ca.lease_id, ca.promised_pay_date,
             ca.logged_by_pm_id, pm.email AS pm_email
@@ -200,8 +232,13 @@ async function runOverduePromiseCheck(jobPool: Pool, trace: Trace): Promise<numb
       actorType: "system",
       actorId: "pm_reminder_check",
       eventType: "contact_attempt.promise_overdue_reminder_sent",
-      eventSummary: `Promised-pay-date for contact attempt ${row.contact_attempt_id} (lease ${row.lease_id}) passed; PM reminded.`,
-      eventData: { promisedPayDate: row.promised_pay_date.toISOString().slice(0, 10) },
+      eventSummary: env.SHADOW_MODE
+        ? `SHADOW MODE: promised-pay-date reminder for contact attempt ${row.contact_attempt_id} (lease ${row.lease_id}) was NOT actually emailed.`
+        : `Promised-pay-date for contact attempt ${row.contact_attempt_id} (lease ${row.lease_id}) passed; PM reminded.`,
+      eventData: {
+        promisedPayDate: row.promised_pay_date.toISOString().slice(0, 10),
+        shadowModeSuppressed: env.SHADOW_MODE,
+      },
       contextSnapshot: { leaseId: row.lease_id, contactAttemptId: row.contact_attempt_id },
       privacyCategory: "Aggregation",
       regulationTags: [],

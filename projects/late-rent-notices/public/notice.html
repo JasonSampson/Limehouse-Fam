@@ -178,17 +178,201 @@
             ${notice.ccRecipients && notice.ccRecipients.length ? `<p class="field-hint">Also CC'd: ${notice.ccRecipients.map((c) => escapeHtml(c.emailAddress)).join(", ")}</p>` : ""}
           </div>
 
+          ${renderRecipientsCard(notice)}
+
           <div id="action-area"></div>
 
           <h2>Log a contact attempt</h2>
           <p class="subtitle">Record a call, text, or email you made to this tenant about the balance.</p>
+          <div id="contact-log-quick" class="card"></div>
           <div id="contact-log-link" class="card">
             <a class="btn btn-primary" href="/contact-log.html?leaseId=${notice.leaseId}">Go to Contact Log for this lease</a>
           </div>
+          <div id="contact-log-history"></div>
         `;
 
         paintLetterPreviews(notice);
+        wireResendForms();
         renderActionArea(notice);
+        renderContactQuickLog(notice);
+        loadContactHistory(notice);
+      }
+
+      // Shows every "to" recipient with their delivery status. A bounced
+      // recipient gets an inline "correct the email and resend" form right
+      // here — no separate page — since a typo'd address is the single most
+      // common reason a notice never reaches a tenant, and this must be
+      // fixable without waiting on a formal remediation process.
+      function renderRecipientsCard(notice) {
+        if (!notice.toRecipients || !notice.toRecipients.length) return "";
+        const rows = notice.toRecipients
+          .map((r) => {
+            const bounced = r.deliveryStatus === "bounced";
+            return `
+              <div class="card" style="margin-bottom:10px;${bounced ? "border-color:#c0392b;" : ""}">
+                <p style="margin:0 0 4px;font-weight:600;">${escapeHtml(r.tenantName)}</p>
+                <p class="field-hint" style="margin:0 0 8px;">
+                  ${bounced ? `<span class="badge badge-bounced">Bounced</span> ${escapeHtml(r.emailAddress)}` : `${escapeHtml(r.emailAddress)} &middot; ${escapeHtml(r.deliveryStatus)}`}
+                </p>
+                ${bounced && notice.status === "sent" ? renderResendForm(notice.id, r) : ""}
+              </div>
+            `;
+          })
+          .join("");
+        return `
+          <div class="card">
+            <h2 style="margin-top:0;">Recipients</h2>
+            ${rows}
+          </div>
+        `;
+      }
+
+      function renderResendForm(noticeId, recipient) {
+        return `
+          <form class="resend-form" data-recipient-id="${recipient.id}" data-notice-id="${noticeId}">
+            <label for="resend-email-${recipient.id}">Corrected email address</label>
+            <input type="email" id="resend-email-${recipient.id}" name="email" required value="${escapeHtml(recipient.emailAddress)}" />
+            <div id="resend-result-${recipient.id}"></div>
+            <button type="submit" class="btn-primary">Save corrected email &amp; resend</button>
+          </form>
+        `;
+      }
+
+      // Wired after render since the card HTML above is built from a string
+      // template, same pattern as renderActionArea's listeners below.
+      function wireResendForms() {
+        document.querySelectorAll(".resend-form").forEach((form) => {
+          form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const recipientId = form.dataset.recipientId;
+            const noticeId = form.dataset.noticeId;
+            const resultBox = document.getElementById(`resend-result-${recipientId}`);
+            const submitBtn = form.querySelector("button[type=submit]");
+            const email = form.email.value.trim();
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Sending…";
+            resultBox.innerHTML = "";
+            try {
+              const result = await LimehouseAPI.post(`/api/notices/${noticeId}/recipients/${recipientId}/resend`, { email });
+              if (result.resent) {
+                resultBox.innerHTML = `<div class="alert alert-success">Resent successfully to ${escapeHtml(email)}.</div>`;
+                setTimeout(() => window.location.reload(), 2000);
+              } else {
+                resultBox.innerHTML = `<div class="alert alert-error">The email address was saved, but the resend still failed to deliver. Double-check the address or try an alternate contact method.</div>`;
+              }
+            } catch (err) {
+              resultBox.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+            } finally {
+              submitBtn.disabled = false;
+              submitBtn.textContent = "Save corrected email & resend";
+            }
+          });
+        });
+      }
+
+      // Inline "I spoke with the tenant" checkbox, right on the notice page,
+      // so a PM doesn't have to leave to the full Contact Log just to record
+      // a quick call/text. Logging a contact attempt is admin_assistant-only
+      // at the database level (RLS — see migration 0027's
+      // insert_contact_attempts_admin_assistant policy and contact-log.html's
+      // same role check), so this mirrors that page's existing convention
+      // rather than duplicating a check the DB already enforces: a plain PM
+      // sees the same "handled by the Admin Assistant team" note contact-
+      // log.html already shows, not a form that would just 403.
+      function renderContactQuickLog(notice) {
+        const area = document.getElementById("contact-log-quick");
+        if (me.role !== "admin_assistant") {
+          area.innerHTML = `<div class="alert alert-info">Logging contact attempts is handled by the Admin Assistant team (Belinda / Vien). Use the link below to view history.</div>`;
+          return;
+        }
+
+        area.innerHTML = `
+          <div class="checkbox-row">
+            <input type="checkbox" id="spoke-with-tenant" />
+            <label for="spoke-with-tenant">I spoke with the tenant about this notice</label>
+          </div>
+          <div id="spoke-method-row" style="display:none; margin-top:10px;">
+            <label for="spoke-method">How did you reach them?</label>
+            <select id="spoke-method">
+              <option value="phone">Call</option>
+              <option value="text">Text</option>
+            </select>
+            <div id="spoke-result" style="margin-top:8px;"></div>
+            <button id="spoke-save-btn" class="btn-primary" style="margin-top:8px;">Save</button>
+          </div>
+        `;
+
+        const checkbox = document.getElementById("spoke-with-tenant");
+        const methodRow = document.getElementById("spoke-method-row");
+        const methodSelect = document.getElementById("spoke-method");
+        const saveBtn = document.getElementById("spoke-save-btn");
+        const resultBox = document.getElementById("spoke-result");
+
+        checkbox.addEventListener("change", () => {
+          methodRow.style.display = checkbox.checked ? "block" : "none";
+        });
+
+        saveBtn.addEventListener("click", async () => {
+          saveBtn.disabled = true;
+          saveBtn.textContent = "Saving…";
+          resultBox.innerHTML = "";
+          try {
+            const saved = await LimehouseAPI.post("/api/contact-attempts", {
+              leaseId: notice.leaseId,
+              contactMethod: methodSelect.value,
+              outcome: "reached_tenant",
+            });
+            resultBox.innerHTML = `<div class="alert alert-success">Recorded by ${escapeHtml(me.displayName)} &middot; ${fmtDateTime(saved.occurred_at)}</div>`;
+            checkbox.checked = false;
+            methodRow.style.display = "none";
+            loadContactHistory(notice);
+          } catch (err) {
+            resultBox.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+          } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = "Save";
+          }
+        });
+      }
+
+      const spokeMethodLabels = { phone: "Call", email: "Email", text: "Text" };
+
+      // Every past contact attempt for this lease, most recent first, each
+      // with its own date/time stamp — not just the most recent one. Reuses
+      // the same GET /api/contact-attempts endpoint contact-log.html already
+      // uses, filtered to this lease.
+      async function loadContactHistory(notice) {
+        const area = document.getElementById("contact-log-history");
+        area.innerHTML = `<div class="loading">Loading contact history…</div>`;
+        try {
+          const { contactAttempts } = await LimehouseAPI.get(`/api/contact-attempts?leaseId=${notice.leaseId}`);
+          if (!contactAttempts.length) {
+            area.innerHTML = "";
+            return;
+          }
+          area.innerHTML = `
+            <div class="card">
+              <h2 style="margin-top:0;">Contact history for this lease</h2>
+              <div class="notice-list">
+                ${contactAttempts
+                  .map(
+                    (c) => `
+                    <div class="notice-row">
+                      <div class="row-top">
+                        <span class="tenant-name">${escapeHtml(spokeMethodLabels[c.contact_method] || c.contact_method)}</span>
+                        <span>${fmtDateTime(c.occurred_at)}</span>
+                      </div>
+                    </div>
+                  `
+                  )
+                  .join("")}
+              </div>
+            </div>
+          `;
+        } catch (err) {
+          area.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+        }
       }
 
       function renderActionArea(notice) {

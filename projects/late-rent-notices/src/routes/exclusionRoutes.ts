@@ -74,10 +74,35 @@ exclusionRoutes.post("/api/exclusions/:id/remove", async (req: AuthedRequest, re
   const exclusionId = Number(req.params.id);
 
   await withPmScope(session.pmUserId, async (client) => {
-    await client.query(
-      "UPDATE exclusions SET active = false, removed_by_pm_id = $1, removed_at = now() WHERE id = $2",
+    const result = await client.query<{ id: number; lease_id: number; reason_category: string }>(
+      `UPDATE exclusions SET active = false, removed_by_pm_id = $1, removed_at = now()
+       WHERE id = $2 AND active = true
+       RETURNING id, lease_id, reason_category`,
       [session.pmUserId, exclusionId]
     );
+
+    // Only log a removal if a row was actually active and got deactivated —
+    // an unknown/already-removed id is a no-op, not a real event.
+    if (result.rows.length > 0) {
+      const removed = result.rows[0];
+      const trace = startTrace();
+      await writeAuditLog(client, {
+        companyId: "limehouse-pm",
+        instanceId: "late-rent-notices",
+        actorType: "pm",
+        actorId: String(session.pmUserId),
+        eventType: "exclusion.removed",
+        eventSummary: `PM removed exclusion ${removed.id} (category: ${removed.reason_category})`,
+        eventData: { reasonCategory: removed.reason_category },
+        contextSnapshot: { leaseId: removed.lease_id, exclusionId: removed.id },
+        privacyCategory: "Decisional Interference",
+        regulationTags: [],
+        riskLevel: "low",
+        legalBasis: "manual_exclusion_list",
+        retentionPolicy: "retain_7_years_post_tenancy",
+        trace,
+      });
+    }
   });
   res.status(204).end();
 });

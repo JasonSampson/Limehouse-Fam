@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
-import { sendNotice, SendBlockedError } from "../lib/sendNotice.js";
+import { sendNotice, resendBouncedRecipient, SendBlockedError } from "../lib/sendNotice.js";
 import { sendAsFallback, FallbackCeilingError } from "../lib/sendAsFallback.js";
 import { isReauthFresh } from "../auth/requireFreshReauth.js";
 import { addBusinessDays } from "../lib/businessCalendar.js";
@@ -250,12 +250,13 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
     const template = templateResult.rows[0];
 
     const recipientsResult = await client.query<{
+      id: number;
       recipient_type: string;
       email_address: string;
       full_name: string | null;
       delivery_status: string;
     }>(
-      `SELECT nr.recipient_type, nr.email_address, lt.full_name, nr.delivery_status
+      `SELECT nr.id, nr.recipient_type, nr.email_address, lt.full_name, nr.delivery_status
        FROM notice_recipients nr
        LEFT JOIN lease_tenants lt ON lt.id = nr.lease_tenant_id
        WHERE nr.notice_id = $1
@@ -379,11 +380,16 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
           chargeDate: li.charge_date,
         })),
       },
-      ccRecipients: ccRecipients.map((r) => ({ emailAddress: r.email_address, deliveryStatus: r.delivery_status })),
+      ccRecipients: ccRecipients.map((r) => ({
+        id: r.id,
+        emailAddress: r.email_address,
+        deliveryStatus: r.delivery_status,
+      })),
       // Every "to" recipient on this lease (usually one, more if there are
       // roommates/co-signers) — all of them get the ONE combined email/PDF
       // below, matching sendNotice.ts's single-email-to-all-tenants design.
       toRecipients: toRecipients.map((r) => ({
+        id: r.id,
         tenantName: r.full_name ?? "Tenant",
         emailAddress: r.email_address,
         deliveryStatus: r.delivery_status,
@@ -755,5 +761,45 @@ noticeRoutes.post("/api/notices/:id/send-as-fallback", async (req: AuthedRequest
     }
     console.error("fallback send failed", err instanceof Error ? err.message : err);
     res.status(500).json({ error: "Fallback send failed unexpectedly. Check with Jason before retrying." });
+  }
+});
+
+// zod's built-in email() check — the same primitive already used for
+// GRAPH_SENDER_MAILBOX/JASON_ALERT_EMAIL (src/config/env.ts) and the
+// Buildium Email field (src/buildium/client.ts) — not a hand-rolled regex.
+const resendBodySchema = z.object({ email: z.string().email() });
+
+// Lets the assigned PM fix a typo'd email address on a recipient whose
+// notice bounced, and re-deliver the SAME already-sent notice to just that
+// corrected address — see resendBouncedRecipient's doc comment in
+// sendNotice.ts for why this doesn't go back through the normal draft->sent
+// send() path.
+noticeRoutes.post("/api/notices/:id/recipients/:recipientId/resend", async (req: AuthedRequest, res) => {
+  const session = req.session!;
+  const noticeId = Number(req.params.id);
+  const recipientId = Number(req.params.recipientId);
+  const parsed = resendBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "A valid corrected email address is required.", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = await withPmScope(session.pmUserId, async (client) =>
+      resendBouncedRecipient(client, {
+        noticeId,
+        recipientId,
+        newEmail: parsed.data.email,
+        correctingPmId: session.pmUserId,
+      })
+    );
+    res.json(result);
+  } catch (err) {
+    if (err instanceof SendBlockedError) {
+      res.status(409).json({ error: err.message, reason: err.reason });
+      return;
+    }
+    console.error("resend bounced recipient failed", err instanceof Error ? err.message : err);
+    res.status(500).json({ error: "Resend failed unexpectedly. Check with Jason before retrying." });
   }
 });

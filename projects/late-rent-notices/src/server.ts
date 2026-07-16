@@ -12,7 +12,7 @@ import { contactAttemptRoutes } from "./routes/contactAttemptRoutes.js";
 import { meRoutes } from "./routes/meRoutes.js";
 import { searchRoutes } from "./routes/searchRoutes.js";
 import { pmAssignmentRoutes } from "./routes/pmAssignmentRoutes.js";
-import { logInfo } from "./lib/appLogger.js";
+import { logInfo, logWarn } from "./lib/appLogger.js";
 
 const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,5 +59,15 @@ app.listen(env.PORT, () => {
     console.warn(
       "\n!!! LIVE MODE — SHADOW_MODE=false !!!\nReal notices will be emailed to real tenants. Confirm this is intentional.\n"
     );
+    // Procedural safeguard (Asimov): SHADOW_MODE=false is the switch that
+    // makes this app start actually sending real notices to tenants instead
+    // of just drafting them. There's no approval workflow gating that flip
+    // yet — this is the lightweight version: an unmissable, structured,
+    // timestamped record every single time the server boots in live-send
+    // mode, so "when did live mode start" is never a question anyone has to
+    // guess at from memory.
+    logWarn("SHADOW MODE DISABLED — server booted in LIVE SEND mode. Real notices will be emailed to real tenants.", {
+      jobName: "server_startup",
+    });
   }
 });

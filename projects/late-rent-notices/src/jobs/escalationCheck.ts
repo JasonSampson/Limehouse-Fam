@@ -4,6 +4,7 @@ import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace, childSpan } from "../lib/trace.js";
 import { sendPmNotificationEmail } from "../email/graphMailer.js";
 import { logInfo } from "../lib/appLogger.js";
+import { loadEnv } from "../config/env.js";
 
 interface ExpiredNoticeRow {
   notice_id: number;
@@ -26,6 +27,7 @@ interface EscalationResult {
 // table's UNIQUE(notice_id) is the actual "exactly once" guarantee — this
 // job's WHERE clause is just the candidate filter, not the guard itself.
 export async function runEscalationCheck(jobPool: Pool): Promise<EscalationResult> {
+  const env = loadEnv();
   const trace = startTrace();
 
   const candidates = await jobPool.query<ExpiredNoticeRow>(
@@ -82,8 +84,10 @@ export async function runEscalationCheck(jobPool: Pool): Promise<EscalationResul
       actorType: "system",
       actorId: "escalation_check",
       eventType: "escalation.fired",
-      eventSummary: `Escalation reminder sent to PM for notice ${row.notice_id}: 14-day window expired, balance still unpaid.`,
-      eventData: { balance: liveBalance.balance },
+      eventSummary: env.SHADOW_MODE
+        ? `SHADOW MODE: escalation reminder for notice ${row.notice_id} was NOT actually emailed to the PM (14-day window expired, balance still unpaid).`
+        : `Escalation reminder sent to PM for notice ${row.notice_id}: 14-day window expired, balance still unpaid.`,
+      eventData: { balance: liveBalance.balance, shadowModeSuppressed: env.SHADOW_MODE },
       contextSnapshot: { noticeId: row.notice_id, leaseId: row.lease_id },
       privacyCategory: "Aggregation",
       regulationTags: ["VRLTA"],

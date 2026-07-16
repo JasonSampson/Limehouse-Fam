@@ -34,7 +34,7 @@ function appendMessage(role, text, citations) {
 async function init() {
   const meRes = await fetch("/api/auth/me");
   if (!meRes.ok) {
-    window.location.href = "/login.html";
+    window.location.href = "/auth/login";
     return;
   }
   const me = await meRes.json();
@@ -50,7 +50,7 @@ async function init() {
 document.getElementById("logout-link").addEventListener("click", async (e) => {
   e.preventDefault();
   await fetch("/api/auth/logout", { method: "POST" });
-  window.location.href = "/login.html";
+  window.location.href = "/auth/login";
 });
 
 form.addEventListener("submit", async (e) => {

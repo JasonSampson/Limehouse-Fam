@@ -1,5 +1,4 @@
 import type { NextFunction, Request, Response } from "express";
-import { getPool } from "../db/pool.js";
 import { verifySessionCookieValue, SESSION_COOKIE_NAME } from "./session.js";
 
 export interface AuthedUser {
@@ -19,24 +18,32 @@ declare global {
   }
 }
 
-// Loads the user for any request that has a valid session cookie, whether
-// or not the route actually requires auth. Mounted once at app setup so
-// req.user is available everywhere downstream.
+// Derives a display name from an email address when no name is stored.
+// Used because the LimeHQ handoff token only carries userId and email.
+function nameFromEmail(email: string): string {
+  const local = email.split("@")[0] ?? email;
+  return local
+    .replace(/[._-]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Attaches req.user from the session cookie without a DB round-trip.
+// All identity (userId, email) comes from the LimeHQ handoff token stored
+// in the signed session cookie. Limona no longer has its own users table.
+//
+// All LimeHQ-authenticated users are treated as "admin" in Limona — LimeHQ
+// already controls who can reach Limona via the limona.chat.access permission.
 export async function attachUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const payload = verifySessionCookieValue(req.cookies?.[SESSION_COOKIE_NAME]);
   if (!payload) return next();
 
-  const result = await getPool().query(
-    "SELECT id, email, name, role, status FROM users WHERE id = $1",
-    [payload.userId]
-  );
-  const row = result.rows[0];
-  // A disabled user's cookie may still be validly signed and unexpired —
-  // status is re-checked on every request so revoking access takes effect
-  // immediately rather than waiting for the session to expire.
-  if (row && row.status !== "disabled") {
-    req.user = row as AuthedUser;
-  }
+  req.user = {
+    id: payload.userId,
+    email: payload.email,
+    name: nameFromEmail(payload.email),
+    role: "admin",
+    status: "active",
+  };
   next();
 }
 

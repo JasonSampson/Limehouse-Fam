@@ -1,11 +1,11 @@
 import express from "express";
+import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnv, isChatConnected } from "./config/env.js";
 import { attachUser } from "./auth/middleware.js";
 import { authRoutes } from "./routes/authRoutes.js";
-import { adminUserRoutes } from "./routes/adminUserRoutes.js";
 import { adminDocumentRoutes } from "./routes/adminDocumentRoutes.js";
 import { adminDashboardRoutes } from "./routes/adminDashboardRoutes.js";
 import { adminAssetRoutes } from "./routes/adminAssetRoutes.js";
@@ -18,7 +18,10 @@ const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
+app.use(helmet());
+// TODO(production): add helmet.hsts({ maxAge: 31536000, includeSubDomains: true }) once behind HTTPS
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(attachUser);
 
@@ -40,7 +43,6 @@ app.use(express.static(publicDir));
 // router itself (see those files).
 app.use(authRoutes);
 app.use(chatRoutes);
-app.use(adminUserRoutes);
 app.use(adminDocumentRoutes);
 app.use(adminDashboardRoutes);
 app.use(adminAssetRoutes);

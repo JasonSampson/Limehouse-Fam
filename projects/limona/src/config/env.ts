@@ -25,7 +25,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
   // Signs the session cookie. Generate with: openssl rand -hex 32
-  SESSION_COOKIE_SECRET: z.string().min(16, "SESSION_COOKIE_SECRET must be at least 16 chars"),
+  SESSION_COOKIE_SECRET: z.string().min(32, "SESSION_COOKIE_SECRET must be at least 32 characters"),
 
   // Optional at startup, required for chat to answer questions. Used for
   // the answer-generation step (Claude reads the retrieved chunks and

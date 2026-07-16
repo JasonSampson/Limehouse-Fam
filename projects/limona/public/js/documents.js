@@ -8,7 +8,7 @@ function showError(message) {
 async function init() {
   const meRes = await fetch("/api/auth/me");
   if (!meRes.ok) {
-    window.location.href = "/login.html";
+    window.location.href = "/auth/login";
     return;
   }
   const me = await meRes.json();

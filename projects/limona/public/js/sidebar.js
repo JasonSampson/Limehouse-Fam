@@ -45,10 +45,7 @@ const NAV_SECTIONS = [
       { href: "/team-knowledge.html", label: "Team Knowledge", icon: "diamond", statKey: "teamKnowledgeCount" },
     ],
   },
-  {
-    label: "Team",
-    items: [{ href: "/users.html", label: "Users", icon: "people", statKey: "teamMembersTotal" }],
-  },
+  // Users section removed — staff management is now handled in LimeHQ (/staff).
   {
     label: "Insights",
     items: [{ href: "/reporting.html", label: "Reporting", icon: "bars", statKey: "knowledgeGapsCount" }],
@@ -116,7 +113,7 @@ function renderSidebar({ activePage, user }) {
   document.getElementById("sidebar-signout").addEventListener("click", async (e) => {
     e.preventDefault();
     await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/login.html";
+    window.location.href = "/auth/login";
   });
 
   loadSidebarCounts();
@@ -136,8 +133,6 @@ async function loadSidebarCounts() {
   } catch {
     return;
   }
-
-  stats.teamMembersTotal = (stats.teamMembers?.admin || 0) + (stats.teamMembers?.member || 0);
 
   document.querySelectorAll(".sidebar-link-badge[data-stat-key]").forEach((el) => {
     const key = el.getAttribute("data-stat-key");

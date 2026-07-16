@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .env.test
+.env*.bak
 *.log
 
 # Uploaded original documents/assets live here on disk (per document_id /

@@ -10,16 +10,14 @@ adminReportingRoutes.use(requireAdmin);
 const RECENT_QUESTIONS_LIMIT = 100;
 
 // Recent questions asked, most recent first — one level deeper than the
-// Dashboard's summary counts. Joins to users for a friendly display name;
-// LEFT JOIN so a query still shows up even if the asking user was later
-// deleted (users are only ever disabled in this app, not deleted, but this
-// keeps the query correct even if that ever changes).
+// Dashboard's summary counts. The users JOIN was removed when Limona's local
+// users table was dropped; asked_by is now the LimeHQ user_id stored in
+// chat_queries.user_id (text column after migration 0009).
 adminReportingRoutes.get("/api/admin/reporting/recent-questions", async (_req, res) => {
   const result = await getPool().query(
     `
-    SELECT cq.id, cq.question, cq.answered, cq.created_at, u.name AS asked_by
+    SELECT cq.id, cq.question, cq.answered, cq.created_at, cq.user_id AS asked_by
     FROM chat_queries cq
-    LEFT JOIN users u ON u.id = cq.user_id
     ORDER BY cq.created_at DESC
     LIMIT $1
     `,
@@ -28,15 +26,12 @@ adminReportingRoutes.get("/api/admin/reporting/recent-questions", async (_req, r
   res.json({ questions: result.rows });
 });
 
-// Knowledge gaps: questions Limona could not answer — these are the real
-// content gaps admins should consider fixing (upload a document, or add a
-// Team Knowledge entry). Same limit/ordering as recent-questions.
+// Knowledge gaps: questions Limona could not answer.
 adminReportingRoutes.get("/api/admin/reporting/knowledge-gaps", async (_req, res) => {
   const result = await getPool().query(
     `
-    SELECT cq.id, cq.question, cq.created_at, u.name AS asked_by
+    SELECT cq.id, cq.question, cq.created_at, cq.user_id AS asked_by
     FROM chat_queries cq
-    LEFT JOIN users u ON u.id = cq.user_id
     WHERE cq.answered = false
     ORDER BY cq.created_at DESC
     LIMIT $1

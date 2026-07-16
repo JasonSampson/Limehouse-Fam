@@ -390,6 +390,7 @@ export async function resendBouncedRecipient(
   params: ResendBouncedRecipientParams
 ): Promise<{ resent: boolean; stillBounced: boolean }> {
   const trace = startTrace();
+  const env = loadEnv();
 
   const noticeResult = await client.query<{
     id: number;
@@ -447,6 +448,44 @@ export async function resendBouncedRecipient(
     );
   }
   const oldEmail = recipient.email_address;
+
+  if (env.SHADOW_MODE) {
+    // Shadow mode: same no-op-and-log pattern as sendNotice()'s Step 3 above
+    // — do not actually call Graph sendMail, and do not render the letter or
+    // build a PDF for a send that will never happen. Correcting the email
+    // address on file, though, IS a real action the PM took (independent of
+    // whether the resend itself is suppressed) so that part of the flow
+    // still runs. delivery_status is left as 'bounced' — nothing was
+    // actually (re)delivered, so it must not read as sent/cleared.
+    await client.query("UPDATE notice_recipients SET email_address = $1 WHERE id = $2", [
+      params.newEmail,
+      params.recipientId,
+    ]);
+
+    await writeAuditLog(client, {
+      companyId: "limehouse-pm",
+      instanceId: "late-rent-notices",
+      decisionId: `notice-${params.noticeId}`,
+      actorType: "pm",
+      actorId: String(params.correctingPmId),
+      eventType: "notice_recipient.email_corrected",
+      eventSummary: `SHADOW MODE: PM corrected a bounced recipient's email on notice ${params.noticeId} (${oldEmail} -> ${params.newEmail}). No resend actually attempted.`,
+      eventData: { shadowMode: true, oldEmail, newEmail: params.newEmail },
+      contextSnapshot: { noticeId: params.noticeId, leaseId: notice.lease_id, recipientId: params.recipientId },
+      privacyCategory: "Disclosure",
+      regulationTags: ["VRLTA"],
+      riskLevel: "high",
+      legalBasis: "shadow_mode_no_op",
+      retentionPolicy: "retain_7_years_post_tenancy",
+      trace,
+    });
+    logInfo("shadow mode: bounced-recipient resend suppressed", {
+      noticeId: params.noticeId,
+      traceId: trace.trace_id,
+    });
+
+    return { resent: false, stillBounced: true };
+  }
 
   const leaseResult = await client.query<{
     unit_label: string;

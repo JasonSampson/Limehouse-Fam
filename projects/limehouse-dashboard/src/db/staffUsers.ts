@@ -2,7 +2,6 @@ import { getPool } from "./pool.js";
 
 export interface StaffUserRow {
   id: number;
-  entraObjectId: string | null;
   email: string;
   displayName: string | null;
   role: "admin" | "staff";
@@ -13,7 +12,6 @@ export interface StaffUserRow {
 
 interface RawRow {
   id: number;
-  entra_object_id: string | null;
   email: string;
   display_name: string | null;
   role: "admin" | "staff";
@@ -25,7 +23,6 @@ interface RawRow {
 function toStaffUser(row: RawRow): StaffUserRow {
   return {
     id: row.id,
-    entraObjectId: row.entra_object_id,
     email: row.email,
     displayName: row.display_name,
     role: row.role,
@@ -35,14 +32,6 @@ function toStaffUser(row: RawRow): StaffUserRow {
   };
 }
 
-export async function findByEntraId(entraObjectId: string): Promise<StaffUserRow | null> {
-  const pool = getPool();
-  const { rows } = await pool.query<RawRow>(`SELECT * FROM staff_users WHERE entra_object_id = $1`, [entraObjectId]);
-  return rows[0] ? toStaffUser(rows[0]) : null;
-}
-
-// Case-insensitive, matching the unique index on lower(email) (migration
-// 0006) — a differently-cased email must still match the same invited row.
 export async function findByEmail(email: string): Promise<StaffUserRow | null> {
   const pool = getPool();
   const { rows } = await pool.query<RawRow>(`SELECT * FROM staff_users WHERE lower(email) = lower($1)`, [email]);
@@ -54,24 +43,6 @@ export async function inviteStaff(params: { email: string; role: "admin" | "staf
   const { rows } = await pool.query<RawRow>(
     `INSERT INTO staff_users (entra_object_id, email, role) VALUES (NULL, $1, $2) RETURNING *`,
     [params.email, params.role]
-  );
-  return toStaffUser(rows[0]);
-}
-
-// First-ever login for an invited person: permanently links their Microsoft
-// account to the row Jason created via Manage Staff.
-export async function linkFirstLogin(params: {
-  id: number;
-  entraObjectId: string;
-  displayName: string;
-}): Promise<StaffUserRow> {
-  const pool = getPool();
-  const { rows } = await pool.query<RawRow>(
-    `UPDATE staff_users
-     SET entra_object_id = $2, display_name = $3, last_login_at = now()
-     WHERE id = $1
-     RETURNING *`,
-    [params.id, params.entraObjectId, params.displayName]
   );
   return toStaffUser(rows[0]);
 }

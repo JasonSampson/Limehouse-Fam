@@ -1,17 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Same DB-mocking convention as getScoredRoles.test.ts: mock getPool() so
-// these are pure unit tests, no real Postgres connection required.
 const mockQuery = vi.fn();
 vi.mock("../../src/db/pool.js", () => ({
   getPool: () => ({ query: mockQuery }),
 }));
 
 const {
-  findByEntraId,
   findByEmail,
   inviteStaff,
-  linkFirstLogin,
   bumpLastLogin,
   listAll,
   updateRole,
@@ -21,7 +17,6 @@ const {
 function row(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: 1,
-    entra_object_id: null,
     email: "jane@limehousepm.com",
     display_name: null,
     role: "staff",
@@ -36,30 +31,6 @@ beforeEach(() => {
   mockQuery.mockReset();
 });
 
-describe("findByEntraId", () => {
-  it("returns null when no row matches", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [] });
-    const result = await findByEntraId("some-oid");
-    expect(result).toBeNull();
-    expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("entra_object_id = $1"), ["some-oid"]);
-  });
-
-  it("maps a matching row to camelCase", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [row({ entra_object_id: "oid-1" })] });
-    const result = await findByEntraId("oid-1");
-    expect(result).toEqual({
-      id: 1,
-      entraObjectId: "oid-1",
-      email: "jane@limehousepm.com",
-      displayName: null,
-      role: "staff",
-      active: true,
-      lastLoginAt: null,
-      createdAt: "2026-07-01T00:00:00.000Z",
-    });
-  });
-});
-
 describe("findByEmail", () => {
   it("looks up case-insensitively via lower(email)", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [row()] });
@@ -68,33 +39,23 @@ describe("findByEmail", () => {
       "Jane@LimehousePM.com",
     ]);
   });
-});
 
-describe("inviteStaff", () => {
-  it("inserts with entra_object_id NULL", async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [row({ role: "admin" })] });
-    const result = await inviteStaff({ email: "jane@limehousepm.com", role: "admin" });
-    expect(mockQuery).toHaveBeenCalledWith(
-      expect.stringContaining("entra_object_id, email, role) VALUES (NULL, $1, $2)"),
-      ["jane@limehousepm.com", "admin"]
-    );
-    expect(result.role).toBe("admin");
+  it("returns null when no row matches", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const result = await findByEmail("nobody@limehousepm.com");
+    expect(result).toBeNull();
   });
 });
 
-describe("linkFirstLogin", () => {
-  it("sets entra_object_id, display_name, and last_login_at", async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [row({ entra_object_id: "oid-2", display_name: "Jane Doe", last_login_at: "2026-07-04T00:00:00.000Z" })],
-    });
-    const result = await linkFirstLogin({ id: 1, entraObjectId: "oid-2", displayName: "Jane Doe" });
-    expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("SET entra_object_id = $2, display_name = $3"), [
-      1,
-      "oid-2",
-      "Jane Doe",
-    ]);
-    expect(result.entraObjectId).toBe("oid-2");
-    expect(result.displayName).toBe("Jane Doe");
+describe("inviteStaff", () => {
+  it("inserts with role and returns the new row", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ role: "admin" })] });
+    const result = await inviteStaff({ email: "jane@limehousepm.com", role: "admin" });
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining("email, role"),
+      ["jane@limehousepm.com", "admin"]
+    );
+    expect(result.role).toBe("admin");
   });
 });
 

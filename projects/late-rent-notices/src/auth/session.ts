@@ -36,10 +36,12 @@ export async function verifySessionToken(token: string): Promise<SessionPayload>
 
 export const SESSION_COOKIE_NAME = "lrn_session";
 
-export const sessionCookieOptions = {
-  httpOnly: true,
-  secure: true,
-  sameSite: "strict" as const,
-  maxAge: SESSION_TTL_SECONDS * 1000,
-  path: "/",
-};
+export function sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: loadEnv().NODE_ENV === "production",
+    sameSite: "strict" as const,
+    maxAge: SESSION_TTL_SECONDS * 1000,
+    path: "/",
+  };
+}

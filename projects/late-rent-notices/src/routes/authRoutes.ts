@@ -1,63 +1,53 @@
 import { Router } from "express";
-import { generatePkcePair, generateState } from "../auth/pkce.js";
-import { buildAuthorizeUrl, exchangeCodeForToken, verifyIdToken } from "../auth/entra.js";
+import { jwtVerify } from "jose";
 import { createSessionToken, SESSION_COOKIE_NAME, sessionCookieOptions } from "../auth/session.js";
 import { getAppPool } from "../db/pool.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
+import { loadEnv } from "../config/env.js";
 
 export const authRoutes = Router();
 
-// PKCE verifier/state are held in a short-lived, httpOnly cookie scoped to
-// the auth flow only — never logged, never stored server-side in a table.
-authRoutes.get("/auth/login", (req, res) => {
-  const { verifier, challenge } = generatePkcePair();
-  const state = generateState();
-
-  res.cookie("lrn_pkce_verifier", verifier, { httpOnly: true, secure: true, sameSite: "strict", maxAge: 10 * 60 * 1000 });
-  res.cookie("lrn_oauth_state", state, { httpOnly: true, secure: true, sameSite: "strict", maxAge: 10 * 60 * 1000 });
-
-  res.redirect(buildAuthorizeUrl(state, challenge));
-});
-
-authRoutes.get("/auth/callback", async (req, res) => {
+// Accepts a short-lived handoff token from LimeHQ and issues a Late Rent
+// Notices session. LimeHQ redirects here after login so staff don't need
+// a separate password for this app.
+authRoutes.get("/auth/limehq-callback", async (req, res) => {
   const trace = startTrace();
+  const token = req.query.token;
+  if (typeof token !== "string") {
+    res.status(400).send("Invalid sign-in link.");
+    return;
+  }
   try {
-    const { code, state } = req.query as { code?: string; state?: string };
-    const expectedState = req.cookies?.lrn_oauth_state;
-    const verifier = req.cookies?.lrn_pkce_verifier;
-
-    if (!code || !state || !verifier || state !== expectedState) {
-      res.status(400).send("Invalid or expired login attempt. Please try signing in again.");
-      return;
-    }
-
-    const { idToken } = await exchangeCodeForToken(code, verifier);
-    const identity = await verifyIdToken(idToken);
+    const env = loadEnv();
+    const secret = new TextEncoder().encode(env.LIMEHQ_HANDOFF_SECRET);
+    const { payload } = await jwtVerify(token, secret);
+    const email = payload.email as string;
 
     const pool = getAppPool();
-    const pmResult = await pool.query<{ id: number; is_fallback_decision_maker: boolean; active: boolean }>(
-      "SELECT id, is_fallback_decision_maker, active FROM pm_users WHERE entra_object_id = $1",
-      [identity.entraObjectId]
+    const result = await pool.query<{
+      id: number;
+      is_fallback_decision_maker: boolean;
+      active: boolean;
+    }>(
+      "SELECT id, is_fallback_decision_maker, active FROM pm_users WHERE lower(email) = lower($1)",
+      [email]
     );
 
-    if (pmResult.rows.length === 0 || !pmResult.rows[0].active) {
-      console.error("unauthorized login attempt", { entraObjectId: identity.entraObjectId, email: identity.email });
-      res.status(403).send("Your account is not authorized to access this dashboard. Contact Jason.");
+    const pm = result.rows[0];
+    if (!pm || !pm.active) {
+      res.status(403).send("Your LimeHQ account does not have access to Late Rent Notices. Contact Jason.");
       return;
     }
 
-    const pm = pmResult.rows[0];
     const sessionToken = await createSessionToken({
       pmUserId: pm.id,
-      email: identity.email,
+      email,
       isFallbackDecisionMaker: pm.is_fallback_decision_maker,
       authenticatedAt: Date.now(),
     });
 
-    res.clearCookie("lrn_pkce_verifier");
-    res.clearCookie("lrn_oauth_state");
-    res.cookie(SESSION_COOKIE_NAME, sessionToken, sessionCookieOptions);
+    res.cookie(SESSION_COOKIE_NAME, sessionToken, sessionCookieOptions());
 
     await writeAuditLog(pool, {
       companyId: "limehouse-pm",
@@ -65,7 +55,7 @@ authRoutes.get("/auth/callback", async (req, res) => {
       actorType: pm.is_fallback_decision_maker ? "fallback_decision_maker" : "pm",
       actorId: String(pm.id),
       eventType: "auth.login",
-      eventSummary: `PM ${pm.id} logged in via Entra.`,
+      eventSummary: `PM ${pm.id} logged in via LimeHQ handoff.`,
       eventData: {},
       contextSnapshot: {},
       privacyCategory: "Identification",
@@ -77,15 +67,15 @@ authRoutes.get("/auth/callback", async (req, res) => {
     });
 
     res.redirect("/");
-  } catch (err) {
-    const cause = err instanceof Error && err.cause ? err.cause : undefined;
-    console.error(
-      "auth callback failed",
-      err instanceof Error ? err.message : err,
-      cause ? { cause } : ""
-    );
-    res.status(500).send("Login failed. Please try again or contact Jason.");
+  } catch {
+    res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
   }
+});
+
+// Redirect any direct login attempts to LimeHQ — it's the single front door.
+authRoutes.get("/auth/login", (_req, res) => {
+  const env = loadEnv();
+  res.redirect(`${env.LIMEHQ_URL}/auth/handoff?app=late_rent_notices`);
 });
 
 authRoutes.post("/auth/logout", (req, res) => {

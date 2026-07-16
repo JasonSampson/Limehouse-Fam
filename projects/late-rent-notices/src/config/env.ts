@@ -19,10 +19,10 @@ const envSchema = z.object({
   BUILDIUM_CLIENT_SECRET: z.string().min(1),
   BUILDIUM_BASE_URL: z.string().url(),
 
-  ENTRA_TENANT_ID: z.string().min(1),
-  ENTRA_CLIENT_ID: z.string().min(1),
-  ENTRA_CLIENT_SECRET: z.string().min(1),
-  ENTRA_REDIRECT_URI: z.string().url(),
+  // Shared secret with LimeHQ — verifies handoff tokens so only LimeHQ can
+  // log users into this app. Must match HANDOFF_TOKEN_SECRET in LimeHQ's .env.
+  LIMEHQ_HANDOFF_SECRET: z.string().min(16, "LIMEHQ_HANDOFF_SECRET must be at least 16 chars"),
+  LIMEHQ_URL: z.string().url().default("http://localhost:3300"),
 
   GRAPH_TENANT_ID: z.string().min(1),
   GRAPH_CLIENT_ID: z.string().min(1),

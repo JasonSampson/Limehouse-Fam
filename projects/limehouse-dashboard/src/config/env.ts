@@ -50,7 +50,7 @@ const envSchema = z.object({
 
   // Signs the app's own session cookie issued after a successful Microsoft
   // sign-in (see src/auth/session.ts). Not related to Entra itself.
-  SESSION_COOKIE_SECRET: z.string().min(16, "SESSION_COOKIE_SECRET must be at least 16 chars"),
+  SESSION_COOKIE_SECRET: z.string().min(32, "SESSION_COOKIE_SECRET must be at least 32 characters"),
 
   // Shared secret with LimeHQ — used to verify handoff tokens so the dashboard
   // can trust that a login request really came from LimeHQ. Must match

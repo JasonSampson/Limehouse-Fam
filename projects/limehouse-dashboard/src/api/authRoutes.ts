@@ -10,8 +10,8 @@ export const authRoutes = Router();
 // Accepts a short-lived handoff token from LimeHQ and issues a dashboard
 // session. LimeHQ redirects here after a successful login so staff don't
 // need a separate dashboard password.
-authRoutes.get("/auth/limehq-callback", async (req, res) => {
-  const token = req.query.token;
+authRoutes.post("/auth/limehq-callback", async (req, res) => {
+  const token = req.body.token;
   if (typeof token !== "string") {
     res.status(400).send("Invalid sign-in link.");
     return;

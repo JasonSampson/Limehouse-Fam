@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { loadEnv, isRentEngineConnected, isLeadSimpleConnected } from "./config/env.js";
 import { dashboardRoutes } from "./api/dashboardRoutes.js";
@@ -23,7 +24,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
 
 const app = express();
+app.use(helmet());
+// TODO(production): add helmet.hsts({ maxAge: 31536000, includeSubDomains: true }) once behind HTTPS
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
 // Page-level gate, checked BEFORE express.static ever serves an .html file

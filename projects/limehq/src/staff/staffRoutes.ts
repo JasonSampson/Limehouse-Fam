@@ -35,6 +35,14 @@ async function getDisplayName(userId: number): Promise<string> {
   return result.rows[0]?.display_name ?? "Unknown";
 }
 
+/** Same "never" / short-date convention the old dashboard Manage Staff page used. */
+function formatLastLogin(iso: string | null): string {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "never";
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 // ------------------------------------------------------------------ //
 // HTML Layout                                                         //
 // ------------------------------------------------------------------ //
@@ -516,6 +524,9 @@ interface StaffRow {
   role_template_id: number;
   role_name: string;
   system_role_key: string | null;
+  // Carried over from the old dashboard "Manage Staff" screen, per Jason
+  // directly, when that screen was retired in favor of this one.
+  last_login_at: string | null;
 }
 
 async function fetchRoles(): Promise<RoleTemplate[]> {
@@ -530,7 +541,8 @@ async function fetchAllStaff(): Promise<StaffRow[]> {
   const pool = getAppPool();
   const result = await pool.query<StaffRow>(
     `SELECT u.id, u.display_name, u.email, u.active,
-            u.role_template_id, rt.name AS role_name, rt.system_role_key
+            u.role_template_id, rt.name AS role_name, rt.system_role_key,
+            u.last_login_at
      FROM users u
      JOIN role_templates rt ON rt.id = u.role_template_id
      ORDER BY u.display_name`,
@@ -542,7 +554,8 @@ async function fetchOneStaff(id: number): Promise<StaffRow | null> {
   const pool = getAppPool();
   const result = await pool.query<StaffRow>(
     `SELECT u.id, u.display_name, u.email, u.active,
-            u.role_template_id, rt.name AS role_name, rt.system_role_key
+            u.role_template_id, rt.name AS role_name, rt.system_role_key,
+            u.last_login_at
      FROM users u
      JOIN role_templates rt ON rt.id = u.role_template_id
      WHERE u.id = $1`,
@@ -602,6 +615,7 @@ router.get("/", async (req, res, next) => {
         <td>${esc(u.email)}</td>
         <td>${esc(u.role_name)}${ownerBadge}</td>
         <td>${activeBadge}</td>
+        <td>${esc(formatLastLogin(u.last_login_at))}</td>
         <td style="text-align:right;white-space:nowrap;display:flex;gap:0.4rem;justify-content:flex-end">${editBtn}${permBtn}</td>
       </tr>`;
       })
@@ -624,11 +638,12 @@ router.get("/", async (req, res, next) => {
               <th>Email</th>
               <th>Role</th>
               <th>Status</th>
+              <th>Last Login</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            ${rows || '<tr><td colspan="5" style="color:#999;text-align:center;padding:2rem">No staff found.</td></tr>'}
+            ${rows || '<tr><td colspan="6" style="color:#999;text-align:center;padding:2rem">No staff found.</td></tr>'}
           </tbody>
         </table>
       </div>`;

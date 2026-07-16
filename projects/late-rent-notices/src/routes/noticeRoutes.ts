@@ -634,7 +634,7 @@ noticeRoutes.post("/api/notices/:id/send", async (req: AuthedRequest, res) => {
       if (ownership.rows.length === 0) {
         throw new SendBlockedError("Notice not found or not visible to you.", "not_visible");
       }
-      if (ownership.rows[0].assigned_pm_id !== session.pmUserId) {
+      if (Number(ownership.rows[0].assigned_pm_id) !== session.pmUserId) {
         throw new SendBlockedError("This notice is not assigned to you.", "not_assigned");
       }
       return sendNotice(client, {

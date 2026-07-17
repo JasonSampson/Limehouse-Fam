@@ -18,12 +18,6 @@
     <footer class="note">If you can't sign in, contact Jason. Your account has to be added to this system first.</footer>
   </main>
 
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("reason") === "expired") {
-      document.getElementById("reason-banner").innerHTML =
-        '<div class="alert alert-warn">Your session expired. Please sign in again.</div>';
-    }
-  </script>
+  <script src="/js/login.js"></script>
 </body>
 </html>

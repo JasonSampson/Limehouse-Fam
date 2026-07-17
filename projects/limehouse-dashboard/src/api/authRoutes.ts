@@ -24,7 +24,7 @@ authRoutes.post("/auth/limehq-callback", async (req, res) => {
 
     const user = await findByEmail(email);
     if (!user || !user.active) {
-      res.status(403).send("Your LimeHQ account does not have access to this dashboard. Contact Jason.");
+      res.status(403).send("Your LimeHQ account does not have access to this dashboard. Contact your Limehouse administrator.");
       return;
     }
 

@@ -11,30 +11,27 @@
   <link rel="stylesheet" href="/css/style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <span class="brand"><img src="/images/limona-avatar.png" alt="" class="brand-icon" />Limona</span>
-    <div>
-      <span id="user-name" class="muted" style="color:#dfe7e4;"></span>
-      <a href="#" id="logout-link">Log out</a>
-    </div>
-  </header>
-  <div class="page">
-    <div id="not-connected" class="notice" style="display:none;">
-      Limona isn't fully set up yet — ask an administrator to add the AI service keys before chat can answer questions.
-    </div>
-    <div class="card">
-      <h2>Ask a question</h2>
-      <p class="muted">Ask about company policy, SOPs, laws, vendors, or anything else in Limehouse's uploaded documents. Limona will say so if it doesn't know.</p>
-      <div id="chat-log" class="chat-log"></div>
-      <form id="ask-form" class="row">
-        <div>
-          <label for="question" style="display:none;">Question</label>
-          <input type="text" id="question" placeholder="e.g. What's the late rent notice process?" required />
-        </div>
-        <button type="submit" id="ask-button">Ask</button>
-      </form>
+  <div class="admin-shell">
+    <nav id="sidebar-root" class="sidebar"></nav>
+    <div class="admin-content">
+      <div id="not-connected" class="notice" style="display:none;">
+        Limona isn't fully set up yet — ask an administrator to add the AI service keys before chat can answer questions.
+      </div>
+      <div class="card">
+        <h2>Ask a question</h2>
+        <p class="muted">Ask about company policy, SOPs, laws, vendors, or anything else in Limehouse's uploaded documents. Limona will say so if it doesn't know.</p>
+        <div id="chat-log" class="chat-log"></div>
+        <form id="ask-form" class="row">
+          <div>
+            <label for="question" style="display:none;">Question</label>
+            <input type="text" id="question" placeholder="e.g. What's the late rent notice process?" required />
+          </div>
+          <button type="submit" id="ask-button">Ask</button>
+        </form>
+      </div>
     </div>
   </div>
+  <script src="/js/sidebar.js"></script>
   <script src="/js/chat.js"></script>
 </body>
 </html>

@@ -38,7 +38,7 @@ async function init() {
     return;
   }
   const me = await meRes.json();
-  document.getElementById("user-name").textContent = me.user.name;
+  renderSidebar({ activePage: "/chat.html", user: me.user });
 
   const statusRes = await fetch("/api/chat/status");
   const status = await statusRes.json();
@@ -46,12 +46,6 @@ async function init() {
     document.getElementById("not-connected").style.display = "block";
   }
 }
-
-document.getElementById("logout-link").addEventListener("click", async (e) => {
-  e.preventDefault();
-  await fetch("/api/auth/logout", { method: "POST" });
-  window.location.href = "/auth/login";
-});
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();

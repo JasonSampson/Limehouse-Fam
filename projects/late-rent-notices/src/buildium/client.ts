@@ -166,9 +166,17 @@ const buildiumPropertyManagerSchema = z.object({
   Email: z.string().email().nullable(),
 });
 
+// IsActive: CONFIRMED LIVE (2026-07-17) this is a real field on every
+// /v1/rentals row — true means "currently under management," false means
+// sold/inactive/historical (includes every stale "OLD"-suffixed duplicate
+// property Jason has flagged, e.g. "4314 Dunning Road OLD"). Captured here
+// (not just used as a query filter) so the schema stays honest about what
+// Buildium actually returns and so fetchProperties can defensively re-check
+// it even though the query already filters server-side.
 const buildiumPropertySchema = z.object({
   Id: z.number(),
   Name: z.string().nullable(),
+  IsActive: z.boolean(),
   Address: z.object({
     AddressLine1: z.string().nullable(),
     AddressLine2: z.string().nullable(),
@@ -182,8 +190,28 @@ const buildiumPropertySchema = z.object({
 export type BuildiumProperty = z.infer<typeof buildiumPropertySchema>;
 
 // CONFIRMED endpoint: /v1/rentals (not /v1/rentalproperties).
+//
+// CONFIRMED LIVE (2026-07-17): /rentals returns EVERY property ever entered
+// in Buildium, active or not, unless filtered — 323 total on Jason's real
+// account, of which only 197 are IsActive:true. The obvious-looking
+// `isactive=true` / `IsActive=true` query params are silently ignored by
+// Buildium (same "param name doesn't do what you'd guess" trap as
+// leasestatuses elsewhere in this file) — they return unfiltered results.
+// The param that actually works is `status=Active`, verified to return
+// exactly the 197 IsActive:true rows and nothing else. Those 197 active
+// properties sum to 230 units (NumberUnits) — an exact match to Jason's
+// documented ~230 units under management, confirming this is the right
+// filter. The other 126 properties (401 - 230 = 171... note: properties vs
+// units aren't 1:1, unit total isn't meaningful for inactive ones) include
+// sold properties, historical duplicates, and every "OLD"-suffixed stale
+// record Jason flagged. IsActive is also captured in the schema above as a
+// defensive re-check, not relied on as the only filter, since the server-
+// side param is strictly cheaper (no wasted rows over the wire).
 export async function fetchProperties(): Promise<BuildiumProperty[]> {
-  return buildiumGet<BuildiumProperty[]>("/rentals?limit=1000", z.array(buildiumPropertySchema));
+  return buildiumGet<BuildiumProperty[]>(
+    "/rentals?status=Active&limit=1000",
+    z.array(buildiumPropertySchema)
+  );
 }
 
 // CONFIRMED live against a real Buildium account (2026-07-02, read-only):

@@ -1,10 +1,19 @@
 import { Router } from "express";
+import express from "express";
 import { z } from "zod";
 import { requireSession } from "./requireSession.js";
 import { verifyPassword, hashPassword } from "./password.js";
 import { getAppPool } from "../db/pool.js";
 
 export const accountRouter = Router();
+// Change Password is a plain HTML <form method="POST"> submission
+// (application/x-www-form-urlencoded), not fetch/JSON like login.js.
+// Without this, req.body is empty for every field, and zod's default
+// error for a missing field ("Required") renders instead of the real
+// "Current password is required." message -- same pattern already
+// correctly handled in staffRoutes.ts and rolesRoutes.ts, just missing
+// here.
+accountRouter.use(express.urlencoded({ extended: false }));
 
 function esc(s: unknown): string {
   return String(s ?? "")

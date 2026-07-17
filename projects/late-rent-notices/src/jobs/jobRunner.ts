@@ -34,17 +34,78 @@ export async function runTrackedJob<T>(
   try {
     const result = await fn();
     const stats = (result ?? {}) as Record<string, unknown>;
+
+    // A job that finished without throwing can still have left individual
+    // items unprocessed — dailyLatenessCheck.ts collects those into an
+    // `errors: string[]` array (e.g. "no active letter_templates row") and
+    // used to just log them via appLogger, which nobody but a server-log
+    // reader would ever see. status='succeeded' with error_message=null was
+    // indistinguishable from a run where nothing went wrong at all. Treat
+    // this the same as the unassignedPropertyIssues alert below it: real
+    // failures, surfaced to Jason, not just left in a log file.
+    const perItemErrors = Array.isArray(stats.errors)
+      ? (stats.errors as unknown[]).filter((e): e is string => typeof e === "string")
+      : [];
+
+    let errorMessage: string | null = null;
+    if (perItemErrors.length > 0) {
+      const summary = `${perItemErrors.length} item(s) failed to process — see details below.`;
+      const details = perItemErrors.join("\n");
+      const full = `${summary}\n${details}`;
+      // error_message is a plain `text` column (no declared length limit),
+      // but keep the stored value bounded so one pathological run can't
+      // bloat job_runs indefinitely — 4000 chars comfortably fits dozens of
+      // one-line errors, which is already far more than a human will read.
+      const MAX_ERROR_MESSAGE_LENGTH = 4000;
+      errorMessage =
+        full.length > MAX_ERROR_MESSAGE_LENGTH
+          ? `${full.slice(0, MAX_ERROR_MESSAGE_LENGTH)}\n... (truncated, ${perItemErrors.length} total)`
+          : full;
+    }
+
     await jobPool.query(
       `UPDATE job_runs SET status = 'succeeded', completed_at = now(),
-         leases_checked = $1, notices_drafted = $2
-       WHERE id = $3`,
+         leases_checked = $1, notices_drafted = $2, error_message = $3
+       WHERE id = $4`,
       [
         typeof stats.leasesChecked === "number" ? stats.leasesChecked : null,
         typeof stats.noticesDrafted === "number" ? stats.noticesDrafted : null,
+        errorMessage,
         jobRunId,
       ]
     );
-    logInfo(`job ${jobName} succeeded`, { jobName, traceId: trace.trace_id });
+    logInfo(`job ${jobName} succeeded`, {
+      jobName,
+      traceId: trace.trace_id,
+      ...(perItemErrors.length > 0 ? { itemErrorCount: perItemErrors.length } : {}),
+    });
+
+    if (perItemErrors.length > 0) {
+      // Same alert path used for the unassignedPropertyIssues case in
+      // dailyLatenessCheck.ts — reused rather than duplicated, and caught
+      // the same way (an alert-delivery failure must never mask the fact
+      // that the job itself did complete, just with per-item failures).
+      try {
+        await sendAlert({
+          to: env.JASON_ALERT_EMAIL,
+          subject: `ACTION NEEDED: ${jobName} completed with ${perItemErrors.length} item(s) that failed to process`,
+          body:
+            `The "${jobName}" job finished its run, but ${perItemErrors.length} item(s) inside it failed to ` +
+            `process and were skipped:\n\n` +
+            perItemErrors.map((e) => `- ${e}`).join("\n") +
+            `\n\nCheck job_runs (id=${jobRunId}) and audit_log for details. Nothing else in this run was ` +
+            `affected — this alert covers only the item(s) listed above.`,
+        });
+        await jobPool.query("UPDATE job_runs SET jason_alerted_at = now() WHERE id = $1", [jobRunId]);
+      } catch (alertErr) {
+        logError(`job ${jobName} succeeded with item errors AND the alert about it also failed to deliver`, {
+          jobName,
+          traceId: trace.trace_id,
+          error: alertErr instanceof Error ? alertErr.message : String(alertErr),
+        });
+      }
+    }
+
     return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

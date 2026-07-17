@@ -1,5 +1,44 @@
 import { rollForwardToBusinessDay, getEasternUtcOffsetHours } from "./businessCalendar.js";
 
+// Reads the current wall-clock hour/minute in America/New_York for a given
+// instant, DST included (same Intl-based approach as
+// getEasternUtcOffsetHours, kept here rather than added to businessCalendar
+// since it's about "what time is it right now locally," not calendar-day
+// arithmetic).
+function getEasternLocalHourMinute(instant: Date): { hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).formatToParts(instant);
+  const hourRaw = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  // hour12: false can format midnight as "24" in some Node/ICU builds
+  // instead of "0" — normalize so callers never have to special-case it.
+  const hour = hourRaw === 24 ? 0 : hourRaw;
+  return { hour, minute };
+}
+
+// Confirmed on the production VPS 2026-07-17: crontab's `CRON_TZ=` prefix
+// is NOT honored by the cron implementation actually installed there (the
+// server's own timezone is Etc/UTC, and jobs scheduled "10:00/10:15/10:30"
+// under CRON_TZ=America/New_York fired at 10:00/10:15/10:30 UTC instead —
+// 4 hours early during EDT). Rather than depend on crontab's timezone
+// handling working at all (fragile across cron implementations, and a
+// fixed-offset UTC crontab line would itself need manual correction twice a
+// year for DST), the job scripts decide for themselves whether "now" is
+// the intended run time. Cron should invoke every 15 minutes on a plain UTC
+// schedule (e.g. `*/15 * * * *`, no CRON_TZ) — since America/New_York's UTC
+// offset is always a whole number of hours, 10:00/10:15/10:30 Eastern
+// always lands exactly on a UTC :00/:15/:30 boundary too, so this check
+// still fires at the right moment year-round with zero manual DST
+// correction on the server.
+export function isScheduledRunTime(now: Date, hourLocal: number, minuteLocal: number): boolean {
+  const { hour, minute } = getEasternLocalHourMinute(now);
+  return hour === hourLocal && minute === minuteLocal;
+}
+
 // Computes today's intended 10:00 America/New_York run instant for the
 // daily job, rolled forward to the next business day if today is a
 // weekend/holiday. DST-aware (Jason confirmed): resolves the actual

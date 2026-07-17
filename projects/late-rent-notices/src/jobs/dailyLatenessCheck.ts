@@ -8,7 +8,6 @@ import { fetchAndClassifyLeaseCharges, insertNoticeLineItems } from "../lib/noti
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace, childSpan } from "../lib/trace.js";
 import { logInfo, logError } from "../lib/appLogger.js";
-import { sendAlert } from "../email/sendAlert.js";
 import { formatCurrency } from "../templates/renderTemplate.js";
 
 interface LeaseRow {
@@ -366,21 +365,30 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
       if (assignedPm.rows.length === 0) {
         // A genuinely delinquent lease with no one to draft the notice to
         // review/send — this used to only land in the ephemeral `errors`
-        // array (logged, never actually seen by Jason). Collected here so
-        // it can be surfaced in a real alert below: a property silently
-        // missing a PM assignment should never be a "discover it by
-        // accident" problem.
+        // array (logged, never actually seen by Jason). Collected here AND
+        // pushed to `errors` in full detail: runTrackedJob (jobRunner.ts)
+        // now alerts Jason on any non-empty `errors`, so a property
+        // silently missing a PM assignment is surfaced the same way as any
+        // other per-lease processing failure — one alert mechanism, not two
+        // (see jobRunner.ts's comment on why this block no longer sends its
+        // own separate alert).
         const propertyResult = await jobPool.query<{ name: string }>("SELECT name FROM properties WHERE id = $1", [
           lease.property_id,
         ]);
+        const propertyName = propertyResult.rows[0]?.name ?? `property ${lease.property_id}`;
+        const dueDateStr = lateness.dueDate.toISOString().slice(0, 10);
         unassignedPropertyIssues.push({
           leaseId: lease.id,
           propertyId: lease.property_id,
-          propertyName: propertyResult.rows[0]?.name ?? `property ${lease.property_id}`,
+          propertyName,
           amountOwed: balanceRow.balance,
-          dueDate: lateness.dueDate.toISOString().slice(0, 10),
+          dueDate: dueDateStr,
         });
-        errors.push(`Lease ${lease.id}: no PM assigned to property ${lease.property_id}, skipping draft`);
+        errors.push(
+          `No PM assigned to ${propertyName} (lease ${lease.id}): owes ${formatCurrency(balanceRow.balance)}, ` +
+            `due ${dueDateStr} — no notice was drafted since nobody could review/send it. Assign a property ` +
+            `manager (pm_property_assignments) and the next daily run will pick it up automatically.`
+        );
         continue;
       }
 
@@ -487,36 +495,15 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
     }
   }
 
-  // Safeguard: a genuinely delinquent tenant whose property has no PM
-  // assigned would otherwise sit invisible — no notice drafted, and (since
-  // RLS scopes every PM's view to their own assigned doors) not visible to
-  // anyone in the app either, including Jason. Real money owed should never
-  // depend on someone noticing this by accident.
-  if (unassignedPropertyIssues.length > 0) {
-    try {
-      await sendAlert({
-        to: env.JASON_ALERT_EMAIL,
-        subject: `ACTION NEEDED: ${unassignedPropertyIssues.length} propert${unassignedPropertyIssues.length === 1 ? "y needs" : "ies need"} a manager assigned before a late notice can go out`,
-        body:
-          `Today's late-rent check found ${unassignedPropertyIssues.length} genuinely delinquent lease(s) whose ` +
-          `property has no property manager assigned. No notice was drafted for any of them — this system will ` +
-          `never draft a legal notice with nobody accountable to review and send it.\n\n` +
-          unassignedPropertyIssues
-            .map((i) => `- ${i.propertyName} (lease ${i.leaseId}): owes ${formatCurrency(i.amountOwed)}, due ${i.dueDate}`)
-            .join("\n") +
-          `\n\nAssign a property manager to each of these properties (pm_property_assignments) — the next daily ` +
-          `run will pick them up automatically once assigned.`,
-      });
-    } catch (err) {
-      // Same principle as jobRunner.ts's job-failure alert: the alert path
-      // itself failing must never mask or block the job's own success —
-      // log loudly, don't throw.
-      logError("failed to send unassigned-property alert", {
-        traceId: trace.trace_id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // unassignedPropertyIssues no longer sends its own alert here — its
+  // messages are already in `errors` (pushed above, in full detail), and
+  // runTrackedJob (jobRunner.ts) alerts Jason once for the whole `errors`
+  // array. This keeps a genuinely delinquent tenant on an unassigned
+  // property from sitting invisible (real money owed should never depend on
+  // someone noticing by accident) while guaranteeing a single combined
+  // email instead of two separate ones when both this and an unrelated
+  // per-lease failure (e.g. a missing letter template) happen in the same
+  // run — exactly what happened in production on 2026-07-17.
 
   logInfo("daily lateness check complete", {
     traceId: trace.trace_id,

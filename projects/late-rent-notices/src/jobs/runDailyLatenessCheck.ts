@@ -5,4 +5,4 @@
 import { runDailyLatenessCheck } from "./dailyLatenessCheck.js";
 import { runJobEntryPoint } from "./runJobEntryPoint.js";
 
-void runJobEntryPoint("daily_lateness_check", (jobPool) => runDailyLatenessCheck(jobPool));
+void runJobEntryPoint("daily_lateness_check", 10, 0, (jobPool) => runDailyLatenessCheck(jobPool));

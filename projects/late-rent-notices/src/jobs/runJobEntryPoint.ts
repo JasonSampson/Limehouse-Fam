@@ -1,9 +1,10 @@
 import type { Pool } from "pg";
 import { getJobPool, closePools } from "../db/pool.js";
 import { runTrackedJob, ALREADY_ALERTED } from "./jobRunner.js";
-import { computeScheduledRunTime } from "../lib/scheduler.js";
+import { computeScheduledRunTime, isScheduledRunTime } from "../lib/scheduler.js";
 import { sendAlert } from "../email/sendAlert.js";
 import { loadEnv } from "../config/env.js";
+import { logInfo } from "../lib/appLogger.js";
 
 // Shared entry point for the three cron-invoked jobs (daily lateness check,
 // escalation check, PM reminder check). runTrackedJob already writes a
@@ -22,13 +23,30 @@ import { loadEnv } from "../config/env.js";
 // needs an infra-level dead-man's-switch (e.g. a cron wrapper that emails
 // on ANY non-zero exit code, or a systemd OnFailure= unit) as defense in
 // depth. Flagged for Scotty's deployment notes, not silently left uncovered.
+// targetHourLocal/targetMinuteLocal: the intended America/New_York run time
+// for this job (e.g. 10, 0 for the 10:00 daily lateness check). The cron
+// entry that invokes this script is expected to fire every 15 minutes
+// year-round in plain UTC (see scheduler.ts's isScheduledRunTime doc
+// comment for why) — this function is what actually decides, on each of
+// those invocations, whether it's really the right moment or just a
+// no-op tick. An invocation that isn't the scheduled moment returns
+// immediately: no job_runs row, no DB pool even opened, so 95 out of every
+// 96 daily invocations per job are a single cheap timezone check and
+// nothing else.
 export async function runJobEntryPoint(
   jobName: string,
+  targetHourLocal: number,
+  targetMinuteLocal: number,
   runFn: (jobPool: Pool) => Promise<unknown>
 ): Promise<void> {
+  if (!isScheduledRunTime(new Date(), targetHourLocal, targetMinuteLocal)) {
+    logInfo(`${jobName}: not the scheduled run time yet, skipping this tick`, { jobName });
+    return;
+  }
+
   try {
     const jobPool = getJobPool();
-    const scheduledFor = computeScheduledRunTime(new Date(), 10);
+    const scheduledFor = computeScheduledRunTime(new Date(), targetHourLocal);
     await runTrackedJob(jobPool, jobName, scheduledFor, () => runFn(jobPool));
   } catch (err) {
     console.error(err);

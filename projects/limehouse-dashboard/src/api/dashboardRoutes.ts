@@ -345,10 +345,23 @@ dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, async (_
   }
 });
 
+// FIXED [today]: this route used to return fetchProperties()'s raw,
+// unfiltered list — every property Buildium has ever recorded (323 for
+// this account: 197 active + 126 sold/historical/duplicate records), not
+// just the ones Jason actually manages today. It's the data source for
+// the Occupancy tile's "Properties" drill-down (public/js/dashboard.js),
+// so that modal was showing ~126 stale/inactive properties (e.g. old
+// duplicate address records) mixed in with real ones. Same root cause as
+// the fetchProperties()-without-a-filter bug already fixed in
+// late-rent-notices, just localized to this one endpoint here — every
+// other caller of fetchProperties() in this file already applies its own
+// `.filter((p) => p.IsActive === true)` before using the data (confirmed
+// by reading every call site), this route was the one that didn't.
 dashboardRoutes.get("/api/dashboard/properties", requireLogin, async (_req, res) => {
   try {
     const properties = await fetchProperties();
-    res.json(properties.map((p) => ({ id: p.Id, name: p.Name, numberUnits: p.NumberUnits })));
+    const activeProperties = properties.filter((p) => p.IsActive === true);
+    res.json(activeProperties.map((p) => ({ id: p.Id, name: p.Name, numberUnits: p.NumberUnits })));
   } catch (err) {
     logError("GET /api/dashboard/properties failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load properties from Buildium." });

@@ -99,9 +99,17 @@ syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
   try {
     const [balances, properties] = await Promise.all([fetchOutstandingBalances(), fetchProperties()]);
     const delinquency = summarizeDelinquency(balances);
+    // FIXED [today]: was caching properties.length raw (323, every
+    // property Buildium has ever recorded for this account), not the ~197
+    // actually-active count — same unfiltered-fetchProperties() pattern
+    // fixed on the /api/dashboard/properties route above. This
+    // "property_count" cached value currently has no reader anywhere else
+    // in the codebase (confirmed by search), so it wasn't user-visible,
+    // but fixing it here too so it's correct if/when something reads it.
+    const activePropertyCount = properties.filter((p) => p.IsActive === true).length;
 
     await upsertCachedMetric("delinquency_summary", "portfolio", "buildium", delinquency);
-    await upsertCachedMetric("property_count", "portfolio", "buildium", { count: properties.length });
+    await upsertCachedMetric("property_count", "portfolio", "buildium", { count: activePropertyCount });
 
     await completeSyncRun(syncLogId, properties.length + balances.length);
     logInfo("Manual sync completed", { syncLogId });

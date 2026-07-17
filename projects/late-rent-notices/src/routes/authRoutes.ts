@@ -37,7 +37,7 @@ authRoutes.post("/auth/limehq-callback", async (req, res) => {
 
     const pm = result.rows[0];
     if (!pm || !pm.active) {
-      res.status(403).send("Your LimeHQ account does not have access to Late Rent Notices. Contact Jason.");
+      res.status(403).send("Your LimeHQ account does not have access to Late Rent Notices. Contact your Limehouse administrator.");
       return;
     }
 

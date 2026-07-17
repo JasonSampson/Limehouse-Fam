@@ -465,25 +465,7 @@ function layout(title: string, displayName: string, content: string): string {
   <main class="main">
     ${content}
   </main>
-  <script>
-    (function() {
-      const btn = document.getElementById('user-menu-btn');
-      const dd  = document.getElementById('user-menu-dropdown');
-      btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        dd.classList.toggle('open');
-        btn.setAttribute('aria-expanded', String(dd.classList.contains('open')));
-      });
-      document.addEventListener('click', function() {
-        dd.classList.remove('open');
-        btn.setAttribute('aria-expanded', 'false');
-      });
-      document.getElementById('signout-btn').addEventListener('click', async function() {
-        await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
-        window.location.href = '/';
-      });
-    })();
-  </script>
+  <script src="/js/nav.js"></script>
 </body>
 </html>`;
 }
@@ -1035,7 +1017,7 @@ router.get("/:id/permissions", async (req, res, next) => {
     const templateDropdown = !isOwner && canEdit
       ? `<div class="template-bar">
           <label for="role-template-select" class="template-label">Start from a role template:</label>
-          <select id="role-template-select">
+          <select id="role-template-select" data-templates="${esc(templatesJson)}">
             <option value="">— pick a template —</option>
             ${roleTemplates
               .filter((r) => r.system_role_key !== "owner")
@@ -1074,21 +1056,9 @@ router.get("/:id/permissions", async (req, res, next) => {
         ${formClose}
       </div>`;
 
-    const templateScript = !isOwner && canEdit ? `
-      <script>
-        const TEMPLATES = ${templatesJson};
-        document.getElementById('apply-template-btn').addEventListener('click', () => {
-          const sel = document.getElementById('role-template-select');
-          const roleId = parseInt(sel.value, 10);
-          if (!roleId) return;
-          const tmpl = TEMPLATES.find(t => t.id === roleId);
-          if (!tmpl) return;
-          const keySet = new Set(tmpl.keys);
-          document.querySelectorAll('input[type="checkbox"][data-key]').forEach(cb => {
-            cb.checked = keySet.has(cb.dataset.key);
-          });
-        });
-      </script>` : "";
+    const templateScript = !isOwner && canEdit
+      ? `<script src="/js/staff-permissions.js"></script>`
+      : "";
 
     res.send(layout("Permissions", displayName, content) + templateScript);
   } catch (err) {

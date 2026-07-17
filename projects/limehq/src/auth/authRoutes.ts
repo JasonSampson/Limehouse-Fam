@@ -262,7 +262,7 @@ router.get("/handoff", requireSession, async (req, res, next) => {
 <form id="hf" method="POST" action="${targetBase}/auth/limehq-callback">
   <input type="hidden" name="token" value="${token}"/>
 </form>
-<script>document.getElementById('hf').submit();</script>
+<script src="/js/handoff.js"></script>
 </body></html>`);
   } catch (err) {
     next(err);

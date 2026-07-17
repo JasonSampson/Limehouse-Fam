@@ -361,25 +361,7 @@ function layout(
   <main class="main">
     ${content}
   </main>
-  <script>
-    (function() {
-      const btn = document.getElementById('user-menu-btn');
-      const dd  = document.getElementById('user-menu-dropdown');
-      btn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        dd.classList.toggle('open');
-        btn.setAttribute('aria-expanded', String(dd.classList.contains('open')));
-      });
-      document.addEventListener('click', function() {
-        dd.classList.remove('open');
-        btn.setAttribute('aria-expanded', 'false');
-      });
-      document.getElementById('signout-btn').addEventListener('click', async function() {
-        await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
-        window.location.href = '/';
-      });
-    })();
-  </script>
+  <script src="/js/nav.js"></script>
 </body>
 </html>`;
 }

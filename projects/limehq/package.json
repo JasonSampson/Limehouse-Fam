@@ -10,8 +10,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "migrate": "node-pg-migrate",
-    "migrate:up": "node-pg-migrate up",
-    "migrate:down": "node-pg-migrate down",
+    "migrate:up": "node-pg-migrate up --config-file .node-pg-migraterc.json --tsx",
+    "migrate:down": "node-pg-migrate down --config-file .node-pg-migraterc.json --tsx",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts"
   },

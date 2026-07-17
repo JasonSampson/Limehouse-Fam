@@ -18,11 +18,15 @@ leaseRoutes.get("/api/leases", async (req: AuthedRequest, res) => {
   const session = req.session!;
   const leases = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
+      // p.is_active = true: this is the PM's working lease list (used to
+      // pick a lease to override a grace period on), not a historical
+      // lookup — a lease surviving on a property that's sold/inactive in
+      // Buildium shouldn't appear as something to manage going forward.
       `SELECT l.id, l.unit_label, l.rent_due_day, l.grace_period_days, l.lease_status,
               p.name AS property_name
        FROM leases l
        JOIN properties p ON p.id = l.property_id
-       WHERE l.lease_status = 'Active'
+       WHERE l.lease_status = 'Active' AND p.is_active = true
        ORDER BY p.name, l.unit_label`
     );
     return result.rows;

@@ -46,6 +46,18 @@ pmAssignmentRoutes.post("/api/pm-property-assignments", async (req: AuthedReques
   }
 
   const inserted = await withPmScope(session.pmUserId, async (client) => {
+    // is_active check added alongside migration 0045: assigning a PM to a
+    // property that's sold/inactive in Buildium is exactly the mistake that
+    // produced 123 bad rows in this table on 2026-07-17 (a bulk-assign that
+    // predated properties.is_active existing at all) — block it at the
+    // source instead of relying on downstream filters to make it harmless.
+    const property = await client.query<{ is_active: boolean }>("SELECT is_active FROM properties WHERE id = $1", [
+      parsed.data.propertyId,
+    ]);
+    if (property.rows.length === 0 || property.rows[0].is_active === false) {
+      return { inactiveProperty: true as const };
+    }
+
     const existing = await client.query("SELECT id FROM pm_property_assignments WHERE property_id = $1", [
       parsed.data.propertyId,
     ]);
@@ -81,6 +93,11 @@ pmAssignmentRoutes.post("/api/pm-property-assignments", async (req: AuthedReques
 
     return { id: result.rows[0].id };
   });
+
+  if ("inactiveProperty" in inserted) {
+    res.status(409).json({ error: "This property is inactive (sold or off management) and can't be assigned a property manager." });
+    return;
+  }
 
   if ("alreadyAssigned" in inserted) {
     res.status(409).json({ error: "This property already has a property manager assigned." });

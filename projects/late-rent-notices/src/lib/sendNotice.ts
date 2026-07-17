@@ -109,6 +109,11 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     assigned_pm_name: string;
     assigned_pm_email: string;
   }>(
+    // Not filtered on p.is_active: notice.lease_id already points at a
+    // notice drafted BEFORE this send action — the property being active
+    // or not today has no bearing on rendering/sending a document that
+    // already exists (properties.is_active only gates whether new notices
+    // get drafted in the first place, see dailyLatenessCheck.ts).
     `SELECT l.buildium_lease_id, l.unit_label, l.rent_due_day, l.grace_period_days,
             (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
             pm.display_name AS assigned_pm_name, pm.email AS assigned_pm_email

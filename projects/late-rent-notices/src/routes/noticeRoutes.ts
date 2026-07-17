@@ -37,6 +37,12 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
       // worth cluttering this list with — per Jason's explicit request.
       // 'draft' (still needs review) and 'sent'/'bounced' (real history)
       // still show.
+      // Not filtered on p.is_active: a notice already drafted/sent is a
+      // real historical/legal record regardless of whether the property has
+      // since sold or gone inactive in Buildium — it must keep showing here
+      // exactly like any other notice (properties.is_active only controls
+      // whether NEW notices get created going forward, see
+      // dailyLatenessCheck.ts).
       `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
               l.unit_label, p.name AS property_name
@@ -79,6 +85,15 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
   const session = req.session!;
   const lateNoNotice = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
+      // p.is_active = true: this is an actionable "still needs a notice
+      // drafted" queue, not a historical record — an open late_cycles row
+      // left over from before a property was marked inactive (sold, taken
+      // off management) has nothing left to action here, and showing it
+      // would prompt a PM to chase a notice for a property Limehouse no
+      // longer manages. dailyLatenessCheck.ts's own is_active filter (see
+      // its comment) is what stops NEW rows like this from being created
+      // for inactive properties going forward; this filter just also hides
+      // any that already exist from before that property was deactivated.
       `SELECT lc.id AS late_cycle_id, lc.lease_id, lc.due_date, lc.opened_at,
               l.unit_label, l.property_id, p.name AS property_name,
               NOT EXISTS (
@@ -88,6 +103,7 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
        JOIN leases l ON l.id = lc.lease_id
        JOIN properties p ON p.id = l.property_id
        WHERE lc.closed_at IS NULL
+         AND p.is_active = true
          AND NOT EXISTS (
            SELECT 1 FROM notices n WHERE n.late_cycle_id = lc.id
          )

@@ -266,14 +266,27 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
   for (const balanceRow of outstandingBalances) {
     const leaseSpan = childSpan(trace);
     try {
+      // is_active = true is required here so a lease on a property that has
+      // since sold/gone off management (marked inactive by this same job's
+      // syncBuildiumData call, above) never gets a notice drafted — this is
+      // the actual enforcement point for "never process a lease tied to an
+      // inactive property," not just a display-layer filter elsewhere.
+      // Ordinarily this can't happen (fetchActiveLeases only returns leases
+      // Buildium itself calls Active, and a sold property shouldn't carry
+      // one), but it's cheap insurance against sync-ordering edge cases and
+      // matches the explicit requirement, not just the common case.
       const leaseResult = await jobPool.query<LeaseRow>(
-        "SELECT id, property_id, rent_due_day, grace_period_days, buildium_lease_id FROM leases WHERE buildium_lease_id = $1 AND lease_status = 'Active'",
+        `SELECT l.id, l.property_id, l.rent_due_day, l.grace_period_days, l.buildium_lease_id
+         FROM leases l
+         JOIN properties p ON p.id = l.property_id
+         WHERE l.buildium_lease_id = $1 AND l.lease_status = 'Active' AND p.is_active = true`,
         [balanceRow.leaseId]
       );
       if (leaseResult.rows.length === 0) {
         // Has a balance per Buildium but isn't in our local active-lease
         // cache yet (sync ordering, or a lease that's Active in Buildium
-        // but our sync hasn't caught up) — skip this run, pick up next.
+        // but our sync hasn't caught up), or its property is inactive —
+        // skip this run, pick up next.
         continue;
       }
       const lease = leaseResult.rows[0];

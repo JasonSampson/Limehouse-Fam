@@ -214,6 +214,18 @@ export async function fetchProperties(): Promise<BuildiumProperty[]> {
   );
 }
 
+// Unfiltered — every property Buildium has ever seen (all 323, active and
+// inactive), unlike fetchProperties() above which is server-side filtered
+// to status=Active only. NOT used by the regular sync (syncBuildiumData
+// must stay on the cheap, already-filtered call) — this exists only for
+// the one-time data-fix script (scripts/markStalePropertiesInactive.ts)
+// that needs to re-verify, live, which of the ALREADY-locally-synced stale
+// properties Buildium's IsActive field actually says are inactive, rather
+// than trusting a point-in-time count taken earlier.
+export async function fetchAllPropertiesIncludingInactive(): Promise<BuildiumProperty[]> {
+  return buildiumGet<BuildiumProperty[]>("/rentals?limit=1000", z.array(buildiumPropertySchema));
+}
+
 // CONFIRMED live against a real Buildium account (2026-07-02, read-only):
 // /leases/{id}/charges returns ONLY Id/Date/TotalAmount/Memo/BillId/Lines,
 // where each Lines entry is just { Amount, GLAccountId } — a bare numeric

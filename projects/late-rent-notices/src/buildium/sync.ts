@@ -17,7 +17,9 @@ import { logInfo } from "../lib/appLogger.js";
 // is driven by two config values Jason sets directly (see
 // src/lib/config.ts getDefaultGracePeriodDays / getInheritedLeaseGracePeriodDays),
 // not something synced from Buildium.
-export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynced: number; leasesSynced: number }> {
+export async function syncBuildiumData(
+  jobPool: Pool
+): Promise<{ propertiesSynced: number; leasesSynced: number; propertiesDeactivated: number }> {
   const now = new Date();
   // Defaults applied ONLY to a lease's first sync, or (for the inherited
   // value) the moment fee_terms_source is first observed as inherited_lease
@@ -33,12 +35,17 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
   const { days: inheritedGracePeriodDays } = await getInheritedLeaseGracePeriodDays(jobPool);
 
   const properties = await fetchProperties();
+  // fetchProperties() is already server-side filtered to status=Active
+  // (client.ts), so every row reaching this loop is active in Buildium
+  // today — is_active = true is set unconditionally on both insert and
+  // update, including for a property that was previously marked inactive
+  // here and has since come back under management (e.g. re-listed).
   for (const p of properties) {
     await jobPool.query(
       `INSERT INTO properties (
          buildium_property_id, source, name, address_line1, address_line2,
-         city, state, postal_code, owner_buildium_id, synced_at
-       ) VALUES ($1,'buildium',$2,$3,$4,$5,$6,$7,$8,$9)
+         city, state, postal_code, owner_buildium_id, synced_at, is_active
+       ) VALUES ($1,'buildium',$2,$3,$4,$5,$6,$7,$8,$9,true)
        ON CONFLICT (buildium_property_id) DO UPDATE SET
          name = EXCLUDED.name,
          address_line1 = EXCLUDED.address_line1,
@@ -47,7 +54,8 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
          state = EXCLUDED.state,
          postal_code = EXCLUDED.postal_code,
          owner_buildium_id = EXCLUDED.owner_buildium_id,
-         synced_at = EXCLUDED.synced_at`,
+         synced_at = EXCLUDED.synced_at,
+         is_active = true`,
       [
         String(p.Id),
         p.Name ?? `Property ${p.Id}`,
@@ -87,6 +95,30 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
         );
       }
     }
+  }
+
+  // Deactivation: a property that WAS active (is_active = true locally) but
+  // is absent from this run's fetchProperties() result has stopped being
+  // active in Buildium since the last sync (sold, taken off management,
+  // etc.) — mark it inactive here rather than leaving it silently untouched
+  // (the old UPSERT-only design had no path for this at all, which is how
+  // 126 stale properties accumulated as "active" in the first place). Never
+  // a DELETE — history (leases, notices, audit_log) referencing this
+  // property row must stay intact, per Jason's explicit instruction.
+  const activeBuildiumIds = properties.map((p) => String(p.Id));
+  const deactivated = await jobPool.query<{ id: number; name: string }>(
+    `UPDATE properties
+       SET is_active = false
+       WHERE is_active = true
+         AND buildium_property_id != ALL($1::text[])
+       RETURNING id, name`,
+    [activeBuildiumIds]
+  );
+  if (deactivated.rows.length > 0) {
+    logInfo("buildium sync: properties deactivated (no longer active in Buildium)", {
+      count: deactivated.rows.length,
+      propertyIds: deactivated.rows.map((r) => r.id),
+    });
   }
 
   const leases = await fetchActiveLeases();
@@ -182,6 +214,10 @@ export async function syncBuildiumData(jobPool: Pool): Promise<{ propertiesSynce
     leasesSynced += 1;
   }
 
-  logInfo("buildium sync complete", { propertiesSynced: properties.length, leasesSynced });
-  return { propertiesSynced: properties.length, leasesSynced };
+  logInfo("buildium sync complete", {
+    propertiesSynced: properties.length,
+    leasesSynced,
+    propertiesDeactivated: deactivated.rows.length,
+  });
+  return { propertiesSynced: properties.length, leasesSynced, propertiesDeactivated: deactivated.rows.length };
 }

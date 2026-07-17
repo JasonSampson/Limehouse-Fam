@@ -13,6 +13,13 @@ searchRoutes.use(requireSession);
 // dashboard, a deliberate lookup should show the full history, not just
 // what still needs action.
 //
+// Deliberately NOT filtered on p.is_active: this is a historical/audit
+// lookup by design (see above — "months ago"), and a property that's since
+// sold or gone inactive in Buildium is exactly the kind of address someone
+// would still need to search for. p.is_active is returned alongside each
+// result instead, so the UI can label an inactive property's history
+// accordingly rather than hiding it.
+//
 // Same withPmScope/RLS visibility as every other route: a plain PM only
 // searches within their own assigned doors, admin_assistant/bookkeeping see
 // portfolio-wide, per the existing RLS policies on notices/contact_attempts.
@@ -29,7 +36,7 @@ searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
     const noticesResult = await client.query(
       `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.amount_due_at_send, n.drafted_at, n.sent_at, n.delivery_status,
-              l.unit_label, p.name AS property_name, p.address_line1
+              l.unit_label, p.name AS property_name, p.address_line1, p.is_active AS property_is_active
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
        JOIN properties p ON p.id = l.property_id
@@ -42,7 +49,7 @@ searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
     const contactAttemptsResult = await client.query(
       `SELECT ca.id, ca.lease_id, ca.contact_method, ca.contact_note, ca.outcome,
               ca.promised_pay_date, ca.occurred_at,
-              l.unit_label, p.name AS property_name, p.address_line1
+              l.unit_label, p.name AS property_name, p.address_line1, p.is_active AS property_is_active
        FROM contact_attempts ca
        JOIN leases l ON l.id = ca.lease_id
        JOIN properties p ON p.id = l.property_id

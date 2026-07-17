@@ -20,7 +20,29 @@ const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
-app.use(helmet());
+
+// The handoff page (see src/auth/authRoutes.ts) POSTs a same-origin-hidden
+// form to each sub-app's /auth/limehq-callback so the handoff token never
+// lands in a URL or log. Helmet's default form-action ('self') blocks that
+// cross-origin submission, so the three sub-app origins must be allowlisted
+// explicitly. Filter out any unconfigured (undefined) URLs.
+const formActionTargets = [
+  "'self'",
+  ...[env.LATE_RENT_NOTICES_URL, env.DASHBOARD_URL, env.LIMONA_URL].filter(
+    (url): url is string => Boolean(url),
+  ),
+];
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "form-action": formActionTargets,
+      },
+    },
+  }),
+);
 // TODO(production): add helmet.hsts({ maxAge: 31536000, includeSubDomains: true }) once behind HTTPS
 app.use(express.json());
 app.use(cookieParser());

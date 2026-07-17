@@ -91,7 +91,7 @@ export async function truncateAllTables(): Promise<void> {
   requireTestDatabaseUrl();
   const testPool = getTestPool();
   await testPool.query(`
-    TRUNCATE TABLE chat_queries, document_chunks, documents, assets, team_knowledge, users
+    TRUNCATE TABLE chat_queries, document_chunks, documents, assets, team_knowledge
     RESTART IDENTITY CASCADE;
   `);
 }

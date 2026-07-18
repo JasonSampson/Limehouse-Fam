@@ -60,6 +60,12 @@ import {
 } from "../kpi/terminatedProperties.js";
 import { periodToSnapshotLabel } from "../kpi/period.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
+import {
+  refreshRentCollectionCache,
+  refreshSecurityDepositWithheldCache,
+  refreshRenewalRateCache,
+  refreshCallActivityCache,
+} from "../jobs/cacheRefreshJobs.js";
 
 // requireLogin applied per-route, not via syncRoutes.use() — this router is
 // mounted at the app root with no path prefix, and a past real bug here (an
@@ -197,58 +203,26 @@ syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
 // qualifier instead (see renderFinancials in dashboard.js), which also
 // retired the separate resolveCurrentMonthBalance/summarizeCurrentMonthRolling
 // functions this session had briefly added — same data, one path now.
+// FIXED 2026-07-04, moved into fetchActiveLeases() itself 2026-07-05: found
+// while investigating the paid-by-3rd/10th bug — CONFIRMED LIVE against
+// Jason's real account that 37 of the 240 leases Buildium reports as
+// LeaseStatus="Active" are actually stale/ghost records: CurrentTenants is
+// empty AND LeaseToDate is years in the past. That filter now lives in
+// fetchActiveLeases() (src/buildium/client.ts) so every dashboard KPI gets
+// it. See last12Months/buildDuePerMonth in src/kpi/rentCollection.ts for
+// the other real bug fixed here (2026-07-04): leases counted as "due" in
+// months before they even started.
+//
+// REFACTORED 2026-07-18: the actual work moved to refreshRentCollectionCache
+// in src/jobs/cacheRefreshJobs.ts so the automatic scheduler (scheduler.ts)
+// and this manual "sync now" button call the exact same implementation —
+// this route is now just the HTTP wrapper around it.
 syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => {
-  const syncLogId = await startSyncRun("buildium", "rent_collection_cache_refresh");
   try {
-    // FIXED 2026-07-04, moved into fetchActiveLeases() itself 2026-07-05:
-    // found while investigating the paid-by-3rd/10th bug — CONFIRMED LIVE
-    // against Jason's real account that 37 of the 240 leases Buildium
-    // reports as LeaseStatus="Active" are actually stale/ghost records:
-    // CurrentTenants is empty AND LeaseToDate is years in the past (e.g.
-    // lease 774300: LeaseFromDate 2015-11-12, LeaseToDate 2018-04-22,
-    // CurrentTenants: [], but LeaseStatus still says "Active"). These
-    // never get a real rent payment in any recent month because nobody
-    // actually lives there anymore — Buildium's LeaseStatus field just
-    // never got flipped to "Past" for them. Left in the denominator,
-    // these leases can only ever count as "unpaid," dragging every
-    // month's paid-by-3rd/10th percentage down regardless of the other
-    // fixes here. This filter now lives in fetchActiveLeases()
-    // (src/buildium/client.ts) so every dashboard KPI gets it, not just
-    // this sync — filtering drops the set from 240 to 203, matching the
-    // ~202 genuinely-occupied-unit count the occupancy fix (see
-    // src/kpi/occupancy.ts) independently landed on.
-    const activeLeases = await fetchActiveLeases();
-    // See last12Months/buildDuePerMonth in src/kpi/rentCollection.ts for the
-    // other real bug fixed here (2026-07-04): leases were counted as "due"
-    // in months before they even started, inflating the denominator and
-    // dragging every month's percentage down versus the real vendor numbers.
-    const monthsInWindow = monthsSinceYearsAgo(new Date(), 2);
-    const duePerMonth = buildDuePerMonth(activeLeases, monthsInWindow);
-
-    // Sequential, not Promise.all: the old Promise.all(activeLeases.map(...))
-    // fired every lease's transaction fetch at once, which is exactly what
-    // triggered the real 429s. buildiumGet's own retry-with-backoff (see
-    // src/buildium/client.ts) is a safety net for isolated bursts, but
-    // deliberately spacing out ~230 calls in the first place is the actual
-    // fix — this endpoint is meant to be called by a scheduled sync, not on
-    // every page load, so taking longer here is an acceptable trade.
-    const balancesByLease: ReturnType<typeof resolveLeaseBalancesPerMonth>[] = [];
-    for (const lease of activeLeases) {
-      const transactions = await fetchLeaseTransactions(String(lease.Id));
-      balancesByLease.push(resolveLeaseBalancesPerMonth(String(lease.Id), transactions));
-    }
-
-    const rentCollection = summarizeMonthlyCollectionRates(duePerMonth, balancesByLease.flat());
-    await upsertCachedMetric("rent_collection_extended", "portfolio", "buildium", rentCollection);
-
-    await completeSyncRun(syncLogId, activeLeases.length);
-    logInfo("Rent collection sync completed", { syncLogId, leaseCount: activeLeases.length });
+    await refreshRentCollectionCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordCacheRefreshFailure("rent_collection_extended", "portfolio", "buildium", message);
-    await failSyncRun(syncLogId, message);
-    logError("Rent collection sync failed", { syncLogId, error: message });
     res.status(502).json({ error: "Rent collection sync failed. Last known-good data is still being served.", detail: message });
   }
 });
@@ -263,36 +237,15 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
 // section. Only fetches transactions for leases whose move-out already
 // falls in the real window (13 months ago through 30 days ago), not every
 // Past lease ever, keeping this fast even as the window slides forward.
+// REFACTORED 2026-07-18: actual work moved to
+// refreshSecurityDepositWithheldCache in src/jobs/cacheRefreshJobs.ts — see
+// the rent-collection route above for why.
 syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req, res) => {
-  const syncLogId = await startSyncRun("buildium", "security_deposit_withheld_cache_refresh");
   try {
-    const pastLeases = await fetchLeasesByStatus(["Past"]);
-    const window = securityDepositMoveOutWindow(new Date());
-    const candidateLeases = pastLeases.filter(
-      (l) => l.LeaseToDate !== null && l.LeaseToDate >= window.start && l.LeaseToDate <= window.end
-    );
-
-    // Sequential, not Promise.all — same rate-limit reasoning as the
-    // rent-collection sync above, applied here even though this
-    // population is smaller.
-    const withheldByLeaseId = new Map<string, ReturnType<typeof extractSecurityDepositWithheld>>();
-    for (const lease of candidateLeases) {
-      const transactions = await fetchLeaseTransactions(String(lease.Id));
-      withheldByLeaseId.set(String(lease.Id), extractSecurityDepositWithheld(String(lease.Id), transactions));
-    }
-
-    const rows = securityDepositWithheldRows(candidateLeases, withheldByLeaseId, window);
-    const summary = summarizeSecurityDepositWithheld(rows);
-    await upsertCachedMetric("security_deposit_withheld", "portfolio", "buildium", { summary, rows });
-
-    await completeSyncRun(syncLogId, candidateLeases.length);
-    logInfo("Security deposit withheld sync completed", { syncLogId, ...summary });
-    res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
+    await refreshSecurityDepositWithheldCache();
+    res.json({ ok: true, syncedAt: new Date().toISOString() });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordCacheRefreshFailure("security_deposit_withheld", "portfolio", "buildium", message);
-    await failSyncRun(syncLogId, message);
-    logError("Security deposit withheld sync failed", { syncLogId, error: message });
     res
       .status(502)
       .json({ error: "Security deposit withheld sync failed. Last known-good data is still being served.", detail: message });
@@ -310,46 +263,15 @@ syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req
 // on-demand sync and caches {summary, rows} together so the drill-down and
 // the tile always agree. Sequential, not Promise.all, for the same
 // rate-limit reasons as those other syncs.
+// REFACTORED 2026-07-18: actual work moved to refreshRenewalRateCache in
+// src/jobs/cacheRefreshJobs.ts — see the rent-collection route above for
+// why.
 syncRoutes.post("/api/sync/renewal-rate", requireLogin, async (_req, res) => {
-  const syncLogId = await startSyncRun("buildium", "renewal_rate_cache_refresh");
   try {
-    const allLeases = await fetchAllLeases();
-    // CONFIRMED LIVE 2026-07-07: a lease that renewed (rent-schedule
-    // change) and has SINCE ended is still a real renewal — checking the
-    // rent signal only for non-Past leases missed these. So this also
-    // covers recently-ended Past leases (LeaseToDate within the last ~400
-    // days — a safe superset of the 365-day renewal window plus the
-    // 300-day moved-out term floor), not just Active/Future ones.
-    const recentCutoff = new Date();
-    recentCutoff.setUTCDate(recentCutoff.getUTCDate() - 400);
-    const recentCutoffStr = recentCutoff.toISOString().slice(0, 10);
-    const leasesToCheck = allLeases.filter(
-      (l) => l.LeaseStatus !== "Past" || (l.LeaseToDate !== null && l.LeaseToDate >= recentCutoffStr)
-    );
-
-    const rentEffectiveDateByLeaseId = new Map<string, string>();
-    for (const lease of leasesToCheck) {
-      const recurring = await fetchLeaseRecurringTransactions(String(lease.Id));
-      const rentDate = mostRecentRentEffectiveDate(
-        recurring.map((r) => ({ firstOccurrenceDate: r.FirstOccurrenceDate, lineGlAccountIds: r.Lines.map((l) => l.GLAccountId) }))
-      );
-      if (rentDate) rentEffectiveDateByLeaseId.set(String(lease.Id), rentDate);
-    }
-
-    const now = new Date();
-    const summary = summarizeRenewalRate(allLeases, rentEffectiveDateByLeaseId, now);
-    const rows = renewalRateRows(allLeases, rentEffectiveDateByLeaseId, now);
-
-    await upsertCachedMetric("renewal_rate", "portfolio", "buildium", { summary, rows });
-
-    await completeSyncRun(syncLogId, leasesToCheck.length);
-    logInfo("Renewal rate sync completed", { syncLogId, ...summary });
-    res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
+    await refreshRenewalRateCache();
+    res.json({ ok: true, syncedAt: new Date().toISOString() });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordCacheRefreshFailure("renewal_rate", "portfolio", "buildium", message);
-    await failSyncRun(syncLogId, message);
-    logError("Renewal rate sync failed", { syncLogId, error: message });
     res
       .status(502)
       .json({ error: "Renewal rate sync failed. Last known-good data is still being served.", detail: message });
@@ -457,6 +379,13 @@ syncRoutes.post("/api/sync/terminated-properties", requireLogin, async (_req, re
 // belongs in a real scheduled background job (not built yet), not
 // something to make bigger on the request/response path just because the
 // current 1-month scope is quick enough to call synchronously today.
+// REFACTORED 2026-07-18: actual work moved to refreshCallActivityCache in
+// src/jobs/cacheRefreshJobs.ts — see the rent-collection route above for
+// why. That function silently no-ops (rather than erroring) if RentEngine
+// isn't connected or RENTENGINE_ACCOUNT_ID isn't configured, since the
+// scheduler calls it unconditionally on a timer; this route still checks
+// both up front so a manual click gets an honest, specific 409 instead of
+// a silent no-op "success."
 syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
   if (!isRentEngineConnected()) {
     res.status(409).json({ error: "RentEngine is not connected." });
@@ -468,24 +397,11 @@ syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
     return;
   }
 
-  const syncLogId = await startSyncRun("rent_engine", "call_activity_sync");
   try {
-    const range = resolvePeriod("this_month");
-    const result = await syncCallActivityForPeriod(
-      `${range.from}T00:00:00Z`,
-      `${range.to}T23:59:59Z`,
-      env.RENTENGINE_ACCOUNT_ID
-    );
-
-    await upsertCachedMetric("call_activity_this_month", "portfolio", "rent_engine", result);
-    await completeSyncRun(syncLogId, result.prospectsScanned);
-    logInfo("RentEngine call activity sync completed", { syncLogId, ...result });
-    res.json({ ok: true, syncedAt: new Date().toISOString(), ...result });
+    await refreshCallActivityCache();
+    res.json({ ok: true, syncedAt: new Date().toISOString() });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordCacheRefreshFailure("call_activity_this_month", "portfolio", "rent_engine", message);
-    await failSyncRun(syncLogId, message);
-    logError("RentEngine call activity sync failed", { syncLogId, error: message });
     res.status(502).json({ error: "Call activity sync failed. Last known-good data is still being served.", detail: message });
   }
 });

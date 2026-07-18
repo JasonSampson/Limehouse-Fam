@@ -14,6 +14,7 @@ import { staffUsersRoutes } from "./api/staffUsersRoutes.js";
 import { getSessionUser } from "./auth/session.js";
 import { normalizePath, isGatedHtmlRequest, isAdminOnlyPage } from "./auth/staticPageGate.js";
 import { logInfo } from "./lib/logger.js";
+import { startScheduledCacheRefresh } from "./jobs/scheduler.js";
 
 // Serves Tron's static dashboard UI (public/) from this same Express app —
 // same origin as the API, so no CORS setup is needed for a small internal
@@ -109,4 +110,7 @@ app.listen(env.PORT, () => {
     rentEngineConnected: isRentEngineConnected(),
     leadSimpleConnected: isLeadSimpleConnected(),
   });
+  // Keeps dashboard_metric_cache warm in the background so no page load
+  // ever has to wait on a live sync — see src/jobs/scheduler.ts.
+  startScheduledCacheRefresh();
 });

@@ -16,7 +16,6 @@ import {
   fetchShowingsReport,
   isShowingCompleted,
   isShowingSelfGuided,
-  fetchCallsReport,
 } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
@@ -488,31 +487,53 @@ rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) 
   });
 });
 
-// Total Calls drill-down — real per-call records from /reporting/calls,
-// confirmed live 2026-07-04.
+// Total Calls drill-down — CORRECTED 2026-07-19, per Jason directly,
+// against a real vendor screenshot: this used to list real per-call
+// records from /reporting/calls, but the vendor's own drill-down doesn't
+// use that endpoint at all — its note says "From RentEngine
+// /reporting/leasing-performance/units total_calls field, summed across
+// all units," the SAME per-unit source the tile's own number already
+// uses (summarizeMarketingActivityFromReporting below), just shown one
+// row per unit instead of summed. Rebuilt to match: same shared cache as
+// the tile (no extra RentEngine calls), joined with fetchUnits() for
+// status (same join pattern as the Completion Rate / Days on Market
+// drill-downs), address instead of the vendor's bare unit number per
+// Jason directly, sorted by call count descending to match the vendor.
 rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
-  const result = await fetchCallsReport(from, to);
-  if (!result.connected) {
-    res.json({ connected: false, calls: [] });
-    return;
+  try {
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    if (!shared.connected) {
+      res.json({ connected: false, units: [] });
+      return;
+    }
+    if (shared.error || !shared.rows) {
+      logError("GET /api/rentengine/calls failed", { error: shared.error });
+      res.status(502).json({ error: "Failed to load leasing-performance data from RentEngine.", detail: shared.error });
+      return;
+    }
+    if (unitsResult.error || !unitsResult.data) {
+      logError("GET /api/rentengine/calls failed", { error: unitsResult.error });
+      res.status(502).json({ error: "Failed to load unit data from RentEngine.", detail: unitsResult.error });
+      return;
+    }
+    const unitsById = new Map(unitsResult.data.map((u) => [u.id, u]));
+    const units = [...shared.rows]
+      .sort((a, b) => b.total_calls - a.total_calls)
+      .map((r) => {
+        const unit = unitsById.get(r.unit_id);
+        return {
+          unitId: r.unit_id,
+          address: unit?.address?.formatted_address ?? null,
+          status: unit?.status ?? null,
+          calls: r.total_calls,
+        };
+      });
+    res.json({ connected: true, units });
+  } catch (err) {
+    logError("GET /api/rentengine/calls failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load call data from RentEngine." });
   }
-  if (result.error || !result.data) {
-    logError("GET /api/rentengine/calls failed", { error: result.error });
-    res.status(502).json({ error: "Failed to load call data from RentEngine.", detail: result.error });
-    return;
-  }
-  res.json({
-    connected: true,
-    calls: result.data.map((c) => ({
-      prospectName: c.prospect_name,
-      direction: c.call_direction,
-      status: c.status,
-      durationSeconds: c.call_duration,
-      contactNumber: c.contact_number,
-      createdAt: c.created_at,
-    })),
-  });
 });
 
 // Outbound Texts — NO drill-down built. Confirmed during Oracle's original

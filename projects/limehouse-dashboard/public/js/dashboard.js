@@ -1832,19 +1832,25 @@ async function handleTileClick(tileId) {
     return;
   }
 
+  // CORRECTED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot: the vendor's own drill-down isn't a per-call record list —
+  // it's one row per unit, from the same leasing-performance total_calls
+  // field the tile's own number already sums. Rebuilt to match, sorted by
+  // call count highest to lowest. Address instead of the vendor's bare
+  // unit number, per Jason directly.
   if (tileId === "total-calls") {
     await simpleDrillDown({
       tileId,
       title: "Total Calls",
       url: `/api/rentengine/calls?period=${period}`,
-      rowsKey: "calls",
+      rowsKey: "units",
+      note: "From RentEngine's per-unit leasing-performance report's total_calls field, summed per unit — same source as the tile's own number.",
       columns: [
-        { label: "Prospect", key: "prospectName" },
-        { label: "Direction", key: "direction" },
-        { label: "Status", key: "status" },
-        { label: "Duration (s)", key: "durationSeconds" },
+        { label: "Address", render: (r) => r.address ?? `Unit ${r.unitId}` },
+        { label: "Status", render: (r) => r.status ?? "—" },
+        { label: "Calls", key: "calls" },
       ],
-      emptyText: "No calls in this period.",
+      emptyText: "No call data available.",
     });
     return;
   }

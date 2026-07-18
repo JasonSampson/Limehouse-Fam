@@ -1098,29 +1098,6 @@ export async function fetchShowingsReport(
   };
 }
 
-// CONFIRMED LIVE 2026-07-04: `user_id` can be an empty string (not just
-// null/absent) on real records — kept as a plain nullable string, not
-// used for display, so this doesn't need special handling here.
-const callReportRowSchema = z.object({
-  name: z.string().nullable(),
-  created_at: z.string(),
-  call_direction: z.string().nullable(),
-  status: z.string().nullable(),
-  contact_number: z.string().nullable(),
-  call_duration: z.number().nullable(),
-  prospect_name: z.string().nullable(),
-});
-export type RentEngineCallReportRow = z.infer<typeof callReportRowSchema>;
-
-export async function fetchCallsReport(
-  fromDate: string,
-  toDate: string
-): Promise<RentEngineResult<RentEngineCallReportRow[]>> {
-  return withConnectionGuard(() =>
-    fetchPagedReport("/reporting/calls", fromDate, toDate, reportingEnvelopeSchema(callReportRowSchema))
-  );
-}
-
 // Shared pager for the account_ids/start/end/32-day-span-limit report
 // endpoints that return a flat record list (not aggregated by a grouping
 // key the way marketing-sources needs merging) — chunks the date range,

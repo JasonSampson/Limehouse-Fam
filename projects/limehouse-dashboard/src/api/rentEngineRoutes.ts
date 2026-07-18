@@ -536,16 +536,53 @@ rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => 
   }
 });
 
-// Outbound Texts — NO drill-down built. Confirmed during Oracle's original
-// research: RentEngine's Reporting API has no dedicated texts/messages
-// report (only /reporting/calls exists for communication records); the
-// only per-message endpoint is the older /messages (one call per
-// prospect, no bulk/account-wide variant — the same N+1 problem that
-// forced Total Calls/Outbound Texts onto the aggregated leasing-
-// performance path in the first place). Building a drill-down here would
-// mean either re-introducing that N+1 problem or silently faking a list —
-// neither is acceptable, so this tile intentionally has no click handler
-// wired on the frontend rather than a fake or slow drill-down.
+// Outbound Texts drill-down — ADDED 2026-07-19, per Jason directly,
+// against a real vendor screenshot. The old comment here (removed) argued
+// no drill-down could be built without an N+1 per-message crawl — that
+// assumed the vendor used row-level message records. CONFIRMED LIVE that's
+// wrong: the vendor's own drill-down note reads "From RentEngine
+// /reporting/leasing-performance/units outbound_texts field, summed
+// across all units" — the exact same per-unit source already fetched for
+// the tile's own number (summarizeMarketingActivityFromReporting below),
+// same pattern as the Total Calls drill-down above. Zero extra RentEngine
+// calls. Address instead of the vendor's bare unit number, per Jason
+// directly.
+rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, async (req, res) => {
+  const { from, to } = resolveDateRangeFromQuery(req.query.period);
+  try {
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    if (!shared.connected) {
+      res.json({ connected: false, units: [] });
+      return;
+    }
+    if (shared.error || !shared.rows) {
+      logError("GET /api/rentengine/outbound-texts failed", { error: shared.error });
+      res.status(502).json({ error: "Failed to load leasing-performance data from RentEngine.", detail: shared.error });
+      return;
+    }
+    if (unitsResult.error || !unitsResult.data) {
+      logError("GET /api/rentengine/outbound-texts failed", { error: unitsResult.error });
+      res.status(502).json({ error: "Failed to load unit data from RentEngine.", detail: unitsResult.error });
+      return;
+    }
+    const unitsById = new Map(unitsResult.data.map((u) => [u.id, u]));
+    const units = [...shared.rows]
+      .sort((a, b) => b.outbound_texts - a.outbound_texts)
+      .map((r) => {
+        const unit = unitsById.get(r.unit_id);
+        return {
+          unitId: r.unit_id,
+          address: unit?.address?.formatted_address ?? null,
+          status: unit?.status ?? null,
+          texts: r.outbound_texts,
+        };
+      });
+    res.json({ connected: true, units });
+  } catch (err) {
+    logError("GET /api/rentengine/outbound-texts failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load outbound text data from RentEngine." });
+  }
+});
 
 // Avg Days on Market / Median DOM — share ONE drill-down: the real per-unit
 // leasing-performance rows already being fetched

@@ -1176,7 +1176,7 @@ function renderCallActivityTile(marketingActivity, field, id, label) {
     value: formatNumber(marketingActivity[field]),
     sourceTags: ["RE"],
     live: true,
-    clickable: id === "total-calls",
+    clickable: id === "total-calls" || id === "outbound-texts",
   });
 }
 
@@ -1851,6 +1851,28 @@ async function handleTileClick(tileId) {
         { label: "Calls", key: "calls" },
       ],
       emptyText: "No call data available.",
+    });
+    return;
+  }
+
+  // ADDED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot — same per-unit source/shape as Total Calls above, just
+  // outbound_texts instead of total_calls. Previously had no drill-down
+  // at all (see removed comment in rentEngineRoutes.ts for why that
+  // assumption was wrong).
+  if (tileId === "outbound-texts") {
+    await simpleDrillDown({
+      tileId,
+      title: "Outbound Texts",
+      url: `/api/rentengine/outbound-texts?period=${period}`,
+      rowsKey: "units",
+      note: "From RentEngine's per-unit leasing-performance report's outbound_texts field, summed per unit — same source as the tile's own number.",
+      columns: [
+        { label: "Address", render: (r) => r.address ?? `Unit ${r.unitId}` },
+        { label: "Status", render: (r) => r.status ?? "—" },
+        { label: "Texts", key: "texts" },
+      ],
+      emptyText: "No text data available.",
     });
     return;
   }

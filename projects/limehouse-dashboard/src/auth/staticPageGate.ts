@@ -2,7 +2,7 @@
 // into its own module so it can be unit-tested directly instead of via a
 // copy-pasted parallel implementation (Sentinel flagged the old test file
 // for exactly that drift risk while reviewing the second bug fixed here).
-export const ADMIN_ONLY_PAGES = new Set(["/team-performance.html", "/ceo-view.html", "/manage-staff.html"]);
+export const ADMIN_ONLY_PAGES = new Set(["/team-performance.html", "/ceo-view.html"]);
 
 // Sentinel found that express's req.path is NOT percent-decoded (e.g.
 // "/ceo-view%2ehtml" arrives as that literal string), so a raw path can fail

@@ -54,9 +54,9 @@ authRoutes.post("/auth/logout", (_req, res) => {
 });
 
 // Frontend-only need: header.js has to know the signed-in user's role to
-// decide which nav links to render (Team Performance/CEO View/Manage Staff
-// are Admin-only). Session already carries id/role — this just echoes it
-// back as JSON.
+// decide which nav links to render (Team Performance/CEO View are
+// Admin-only). Session already carries id/role — this just echoes it back
+// as JSON.
 authRoutes.get("/api/me", requireLogin, (req: AuthedRequest, res) => {
   const env = loadEnv();
   res.json({ id: req.user!.id, role: req.user!.role, limehqUrl: env.LIMEHQ_URL });

@@ -67,9 +67,12 @@ function renderHeader(activeTab) {
   renderAdminOnlyTabs(activeTab);
 }
 
-// Team Performance, CEO View, and Manage Staff are Admin-only — Staff-role
-// users should not even see a disabled link to a page they can't open, so
-// these are appended only after /api/me confirms the role, not hidden via CSS.
+// Team Performance and CEO View are Admin-only — Staff-role users should
+// not even see a disabled link to a page they can't open, so these are
+// appended only after /api/me confirms the role, not hidden via CSS.
+// Manage Staff REMOVED 2026-07-19, per Jason directly — staff accounts and
+// access are now managed centrally in LimeHQ's own "Staff & Permissions"
+// screen instead of a separate one here.
 async function renderAdminOnlyTabs(activeTab) {
   try {
     const me = await apiGet("/api/me");
@@ -83,7 +86,6 @@ async function renderAdminOnlyTabs(activeTab) {
       `
       <a href="/team-performance.html" class="${activeTab === "team" ? "active" : ""}">Team Performance</a>
       <a href="/ceo-view.html" class="${activeTab === "ceo" ? "active" : ""}">CEO View</a>
-      <a href="/manage-staff.html" class="${activeTab === "manage-staff" ? "active" : ""}">Manage Staff</a>
     `
     );
   } catch (err) {

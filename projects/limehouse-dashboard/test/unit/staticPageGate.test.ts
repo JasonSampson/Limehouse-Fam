@@ -24,7 +24,6 @@ describe("normalizePath", () => {
     expect(normalizePath("/ceo-view%2ehtml")).toBe("/ceo-view.html");
     expect(normalizePath("/CEO-VIEW%2EHTML")).toBe("/ceo-view.html");
     expect(normalizePath("/team-performance%2ehtml")).toBe("/team-performance.html");
-    expect(normalizePath("/manage-staff%2ehtml")).toBe("/manage-staff.html");
   });
 
   it("returns null for malformed percent-sequences instead of throwing", () => {
@@ -50,8 +49,8 @@ describe("isGatedHtmlRequest", () => {
 });
 
 describe("isAdminOnlyPage", () => {
-  it("recognizes all three admin-only pages once normalized", () => {
-    for (const page of ["/team-performance.html", "/ceo-view.html", "/manage-staff.html"]) {
+  it("recognizes both admin-only pages once normalized", () => {
+    for (const page of ["/team-performance.html", "/ceo-view.html"]) {
       expect(isAdminOnlyPage(page)).toBe(true);
     }
   });
@@ -62,12 +61,11 @@ describe("isAdminOnlyPage", () => {
 });
 
 describe("end-to-end normalization (case + percent-encoding combined)", () => {
-  it("catches every known bypass variant of the three admin pages", () => {
+  it("catches every known bypass variant of both admin pages", () => {
     const bypassAttempts = [
       "/ceo-view%2ehtml",
       "/CEO-VIEW%2EHTML",
       "/team-performance%2ehtml",
-      "/manage-staff%2ehtml",
       "/CEO-VIEW.HTML",
       "/Team-Performance.Html",
     ];

@@ -10,7 +10,6 @@ import { ceoViewRoutes } from "./api/ceoViewRoutes.js";
 import { syncRoutes } from "./api/syncRoutes.js";
 import { rentEngineRoutes } from "./api/rentEngineRoutes.js";
 import { authRoutes } from "./api/authRoutes.js";
-import { staffUsersRoutes } from "./api/staffUsersRoutes.js";
 import { getSessionUser } from "./auth/session.js";
 import { normalizePath, isGatedHtmlRequest, isAdminOnlyPage } from "./auth/staticPageGate.js";
 import { logInfo } from "./lib/logger.js";
@@ -36,9 +35,6 @@ app.use(cookieParser());
 // the link — confirmed live, zero access control). CSS/JS/the login page
 // itself/auth routes stay reachable without a session so the login flow and
 // its own page can load.
-// manage-staff.html added here too, beyond the two pages Oracle's spec named
-// explicitly — same reasoning applies (its own API calls would otherwise
-// 403 for a Staff-role user who navigates straight to the URL).
 app.use(async (req, res, next) => {
   // "/" resolves to index.html via express.static's default-document
   // behavior below, so it must be gated the same way an explicit
@@ -97,7 +93,6 @@ app.get("/health", (_req, res) => {
 });
 
 app.use(authRoutes);
-app.use(staffUsersRoutes);
 app.use(dashboardRoutes);
 app.use(teamPerformanceRoutes);
 app.use(ceoViewRoutes);

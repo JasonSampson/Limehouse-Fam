@@ -32,43 +32,24 @@ function toStaffUser(row: RawRow): StaffUserRow {
   };
 }
 
+// Manage Staff (the invite/list/updateRole/setActive UI + its API routes)
+// was REMOVED 2026-07-19, per Jason directly — staff accounts and access
+// are now managed centrally in LimeHQ's own "Staff & Permissions" screen.
+// findByEmail/bumpLastLogin stay: the dashboard's LimeHQ handoff callback
+// (src/api/authRoutes.ts) still looks the signed-in person up in this
+// local table to resolve their admin/staff role here. Known gap, accepted
+// for now per Jason directly: a brand-new hire with LimeHQ access has no
+// way to get a row in this table yet, since that used to be Manage
+// Staff's job — to be addressed later (see the two options discussed:
+// auto-provision on first login, or LimeHQ passing the role directly in
+// the handoff token).
 export async function findByEmail(email: string): Promise<StaffUserRow | null> {
   const pool = getPool();
   const { rows } = await pool.query<RawRow>(`SELECT * FROM staff_users WHERE lower(email) = lower($1)`, [email]);
   return rows[0] ? toStaffUser(rows[0]) : null;
 }
 
-export async function inviteStaff(params: { email: string; role: "admin" | "staff" }): Promise<StaffUserRow> {
-  const pool = getPool();
-  const { rows } = await pool.query<RawRow>(
-    `INSERT INTO staff_users (entra_object_id, email, role) VALUES (NULL, $1, $2) RETURNING *`,
-    [params.email, params.role]
-  );
-  return toStaffUser(rows[0]);
-}
-
 export async function bumpLastLogin(id: number): Promise<void> {
   const pool = getPool();
   await pool.query(`UPDATE staff_users SET last_login_at = now() WHERE id = $1`, [id]);
-}
-
-export async function listAll(): Promise<StaffUserRow[]> {
-  const pool = getPool();
-  const { rows } = await pool.query<RawRow>(`SELECT * FROM staff_users ORDER BY created_at ASC`);
-  return rows.map(toStaffUser);
-}
-
-export async function updateRole(id: number, role: "admin" | "staff"): Promise<StaffUserRow> {
-  const pool = getPool();
-  const { rows } = await pool.query<RawRow>(`UPDATE staff_users SET role = $2 WHERE id = $1 RETURNING *`, [id, role]);
-  return toStaffUser(rows[0]);
-}
-
-export async function setActive(id: number, active: boolean): Promise<StaffUserRow> {
-  const pool = getPool();
-  const { rows } = await pool.query<RawRow>(`UPDATE staff_users SET active = $2 WHERE id = $1 RETURNING *`, [
-    id,
-    active,
-  ]);
-  return toStaffUser(rows[0]);
 }

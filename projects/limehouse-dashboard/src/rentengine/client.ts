@@ -834,9 +834,7 @@ export function summarizePropertyHealthFromReporting(
 }
 
 export interface MarketingActivityFromReportingSummary {
-  newProspects: number;
   showingsScheduled: number;
-  showingsCompleted: number;
   applicationsSubmitted: number;
   totalCalls: number;
   outboundTexts: number;
@@ -859,19 +857,47 @@ export interface MarketingActivityFromReportingSummary {
 // (built a day later for the Team Performance KPI, never wired back to
 // this Dashboard tile until now). The Dashboard tile now calls that
 // function directly instead — see /api/rentengine/completion-rate.
+//
+// newProspects REMOVED 2026-07-19, per Jason directly: same category of
+// bug as completionRate above. CONFIRMED LIVE against two of Jason's own
+// vendor screenshots (from different dates) that the vendor's real "New
+// Prospects" number always exactly equals their "New Prospects by Source"
+// total and their Leasing Funnel's "Prospects" count — i.e. it's a plain
+// count of prospect records created in the period, not this per-unit
+// new_prospects field summed across every tracked unit (which undercounts
+// by however many prospects have no unit_of_interest assigned — confirmed
+// live, off by 1 out of 741 on a same-day check). The Dashboard tile now
+// reads that same prospect-count directly — see
+// GET /api/rentengine/marketing-activity in rentEngineRoutes.ts.
+//
+// showingsCompleted REMOVED 2026-07-19, per Jason directly: same category
+// of bug again, third time. CONFIRMED LIVE against both of Jason's vendor
+// screenshots that the vendor's real "Showings Completed" tile always
+// exactly equals their own Leasing Funnel's "Showings completed" stage —
+// i.e. summarizeLeasingFunnel's prospect-status-bucket count, NOT this
+// per-unit showings_completed field summed across every tracked unit.
+// (Confirmed live these three numbers can all differ for the same period:
+// blanket sum 82, funnel bucket 87, Completion-Rate-scoped 49 — genuinely
+// different populations, not rounding noise.) NOTE: a 2026-07-04 comment
+// on this file once claimed the OPPOSITE — that the blanket sum matched
+// the vendor (11) and the funnel bucket didn't (21). That comparison
+// can't be re-run now (vendor access lost), but two independent
+// screenshots on two different dates both agree with the funnel-bucket
+// version, so this fix trusts that live evidence over the old comment.
+// The Dashboard tile now reads summarizeLeasingFunnel(...).showingsCompleted
+// directly — see GET /api/rentengine/marketing-activity in
+// rentEngineRoutes.ts.
 export function summarizeMarketingActivityFromReporting(
   rows: RentEngineLeasingPerformance[]
 ): MarketingActivityFromReportingSummary {
   return rows.reduce(
     (acc, r) => ({
-      newProspects: acc.newProspects + r.new_prospects,
       showingsScheduled: acc.showingsScheduled + r.showings_scheduled,
-      showingsCompleted: acc.showingsCompleted + r.showings_completed,
       applicationsSubmitted: acc.applicationsSubmitted + r.applications_submitted,
       totalCalls: acc.totalCalls + r.total_calls,
       outboundTexts: acc.outboundTexts + r.outbound_texts,
     }),
-    { newProspects: 0, showingsScheduled: 0, showingsCompleted: 0, applicationsSubmitted: 0, totalCalls: 0, outboundTexts: 0 }
+    { showingsScheduled: 0, applicationsSubmitted: 0, totalCalls: 0, outboundTexts: 0 }
   );
 }
 
@@ -983,6 +1009,12 @@ export async function fetchMarketingSourcesReport(
 // aggregate versions already come from fetchLeasingPerformanceForAllUnits).
 // Same account_ids/start/end/32-day-span-limit pattern as
 // fetchMarketingSourcesReport above.
+// prospect_type — ADDED 2026-07-19, confirmed live against the raw
+// RentEngine API to exist (value "Self"), but turned out NOT to be the
+// vendor's "Method" signal after all: every single row in a real period
+// pull came back "Self" regardless of whether an agent conducted the
+// showing, so it carries no information here. Kept in the schema since
+// it's a real field, just unused for Method.
 const showingReportRowSchema = z.object({
   showing_id: z.number(),
   prospect_id: z.number().nullable(),
@@ -994,14 +1026,59 @@ const showingReportRowSchema = z.object({
   planned_date_time: z.string().nullable(),
   showing_agent: z.string().nullable(),
   cancellation_reason: z.string().nullable(),
+  prospect_type: z.string().nullable(),
 });
 export type RentEngineShowingReportRow = z.infer<typeof showingReportRowSchema>;
 
+// Shared "was this showing actually completed" check — ADDED 2026-07-19,
+// per Jason directly, so the Showings Completed TILE's count and its
+// drill-down's row filter can never drift apart (same bug class already
+// fixed for Completion Rate/New Prospects this session). CONFIRMED LIVE
+// against a real vendor screenshot: their tile's number (76) matches a
+// count of real /reporting/showings rows whose status is "Showing
+// Complete" — this is that same substring check the drill-down route
+// already used before this fix, just now reusable.
+export function isShowingCompleted(status: string | null): boolean {
+  return (status ?? "").toLowerCase().includes("complet");
+}
+
+// CORRECTED 2026-07-19 against a real vendor screenshot: the actual
+// signal is whether a leasing agent conducted the showing (showing_agent
+// set) vs. the prospect let themselves in (showing_agent null/blank) —
+// prospect_type doesn't vary in practice, see schema comment above.
+export function isShowingSelfGuided(showingAgent: string | null): boolean {
+  return !showingAgent || showingAgent.trim() === "";
+}
+
+// Eastern-calendar-day string (YYYY-MM-DD) for a given ISO instant — the
+// whole dashboard displays/reasons in America/New_York, so "was this
+// logged within the period" has to compare calendar days in that zone,
+// not raw UTC. CORRECTED 2026-07-19: an earlier version of the filter
+// below compared raw UTC instants against the UTC period boundary, which
+// let a showing created 2026-07-01T02:50 UTC (= 2026-06-30 10:50pm
+// Eastern) into a "this month" (Jul 1-18) window — it passed the UTC
+// check but displayed as June 30th, exactly the mismatch Jason caught.
+function easternDateOnly(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(iso));
+}
+
+// CORRECTED 2026-07-19, per Jason directly: RentEngine's /reporting/showings
+// start/end params filter by planned_date_time (when the showing was
+// scheduled to happen), not by created_at (when it was logged) — confirmed
+// live by a row logged 6/27 but scheduled for 7/6 coming back from a
+// "this month" (7/1-7/18) query. That produced a nonsensical result: a
+// showing dated 6/27 appearing on a "This month" report, and inflated our
+// count above the vendor's (which scopes to created_at). Filtering here to
+// created_at within the requested window keeps the tile's count and the
+// drill-down's displayed date on the same field, and matches the vendor.
+// fromDate/toDate arrive as "YYYY-MM-DDT00:00:00Z"/"YYYY-MM-DDT23:59:59Z" —
+// the first 10 characters are the plain Eastern-business-day bounds this
+// dashboard's period selector actually means.
 export async function fetchShowingsReport(
   fromDate: string,
   toDate: string
 ): Promise<RentEngineResult<RentEngineShowingReportRow[]>> {
-  return withConnectionGuard(() =>
+  const result = await withConnectionGuard(() =>
     fetchPagedReport(
       "/reporting/showings",
       fromDate,
@@ -1009,6 +1086,16 @@ export async function fetchShowingsReport(
       reportingEnvelopeSchema(showingReportRowSchema)
     )
   );
+  if (!result.connected || !result.data) return result;
+  const fromDateOnly = fromDate.slice(0, 10);
+  const toDateOnly = toDate.slice(0, 10);
+  return {
+    ...result,
+    data: result.data.filter((row) => {
+      const loggedDate = easternDateOnly(row.created_at);
+      return loggedDate >= fromDateOnly && loggedDate <= toDateOnly;
+    }),
+  };
 }
 
 // CONFIRMED LIVE 2026-07-04: `user_id` can be an empty string (not just

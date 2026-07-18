@@ -8,6 +8,8 @@ import {
   summarizeDaysOnMarket,
   summarizePropertyHealthFromReporting,
   summarizeMarketingActivityFromReporting,
+  isShowingCompleted,
+  isShowingSelfGuided,
   summarizeShowingCompletionRate,
   showingCompletionRateExplainRows,
   dedupeById,
@@ -379,11 +381,13 @@ describe("summarizePropertyHealthFromReporting", () => {
   });
 });
 
-// completionRate REMOVED from this function 2026-07-13 — see the comment on
+// completionRate REMOVED from this function 2026-07-13, newProspects and
+// showingsCompleted REMOVED 2026-07-19 — see the comment on
 // summarizeMarketingActivityFromReporting in client.ts for why (the
-// blanket showingsScheduled/showingsCompleted summed here don't match the
-// vendor's real Completion Rate, which scopes to on-market-for-showing
-// units only; that's summarizeShowingCompletionRate below instead).
+// blanket per-unit sums here don't match the vendor's real numbers for any
+// of the three; summarizeShowingCompletionRate below covers Completion
+// Rate's scoping, summarizeLeasingFunnel covers New Prospects/Showings
+// Completed).
 describe("summarizeMarketingActivityFromReporting", () => {
   it("sums fields across all units", () => {
     const rows = [
@@ -392,9 +396,7 @@ describe("summarizeMarketingActivityFromReporting", () => {
     ];
     const result = summarizeMarketingActivityFromReporting(rows);
     expect(result).toEqual({
-      newProspects: 5,
       showingsScheduled: 3,
-      showingsCompleted: 2,
       applicationsSubmitted: 1,
       totalCalls: 8,
       outboundTexts: 14,
@@ -404,13 +406,52 @@ describe("summarizeMarketingActivityFromReporting", () => {
   it("returns all zeros for an empty list", () => {
     const result = summarizeMarketingActivityFromReporting([]);
     expect(result).toEqual({
-      newProspects: 0,
       showingsScheduled: 0,
-      showingsCompleted: 0,
       applicationsSubmitted: 0,
       totalCalls: 0,
       outboundTexts: 0,
     });
+  });
+});
+
+// ADDED 2026-07-19: shared filters behind the Showings Completed tile and
+// its drill-down, so both read the same real /reporting/showings rows
+// instead of the funnel-bucket count that turned out not to match the
+// vendor's own tile.
+describe("isShowingCompleted", () => {
+  it("matches RentEngine's real 'Showing Complete' status", () => {
+    expect(isShowingCompleted("Showing Complete")).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isShowingCompleted("showing complete")).toBe(true);
+  });
+
+  it("returns false for scheduled or cancelled showings", () => {
+    expect(isShowingCompleted("Scheduled")).toBe(false);
+    expect(isShowingCompleted("Cancelled")).toBe(false);
+  });
+
+  it("returns false for null status", () => {
+    expect(isShowingCompleted(null)).toBe(false);
+  });
+});
+
+// CORRECTED 2026-07-19 against a real vendor screenshot: the signal is
+// whether a leasing agent is attached to the showing, not prospect_type
+// (which never varies in practice).
+describe("isShowingSelfGuided", () => {
+  it("treats a null showing_agent as self-guided", () => {
+    expect(isShowingSelfGuided(null)).toBe(true);
+  });
+
+  it("treats a blank showing_agent as self-guided", () => {
+    expect(isShowingSelfGuided("")).toBe(true);
+    expect(isShowingSelfGuided("   ")).toBe(true);
+  });
+
+  it("treats a named showing agent as accompanied", () => {
+    expect(isShowingSelfGuided("Addison Winter")).toBe(false);
   });
 });
 

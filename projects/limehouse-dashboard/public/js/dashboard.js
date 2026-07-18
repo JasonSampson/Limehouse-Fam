@@ -558,6 +558,30 @@ function formatDayMonthYear(yyyyMmDd) {
   return `${day}/${month}/${year}`;
 }
 
+// mm/dd/yyyy + 12-hour clock (non-military), converted to America/New_York
+// (DST-aware via Intl, so this is correct year-round without manual
+// correction) — for the Showings Completed drill-down's Date column.
+// CORRECTED 2026-07-19: Jason originally asked for dd/mm/yyyy, then
+// clarified he meant mm/dd/yyyy (US format). Input is a full ISO instant
+// (unlike formatDayMonthYear above, which takes a bare calendar date with
+// no time/timezone to convert).
+function formatMonthDayYearTimeEastern(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("month")}/${get("day")}/${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod")} ET`;
+}
+
 // ---------------------------------------------------------------------
 // OCCUPANCY & DOORS
 // ---------------------------------------------------------------------
@@ -1731,6 +1755,10 @@ async function handleTileClick(tileId) {
       // Name column ADDED 2026-07-13, matching the vendor's own Prospects
       // drill-down, once RentEngine's real name field got added to our
       // prospect schema for the Leasing Funnel drill-downs below.
+      // note ADDED 2026-07-19, per Jason directly, once the tile's number
+      // itself was corrected to match — every real prospect record
+      // RentEngine has for the period, one row per record.
+      note: "Every prospect RentEngine has on file who was created in the selected period — the same real count New Prospects by Source and the Leasing Funnel's own \"Prospects\" stage use, so all three always agree.",
       columns: [
         { label: "Name", render: (r) => r.name ?? "—" },
         { label: "Source", key: "source" },
@@ -1771,20 +1799,36 @@ async function handleTileClick(tileId) {
     return;
   }
 
+  // CORRECTED 2026-07-19, per Jason directly against a real vendor
+  // screenshot: rows are grouped by property address (same address
+  // together), oldest-to-newest by date/time within each address group.
+  // The Date shown is when the showing was LOGGED (createdAt), not when
+  // it was scheduled to happen — the vendor's own screenshot proved this
+  // (a showing logged 7/1 but scheduled for 7/7 appeared under 7/1).
   if (tileId === "showings-completed") {
-    await simpleDrillDown({
-      tileId,
-      title: "Showings",
-      url: `/api/rentengine/showings?period=${period}`,
-      rowsKey: "showings",
-      columns: [
-        { label: "Property", key: "propertyAddress" },
-        { label: "Prospect", key: "prospectName" },
-        { label: "Status", key: "status" },
-        { label: "Planned", key: "plannedDateTime" },
-      ],
-      emptyText: "No showings in this period.",
-    });
+    openLoadingModal("Showings");
+    try {
+      const response = await apiGet(`/api/rentengine/showings?period=${period}`);
+      const rows = [...(response.showings ?? [])].sort((a, b) => {
+        const addrCompare = (a.propertyAddress ?? "").localeCompare(b.propertyAddress ?? "");
+        if (addrCompare !== 0) return addrCompare;
+        return (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+      });
+      openDrillDownModal({
+        title: "Showings Completed",
+        note: "Every completed showing this period, grouped by property and sorted oldest to newest. Times are shown in Eastern.",
+        columns: [
+          { label: "Address", render: (r) => r.propertyAddress ?? "—" },
+          { label: "Status", key: "status" },
+          { label: "Method", key: "method" },
+          { label: "Date", render: (r) => formatMonthDayYearTimeEastern(r.createdAt) },
+        ],
+        rows,
+        emptyText: "No showings completed in this period.",
+      });
+    } catch (err) {
+      openDrillDownModal({ title: "Showings Completed", columns: [], rows: [], emptyText: `Couldn't load: ${err.message}` });
+    }
     return;
   }
 

@@ -14,6 +14,8 @@ import {
   showingCompletionRateExplainRows,
   fetchMarketingSourcesReport,
   fetchShowingsReport,
+  isShowingCompleted,
+  isShowingSelfGuided,
   fetchCallsReport,
 } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
@@ -192,9 +194,19 @@ rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_re
 // dashboard_metric_cache, and returns an honest 503 telling the caller to
 // trigger that sync first if it has never run.
 //
-// New Prospects itself does NOT require the cache (it's just a prospect
-// count for the period, same live call prospects-by-source already
-// makes) — computed fresh here rather than waiting on the cached sync.
+// New Prospects itself does NOT require the leasing-performance cache —
+// it's just a prospect count for the period, same live call
+// prospects-by-source already makes — so it's fetched fresh here in
+// parallel rather than waiting on that cache.
+// CORRECTED 2026-07-19, per Jason directly: this used to be sourced from
+// the per-unit reporting field summed across every tracked unit
+// (summary.newProspects below), which CONFIRMED LIVE against two of
+// Jason's own vendor screenshots undercounts — the vendor's real "New
+// Prospects" is a plain count of prospect records, matching
+// New Prospects by Source's total and the Leasing Funnel's own Prospects
+// count exactly on both screenshots checked. See the comment on
+// summarizeMarketingActivityFromReporting in client.ts for the fuller
+// story — this route now counts real prospect records directly instead.
 // CORRECTED 2026-07-04: Total Calls/Outbound Texts used to depend on
 // callActivitySync.ts's N+1-per-prospect background job. RentEngine's real
 // Reporting API aggregates total_calls/outbound_texts per unit directly
@@ -204,10 +216,28 @@ rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_re
 // rather than ours. callActivitySync.ts / POST /api/sync/call-activity are
 // left in place (not deleted) since Tron's frontend contract may still
 // reference the old cache key — safe to retire once confirmed unused.
+//
+// showingsCompleted CORRECTED 2026-07-19, per Jason directly — TWICE in
+// one day. First pass switched this to summarizeLeasingFunnel's
+// prospect-status-bucket count (87), based on two older vendor
+// screenshots. A fresh, live vendor screenshot (same day, same period)
+// then showed the real number is 76, sourced — per the vendor's own
+// drill-down note — from a plain count of real /reporting/showings rows
+// whose status is "Showing Complete." That fresh screenshot also showed
+// 76 on the vendor's OWN Leasing Funnel "Showings completed" stage, so
+// their funnel isn't using a prospect-status bucket either — it's built
+// off this same showings report. This route now fetches that report
+// directly (isShowingCompleted from client.ts, same filter the
+// /api/rentengine/showings drill-down route already used) instead of
+// either the blanket per-unit sum or the funnel-bucket count.
 rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const shared = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+    const [shared, prospectsResult, showingsResult] = await Promise.all([
+      getOrFetchLeasingPerformanceForAllUnits(from, to),
+      fetchProspects(from, to),
+      fetchShowingsReport(from, to),
+    ]);
     if (!shared.connected) {
       res.json({
         connected: false,
@@ -224,12 +254,23 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
       res.status(502).json({ error: "Failed to load leasing-performance data from RentEngine.", detail: shared.error });
       return;
     }
+    if (prospectsResult.error || !prospectsResult.data) {
+      logError("GET /api/rentengine/marketing-activity failed", { error: prospectsResult.error });
+      res.status(502).json({ error: "Failed to load prospect data from RentEngine.", detail: prospectsResult.error });
+      return;
+    }
+    if (showingsResult.error || !showingsResult.data) {
+      logError("GET /api/rentengine/marketing-activity failed", { error: showingsResult.error });
+      res.status(502).json({ error: "Failed to load showings data from RentEngine.", detail: showingsResult.error });
+      return;
+    }
     const summary = summarizeMarketingActivityFromReporting(shared.rows);
+    const showingsCompleted = showingsResult.data.filter((s) => isShowingCompleted(s.status)).length;
     res.json({
       connected: true,
-      newProspects: summary.newProspects,
+      newProspects: prospectsResult.data.length,
       showingsScheduled: summary.showingsScheduled,
-      showingsCompleted: summary.showingsCompleted,
+      showingsCompleted,
       totalCalls: summary.totalCalls,
       outboundTexts: summary.outboundTexts,
       callActivitySynced: true,
@@ -403,15 +444,18 @@ rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res)
 });
 
 // Showings Completed drill-down — real per-showing records from
-// /reporting/showings, confirmed live 2026-07-04, filtered to showings
-// whose status indicates the showing actually happened (not just
-// scheduled/canceled). Real confirmed status values seen for this account
-// include "Showing Scheduled" — completed-looking statuses are inferred
-// as anything containing "Complet" or an explicit "Showed"/"Attended"
-// wording; if none match for a given batch, all rows are returned
-// unfiltered rather than silently empty, since the exact vocabulary for
-// "completed" wasn't exhaustively enumerated against every real status
-// value this account has produced.
+// /reporting/showings. CORRECTED 2026-07-19, per Jason directly: the old
+// "completed-looking" substring guess (with an unfiltered fallback for
+// when nothing matched) is no longer a guess — CONFIRMED LIVE against a
+// real vendor screenshot that the real status value is exactly "Showing
+// Complete", their drill-down shows ONLY those rows (not scheduled/
+// confirmed/canceled ones too), and their row count matches their tile's
+// number exactly. isShowingCompleted (client.ts) is the same shared
+// filter the marketing-activity route's tile count now uses, so this
+// drill-down's row count can never drift from the tile again. method —
+// ADDED same day, matching the vendor's own "Method" column (Self Guided
+// vs Accompanied) — see isShowingSelfGuided's comment in client.ts for
+// how confident that mapping is.
 rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   const result = await fetchShowingsReport(from, to);
@@ -424,17 +468,22 @@ rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) 
     res.status(502).json({ error: "Failed to load showings data from RentEngine.", detail: result.error });
     return;
   }
-  const completed = result.data.filter((s) => (s.status ?? "").toLowerCase().includes("complet"));
+  const completed = result.data.filter((s) => isShowingCompleted(s.status));
   res.json({
     connected: true,
-    showings: (completed.length > 0 ? completed : result.data).map((s) => ({
+    showings: completed.map((s) => ({
       showingId: s.showing_id,
       propertyAddress: s.property_address,
       prospectName: s.prospect_name,
       status: s.status,
-      plannedDateTime: s.planned_date_time,
+      // Vendor's own drill-down sorts/displays by when the showing record
+      // was logged, not when it was scheduled to happen — confirmed
+      // against a real screenshot (a showing logged 7/1 but scheduled for
+      // 7/7 appeared under 7/1 on the vendor's site).
+      createdAt: s.created_at,
       showingAgent: s.showing_agent,
       feedback: s.feedback,
+      method: isShowingSelfGuided(s.showing_agent) ? "Self Guided" : "Accompanied",
     })),
   });
 });

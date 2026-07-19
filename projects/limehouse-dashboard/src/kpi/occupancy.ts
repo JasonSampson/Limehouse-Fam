@@ -292,36 +292,6 @@ function roundCurrency(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-// Per-lease detail behind Delinquency Rate — for the Team Performance KPI
-// drill-down (click the KPI, see the real leases/balances behind the %).
-export interface DelinquencyRateExplainRow {
-  leaseId: string;
-  monthlyRent: number;
-  delinquentBalance: number;
-}
-
-export function delinquencyRateExplainRows(balances: LeaseBalance[], activeLeases: BuildiumLease[]): DelinquencyRateExplainRow[] {
-  const balanceByLeaseId = new Map(balances.filter((b) => b.balance > 0).map((b) => [b.leaseId, b.balance]));
-  return activeLeases
-    .filter((l) => balanceByLeaseId.has(String(l.Id)))
-    .map((l) => ({
-      leaseId: String(l.Id),
-      monthlyRent: l.AccountDetails?.Rent ?? 0,
-      delinquentBalance: balanceByLeaseId.get(String(l.Id)) ?? 0,
-    }));
-}
-
-// Per-unit detail behind Portfolio Occupancy Rate.
-export interface OccupancyExplainRow {
-  unitId: string;
-  occupied: boolean;
-}
-
-export function occupancyExplainRows(activeLeases: BuildiumLease[], allUnitIds: string[]): OccupancyExplainRow[] {
-  const occupiedUnitIds = new Set(activeLeases.map((l) => String(l.UnitId)));
-  return allUnitIds.map((unitId) => ({ unitId, occupied: occupiedUnitIds.has(unitId) }));
-}
-
 // ============================================================================
 // Occupancy Rate — 12 Months chart — REBUILT 2026-07-09, per Jason
 // directly: "year over year, for each month, as far back as can be

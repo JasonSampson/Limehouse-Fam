@@ -114,14 +114,41 @@ function quarterTabsForYear(year) {
   return [1, 2, 3, 4].map((q) => `${year}-Q${q}`);
 }
 
+// "2026-09-30" -> "September 30, 2026" — full month name, matching the
+// vendor's real "In progress" banner wording exactly.
+function formatLongDate(isoDate) {
+  const d = new Date(isoDate + "T00:00:00");
+  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+// Full ISO instant (e.g. LeadSimple's created_at/closed_at) -> "Jun 28,
+// 2026" — short month name, matching the vendor's real Lease Renewal Rate
+// drill-down date format exactly (ADDED 2026-07-19, per Jason directly).
+function formatShortMonthDayYear(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function renderUnlockedView() {
   const content = document.getElementById("page-content");
   const period = tpRolesData.period;
   const [periodYear] = period.split("-");
-  const dateRangeText = formatDateRange({ from: tpRolesData.periodStart, to: tpRolesData.periodEnd }).toUpperCase();
+  const dateRange = { from: tpRolesData.periodStart, to: tpRolesData.periodEnd };
+  const dateRangeText = formatDateRange(dateRange).toUpperCase();
   // ISO date (e.g. "2026-07-18"), matching the vendor's exact "AS OF"
   // format — per Jason directly, matching style/format precisely.
   const asOf = new Date().toISOString().slice(0, 10);
+
+  // ADDED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot: periodEnd is the quarter's REAL calendar end (e.g.
+  // 2026-09-30 for Q3), not clamped to today — so comparing it against
+  // today's date is exactly "has this quarter actually finished yet."
+  const inProgressBannerHtml =
+    tpRolesData.periodEnd > asOf
+      ? `<div class="tp-in-progress-banner"><strong>In progress</strong>${formatQuarterLabel(period)} · ${formatDateRange(dateRange)} ends ${formatLongDate(tpRolesData.periodEnd)} — data is still accumulating.</div>`
+      : "";
 
   // Match against roleDisplayName — a genuine, code-owned role name
   // (e.g. "Portfolio Manager") from src/db/kpiRepository.ts's
@@ -156,6 +183,7 @@ function renderUnlockedView() {
         .join("")}
     </div>
     <p class="context-line">${formatQuarterLabel(period)} · ${dateRangeText} · AS OF ${asOf}</p>
+    ${inProgressBannerHtml}
     <div class="role-tabs" id="role-tabs">
       ${orderedRoles
         .map((label) => {
@@ -338,14 +366,18 @@ function renderRoleDetail(roleDisplayName) {
 // Column definitions per KPI — different KPIs show different underlying
 // record shapes (units, leases, vendors, bank accounts, transactions).
 const KPI_EXPLAIN_COLUMNS = {
+  // CORRECTED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot: Property/Unit/Occupied (yes/no), not a bare unit ID with
+  // an Occupied/Vacant label.
   "Portfolio Occupancy Rate": [
-    { label: "Unit", key: "unitId" },
-    { label: "Status", render: (r) => (r.occupied ? "Occupied" : "Vacant") },
+    { label: "Property", render: (r) => r.propertyAddress ?? "—" },
+    { label: "Unit", render: (r) => r.unitNumber ?? "—" },
+    { label: "Occupied", render: (r) => (r.occupied ? "yes" : "no") },
   ],
   "Delinquency Rate": [
-    { label: "Lease", key: "leaseId" },
-    { label: "Monthly Rent", render: (r) => formatCurrency(r.monthlyRent) },
-    { label: "Delinquent Balance", render: (r) => formatCurrency(r.delinquentBalance) },
+    { label: "Property", render: (r) => r.propertyAddress ?? "—" },
+    { label: "Unit", render: (r) => r.unitNumber ?? "—" },
+    { label: "Balance", render: (r) => formatCurrencyPrecise(r.balance) },
   ],
   "Reconciliation Accuracy": [
     { label: "Account", key: "accountName" },
@@ -373,8 +405,10 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Compliant", render: (r) => (r.compliant ? "Yes" : "No") },
   ],
   "Days on Market": [
-    { label: "Unit", key: "unitId" },
-    { label: "Days on Market", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
+    { label: "Address", render: (r) => r.address ?? "—" },
+    { label: "Status", render: (r) => r.status ?? "—" },
+    { label: "Health", key: "health" },
+    { label: "Days", render: (r) => (r.daysOnMarket === null ? "—" : r.daysOnMarket) },
   ],
   "Application Processing Time": [
     { label: "Application", key: "applicationName" },
@@ -394,11 +428,17 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Showings Scheduled", key: "showingsScheduled" },
     { label: "Showings Completed", key: "showingsCompleted" },
   ],
+  // CORRECTED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot: added the missing Status column (Stage and Status are
+  // genuinely different fields — e.g. Stage "Send Lease" has Status
+  // "working"), and switched Created/Closed to the vendor's real "Jun 28,
+  // 2026" date format instead of a raw ISO slice.
   "Lease Renewal Rate": [
     { label: "Process", key: "processName" },
     { label: "Stage", render: (r) => r.stage ?? "—" },
-    { label: "Created", render: (r) => r.createdAt.slice(0, 10) },
-    { label: "Closed", render: (r) => (r.closedAt ? r.closedAt.slice(0, 10) : "open") },
+    { label: "Status", render: (r) => r.status ?? "—" },
+    { label: "Created", render: (r) => formatShortMonthDayYear(r.createdAt) },
+    { label: "Closed", render: (r) => (r.closedAt ? formatShortMonthDayYear(r.closedAt) : "open") },
     { label: "Renewed", render: (r) => (r.renewed ? "yes" : "no") },
   ],
 };
@@ -408,6 +448,69 @@ const KPI_EXPLAIN_COLUMNS = {
 // live-verified formula, this fetches the actual formula text and the real
 // records that produced the number; for anything not wired up yet, it
 // shows an honest "not available yet" message rather than fabricating one.
+// ADDED 2026-07-19, per Jason directly, against a real vendor screenshot:
+// the vendor's own KPI explain modal has a subtitle line above the note
+// box ("212 / 230 = 92.2% · target ≥95%") that we were missing entirely.
+// The fraction shown is specific to each KPI's own real-world unit (units
+// for Occupancy, dollars for Delinquency, processes for Renewal Rate,
+// etc.) so this is a per-KPI builder, not one generic formula — starting
+// with Occupancy Rate (the only one confirmed against a screenshot so
+// far) and extended as more vendor screenshots come in.
+const KPI_SUBTITLE_BUILDERS = {
+  "Portfolio Occupancy Rate": (result, kpi) => {
+    const occupied = result.rows.filter((r) => r.occupied).length;
+    const total = result.rows.length;
+    return `${occupied} / ${total} = ${formatKpiActual(kpi)} · target ${formatKpiTarget(kpi)}`;
+  },
+  // Note the vendor's OWN subtitle for this specific KPI uses literal "--"
+  // and ">=" (not the "·"/"≥" the Occupancy Rate subtitle uses) — a real,
+  // confirmed inconsistency in the vendor's own site between KPIs, matched
+  // exactly as observed rather than forced into one universal format.
+  "Lease Renewal Rate": (result, kpi) => {
+    const renewed = result.rows.filter((r) => r.renewed).length;
+    const stillInProgress = result.rows.filter((r) => r.status === "working").length;
+    const decided = result.rows.length - stillInProgress;
+    return `${formatKpiActual(kpi)} renewed (${renewed}/${decided} decided; ${stillInProgress} still in progress) -- target >=${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-19): cents-level
+  // precision, "÷" (not "/"), and "delinquent"/"rent roll" labels. The
+  // rows behind this KPI only include the delinquent leases, not every
+  // active lease, so the total-rent denominator is backed out from the
+  // already-computed percent rather than summed directly.
+  "Delinquency Rate": (result, kpi) => {
+    const delinquentTotal = result.rows.reduce((sum, r) => sum + r.balance, 0);
+    const rentTotal = delinquentTotal / (kpi.actualValue / 100);
+    return `${formatCurrencyPrecise(delinquentTotal)} delinquent ÷ ${formatCurrencyPrecise(rentTotal)} rent roll = ${formatKpiActual(kpi)} · target ${formatKpiTarget(kpi)}`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-19): "Avg 29 ·
+  // Median 10", no target shown at all. avg/median come straight from the
+  // API response (the same vendor-confirmed Healthy-only calculation the
+  // tile itself uses) rather than being re-derived from the drill-down
+  // rows, which now intentionally include every tracked unit regardless
+  // of health.
+  "Days on Market": (result) => {
+    const avg = result.avgDaysOnMarket === null ? "—" : `${Math.round(result.avgDaysOnMarket)}d`;
+    const median = result.medianDaysOnMarket === null ? "—" : `${Math.round(result.medianDaysOnMarket)}d`;
+    return `Avg ${avg} · Median ${median}`;
+  },
+};
+
+// Most KPIs' modal title is just the bare KPI name — a few have their own
+// real vendor wording confirmed against a screenshot.
+const KPI_TITLE_OVERRIDES = {
+  "Lease Renewal Rate": "Lease Renewal Rate -- LS Process View (12 mo)",
+  "Days on Market": "Days on market",
+};
+
+function buildKpiSubtitle(kpiName, result) {
+  const builder = KPI_SUBTITLE_BUILDERS[kpiName];
+  if (!builder) return undefined;
+  const role = tpRolesData.roles.find((r) => r.roleDisplayName === tpActiveRole);
+  const kpi = role?.kpis.find((k) => k.kpiName === kpiName);
+  if (!kpi || !kpi.hasData) return undefined;
+  return builder(result, kpi);
+}
+
 function wireKpiNameClicks() {
   document.querySelectorAll(".kpi-name-link").forEach((el) => {
     el.addEventListener("click", async (e) => {
@@ -420,8 +523,9 @@ function wireKpiNameClicks() {
         );
         const columns = KPI_EXPLAIN_COLUMNS[kpiName] ?? [];
         openDrillDownModal({
-          title: kpiName,
-          formula: result.formula,
+          title: KPI_TITLE_OVERRIDES[kpiName] ?? kpiName,
+          subtitle: buildKpiSubtitle(kpiName, result),
+          note: `Formula: ${result.formula}`,
           columns,
           rows: result.rows,
           emptyText: "No records behind this KPI for the selected period.",

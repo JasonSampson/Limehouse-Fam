@@ -708,16 +708,36 @@ export function summarizeDaysOnMarket(rows: RentEngineLeasingPerformance[]): Day
 }
 
 // Per-unit detail behind Days on Market — for the Team Performance KPI
-// drill-down.
+// drill-down. CONFIRMED against a real vendor screenshot (2026-07-19):
+// unlike the avg/median stat above (which stays Healthy-only, already
+// vendor-confirmed), the drill-down table itself lists every
+// RentEngine-tracked unit regardless of health/status, with its real
+// address and unit status alongside days_on_market.
 export interface DaysOnMarketExplainRow {
   unitId: number;
+  address: string | null;
+  status: string | null;
+  health: string;
   daysOnMarket: number | null;
 }
 
-export function daysOnMarketExplainRows(rows: RentEngineLeasingPerformance[]): DaysOnMarketExplainRow[] {
+export function daysOnMarketExplainRows(
+  rows: RentEngineLeasingPerformance[],
+  units: RentEngineUnit[]
+): DaysOnMarketExplainRow[] {
+  const unitById = new Map(units.map((u) => [u.id, u]));
   return rows
-    .filter((r) => r.property_health === "Healthy")
-    .map((r) => ({ unitId: r.unit_id, daysOnMarket: r.days_on_market }));
+    .map((r) => {
+      const unit = unitById.get(r.unit_id);
+      return {
+        unitId: r.unit_id,
+        address: unit?.address?.formatted_address ?? null,
+        status: unit?.status ?? null,
+        health: r.property_health,
+        daysOnMarket: r.days_on_market,
+      };
+    })
+    .sort((a, b) => (b.daysOnMarket ?? -1) - (a.daysOnMarket ?? -1));
 }
 
 // Per-unit detail behind Showing Completion Rate.

@@ -777,9 +777,15 @@ main {
   line-height: 1.45;
 }
 
+/* CHANGED 2026-07-19, per Jason directly, pixel-sampled from a real
+   vendor screenshot: the vendor's Note box is amber/cream, not gray — this
+   is a shared component (every drill-down's note box across Dashboard,
+   Team Performance, and CEO View), so fixing it here corrects it
+   everywhere at once, confirmed with Jason as the right call since it's a
+   plain color bug, not a page-specific style choice. */
 .modal-note {
-  background: var(--bg-subtle, #f5f6f4);
-  border: 1px solid var(--border-subtle, #e2e4e0);
+  background: #fdf6e3;
+  border: 1px solid #f0e0a8;
   border-radius: 6px;
   padding: 10px 12px;
   margin: 0 0 14px;
@@ -790,13 +796,13 @@ main {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: #8b6420;
   margin: 0 0 4px;
 }
 
 .modal-note-text {
   font-size: 13.5px;
-  color: var(--text-muted);
+  color: #8b6420;
   line-height: 1.5;
   margin: 0;
 }
@@ -981,6 +987,24 @@ table.drill-table td {
    the quarter-tabs row specifically). */
 #quarter-tabs button.active {
   background: #1c2119;
+}
+
+/* ADDED 2026-07-19, per Jason directly, matching a real vendor screenshot:
+   shown only when the currently-viewed quarter hasn't ended yet, so
+   Jason isn't misled by a partial-quarter score. Same amber color family
+   pixel-sampled for .modal-note above. */
+.tp-in-progress-banner {
+  background: #fdf6e3;
+  border: 1px solid #f0e0a8;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13.5px;
+  color: #8b6420;
+}
+
+.tp-in-progress-banner strong {
+  margin-right: 6px;
 }
 
 .role-tabs button.role-tab-disabled {

@@ -12,8 +12,11 @@ import {
   fetchBankAccounts,
   fetchBankAccountReconciliations,
   fetchLeaseTransactions,
+  fetchProperties,
 } from "../buildium/client.js";
-import { occupancyExplainRows, delinquencyRateExplainRows } from "../kpi/occupancy.js";
+import { unitStatusRows } from "../kpi/leaseRows.js";
+import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
+import { delinquentLeaseRows } from "../buildium/delinquency.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import {
   vendorComplianceExplainRows,
@@ -23,7 +26,12 @@ import {
   type ReconciliationAccuracyInput,
 } from "../kpi/bookkeeperMetrics.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
-import { daysOnMarketExplainRows, showingCompletionRateExplainRows, fetchUnits } from "../rentengine/client.js";
+import {
+  daysOnMarketExplainRows,
+  showingCompletionRateExplainRows,
+  fetchUnits,
+  summarizeDaysOnMarket,
+} from "../rentengine/client.js";
 import {
   fetchApplicationProcesses,
   applicationProcessingTimeExplainRows,
@@ -114,16 +122,21 @@ teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAd
 // 404s with a clear message rather than fabricating an explanation.
 const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   "Portfolio Occupancy Rate": "Occupied units ÷ total managed units, including the 1 commercial property, excluding properties Jason's team has terminated management on but Buildium hasn't closed out yet. A unit counts as occupied only if it has a real Active lease with a current tenant on file.",
-  "Delinquency Rate": "Sum of outstanding balance across leases with a positive balance, ÷ sum of monthly rent across every active lease.",
+  "Delinquency Rate": "Sum of TotalBalance across active leases with a positive balance ÷ sum of monthly rent across all active leases. Source: Buildium /leases/outstandingbalances and the rent field on active leases.",
   "Reconciliation Accuracy": "Across active bank accounts, how many fully-completed months in this period have a finished bank reconciliation (statement ending date in that month, marked finished). A partial current month never counts. Accounts with $0 balance and no reconciliations are excluded (nothing to reconcile).",
   "Rent Processing Accuracy": "1 − (operational payment reversals ÷ total payments), across every active lease this period. NSF/bounced/chargeback reversals are tenant-caused, not a processing error, so they're excluded from the percentage (but listed below for reference).",
   "Vendor Compliance": "Of your active maintenance/trade vendors (Contractors category), the share with both a tax ID on file and current (non-expired) liability insurance.",
   "1099 Compliance": "Of your active maintenance/trade vendors flagged for 1099 reporting, the share that have a tax ID on file.",
-  "Days on Market": "Average days on market across units RentEngine reports as \"Healthy\" (actively marketed, not At-risk/Waitlist/On Hold/Off-Market/Commercial). Source: RentEngine leasing-performance report, one row per unit.",
+  "Days on Market": "True days_on_market from RentEngine's per-unit leasing-performance report (resets when a unit is re-listed).",
   "Application Processing Time": "Average hours from when an application came in to when it closed out, across every Applications Process that closed this period.",
   "Applicant Response Timeliness": "Of every Application that came in over the trailing 90 days, the share where the first task on it got completed within 24 hours. Applications with no completed task yet count against the rate. Note: this counts only applications that arrived in the last 90 days — it deliberately excludes old, already-closed applications whose only recent activity is an unrelated administrative task (e.g. a bookkeeping fee charge), which would otherwise skew the score with stale backlog noise.",
   "Showing Completion Rate": "Showings completed ÷ showings scheduled, across AVAILABLE listings only (RentEngine's own unit status isn't \"Leased\") for the selected period. RentEngine doesn't break showings into accompanied vs. self-guided, so self-showings can't be excluded from either side.",
-  "Lease Renewal Rate": "Renewed ÷ decided, across Lease Renewal Processes CREATED in the trailing 12 months. \"Decided\" excludes still-in-progress processes (Upcoming, Send Lease) — everything else counts, including an Owner/Tenant Non-Renewal outcome even if it shows no closed date yet. \"Renewed\" = a completed Lease Renewed outcome.",
+  // CORRECTED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot: enumerates the same 4 non-renewal outcomes the vendor's
+  // own note text lists by name — the underlying scoring logic already
+  // handled all 4 correctly (anything outside Upcoming/Send Lease counts
+  // as decided), this only makes the wording as explicit as the vendor's.
+  "Lease Renewal Rate": "Lease Renewal Processes in trailing 12 months. Rate = renewed ÷ decided, where \"decided\" excludes still-in-progress processes (e.g. Send Lease, Upcoming). \"Renewed\" = a completed Lease Renewed outcome; non-renewal outcomes (owner/tenant non-renewal, owner terminating management, owner relisting, owner selling) count as not renewed.",
 };
 
 // ADDED 2026-07-19, per Jason directly: this used to only accept the
@@ -162,21 +175,35 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
 
   try {
     switch (kpiName) {
+      // CORRECTED 2026-07-19, per Jason directly, against a real vendor
+      // screenshot: this used to return a bare unitId with no property
+      // address or unit number at all (occupancyExplainRows) — the vendor's
+      // real drill-down shows PROPERTY/UNIT/OCCUPIED columns. Switched to
+      // unitStatusRows + withPropertyAddress, the SAME real-address join
+      // already used for every other Dashboard drill-down (dashboardRoutes.ts),
+      // just never wired up here when this KPI explain route was first built.
       case "Portfolio Occupancy Rate": {
-        const [allUnits, activeLeases, excludedPropertyIds] = await Promise.all([
+        const [allUnits, activeLeases, excludedPropertyIds, properties] = await Promise.all([
           fetchActiveManagedUnits(),
           fetchActiveLeases(),
           getExcludedPropertyIds(),
+          fetchProperties(),
         ]);
         const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
-        const rows = occupancyExplainRows(activeLeases, units.map((u) => String(u.Id)));
+        const rows = withPropertyAddress(unitStatusRows(units, activeLeases), propertyAddressById(properties));
         res.json({ kpiName, formula, rows });
         return;
       }
       case "Delinquency Rate": {
-        const balances = await fetchOutstandingBalances();
-        const activeLeases = await fetchActiveLeases();
-        const rows = delinquencyRateExplainRows(balances, activeLeases);
+        const [balances, properties, activeLeases] = await Promise.all([
+          fetchOutstandingBalances(),
+          fetchProperties(),
+          fetchActiveLeases(),
+        ]);
+        const rows = withUnitNumber(
+          withPropertyAddress(delinquentLeaseRows(balances), propertyAddressById(properties)),
+          unitNumberByLeaseId(activeLeases)
+        );
         res.json({ kpiName, formula, rows });
         return;
       }
@@ -214,13 +241,23 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
         return;
       }
       case "Days on Market": {
-        const leasingPerf = await getOrFetchLeasingPerformanceForAllUnits(from, to);
+        const [leasingPerf, units] = await Promise.all([
+          getOrFetchLeasingPerformanceForAllUnits(from, to),
+          fetchUnits(),
+        ]);
         if (!leasingPerf.connected || !leasingPerf.rows) {
           res.status(502).json({ error: "RentEngine isn't connected — can't load the data behind Days on Market." });
           return;
         }
-        const rows = daysOnMarketExplainRows(leasingPerf.rows);
-        res.json({ kpiName, formula, rows });
+        const rows = daysOnMarketExplainRows(leasingPerf.rows, units.connected && units.data ? units.data : []);
+        const summary = summarizeDaysOnMarket(leasingPerf.rows);
+        res.json({
+          kpiName,
+          formula,
+          rows,
+          avgDaysOnMarket: summary.avgDaysOnMarket,
+          medianDaysOnMarket: summary.medianDaysOnMarket,
+        });
         return;
       }
       case "Application Processing Time": {

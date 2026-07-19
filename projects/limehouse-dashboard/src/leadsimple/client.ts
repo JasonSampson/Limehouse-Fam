@@ -454,6 +454,12 @@ export function summarizeLeaseRenewalRate(processes: LeadSimpleProcess[], fromDa
 export interface LeaseRenewalRateExplainRow {
   processName: string;
   stage: string | null;
+  // status — ADDED 2026-07-19, per Jason directly, against a real vendor
+  // screenshot: the vendor's own drill-down has a STATUS column (real
+  // values "working"/"completed"/"canceled"/"backlog", see the stage
+  // schema comment above) distinct from Stage — was already fetched on
+  // every process's stage sub-object, just never surfaced here.
+  status: string | null;
   createdAt: string;
   closedAt: string | null;
   renewed: boolean;
@@ -474,8 +480,12 @@ export function leaseRenewalRateExplainRows(
     .map((p) => ({
       processName: p.name,
       stage: p.stage?.name ?? null,
+      status: p.stage?.status ?? null,
       createdAt: p.created_at,
       closedAt: p.closed_at,
       renewed: p.stage?.name === RENEWED_STAGE_NAME,
-    }));
+    }))
+    // Newest first — matches the vendor's own real drill-down ordering,
+    // confirmed against a real screenshot (2026-07-19).
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

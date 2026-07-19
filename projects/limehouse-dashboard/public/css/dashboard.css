@@ -973,6 +973,16 @@ table.drill-table td {
   background: var(--navy);
 }
 
+/* ADDED 2026-07-19, per Jason directly — pixel-sampled directly from the
+   vendor's real screenshot: the Q1-Q4 quarter tabs use a near-black active
+   color, distinctly different from the role tabs' navy (both were wrongly
+   sharing the same .role-tabs button.active navy since the quarter tabs
+   reuse that class for layout — this overrides just the color, scoped to
+   the quarter-tabs row specifically). */
+#quarter-tabs button.active {
+  background: #1c2119;
+}
+
 .role-tabs button.role-tab-disabled {
   color: var(--text-muted);
   background: #f2f3f5;
@@ -996,6 +1006,16 @@ table.drill-table td {
 .role-summary-line {
   font-size: 13.5px;
   color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+/* ADDED 2026-07-19, per Jason directly — the vendor's role detail card has
+   a bold role-name heading above the KPI-count summary line; this was
+   missing entirely. */
+.role-name-heading {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
   margin-bottom: 4px;
 }
 
@@ -1033,7 +1053,11 @@ table.drill-table td {
   display: flex;
   align-items: flex-end;
   gap: 14px;
-  height: 90px;
+  /* No fixed height, per Jason directly (2026-07-19) — each bar-col is now
+     a real "percent full" track+fill+labels stack (see
+     .quarterly-trend-bar-track below) that sizes to its own natural
+     content height instead of being force-stretched/clipped by a
+     hardcoded container height. */
   padding-top: 6px;
 }
 
@@ -1044,17 +1068,41 @@ table.drill-table td {
   gap: 6px;
   flex: 1 1 60px;
   max-width: 90px;
-  height: 100%;
-  justify-content: flex-end;
+}
+
+/* "Percent full" style — ADDED 2026-07-19, per Jason directly, matching
+   the vendor's real chart type exactly: a fixed-height light-gray TRACK
+   representing the full 0-100% range, with a colored fill rising from the
+   bottom to the score's percent — not a bare floating bar with nothing
+   above it. 106px and the #f3f4f0 track color are both pixel-measured
+   directly from a real vendor screenshot (a visible gray strip sits above
+   every real fill in that image). */
+.quarterly-trend-bar-track {
+  width: 100%;
+  max-width: 45px; /* pixel-measured from the vendor's real screenshot, 2026-07-19 */
+  height: 106px;
+  background: #f3f4f0;
+  border-radius: 4px 4px 0 0;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
 }
 
 .quarterly-trend-bar {
   width: 100%;
-  max-width: 48px;
   background: var(--lime-green-light);
   border-radius: 4px 4px 0 0;
   min-height: 4px;
 }
+
+/* Solid-fill versions of the band-pill colors above, ADDED 2026-07-19 for
+   the multi-quarter trend chart — each bar's color reflects that quarter's
+   overall score band (best/better/good/red), matching the vendor's own
+   per-quarter color-coded bars. */
+.quarterly-trend-bar-best { background: var(--lime-green); }
+.quarterly-trend-bar-better { background: var(--lime-amber); }
+.quarterly-trend-bar-good { background: #c2540f; }
+.quarterly-trend-bar-red { background: var(--lime-red); }
 
 .quarterly-trend-bar-amount {
   font-size: 12px;
@@ -1109,6 +1157,43 @@ table.kpi-table td {
   vertical-align: top;
 }
 
+/* ADDED 2026-07-19, per Jason directly, to match the vendor's real KPI
+   table layout exactly: Target/Actual/Score/Payout right-aligned, KPI name
+   left-aligned. */
+table.kpi-table th:not(:first-child),
+table.kpi-table td:not(:first-child) {
+  text-align: right;
+}
+
+.kpi-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: #eef0f3;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-top: 4px;
+  margin-right: 4px;
+}
+
+.kpi-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.kpi-band-dot {
+  font-size: 8px;
+  margin-right: 2px;
+}
+
+.kpi-band-dot.band-best { color: var(--lime-green); }
+.kpi-band-dot.band-better { color: var(--lime-amber); }
+.kpi-band-dot.band-good { color: #c2540f; }
+.kpi-band-dot.band-red { color: var(--lime-red); }
+.kpi-band-dot.band-none { color: var(--text-muted); }
+
 .band-pill {
   font-size: 11px;
   font-weight: 700;
@@ -1149,10 +1234,17 @@ table.kpi-table td {
   font-weight: 800;
 }
 
+/* CHANGED 2026-07-19, per Jason directly — was stacked vertically
+   (flex-direction: column), vendor's real legend is one horizontal row.
+   flex-wrap so it degrades to wrapping onto a second line on narrow
+   viewports instead of overflowing. */
 .legend-row {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center; /* CHANGED 2026-07-19, per Jason directly */
+  gap: 6px 20px;
   margin-top: 16px;
   font-size: 12.5px;
   color: var(--text-muted);
@@ -1162,6 +1254,7 @@ table.kpi-table td {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .legend-dot {
@@ -1177,6 +1270,37 @@ table.kpi-table td {
 .legend-dot.band-good { background: #c2540f; }
 .legend-dot.band-red { background: var(--lime-red); }
 .legend-dot.band-none { background: var(--text-muted); }
+
+/* ADDED 2026-07-19, per Jason directly, pixel-sampled from the vendor's
+   real Team Performance screenshot — the vendor's green/amber/orange/red
+   band colors measurably differ from this dashboard's site-wide --lime-*
+   palette (used 30+ times across Dashboard/CEO View for unrelated things
+   like occupancy trend lines). Jason confirmed: match Team Performance
+   only, do NOT change the global palette — .band-best/.band-better/
+   .band-good/.band-red and .legend-dot.band-* are ALSO used by
+   ceo-view.js's own KPI pills (bandPillCeo(), same shared class names),
+   so these overrides are scoped to .tp-page (team-performance.html's own
+   <body> class) rather than edited in place, which would have leaked into
+   CEO View too. */
+.tp-page .band-best { color: #3b6d11; }
+.tp-page .band-better { color: #d68910; }
+.tp-page .band-good { color: #993c1d; }
+.tp-page .band-red { color: #c0392b; }
+
+.tp-page .legend-dot.band-best { background: #3b6d11; }
+.tp-page .legend-dot.band-better { background: #d68910; }
+.tp-page .legend-dot.band-good { background: #993c1d; }
+.tp-page .legend-dot.band-red { background: #c0392b; }
+
+.tp-page .quarterly-trend-bar-best { background: #3b6d11; }
+.tp-page .quarterly-trend-bar-better { background: #d68910; }
+.tp-page .quarterly-trend-bar-good { background: #993c1d; }
+.tp-page .quarterly-trend-bar-red { background: #c0392b; }
+
+.tp-page .kpi-band-dot.band-best { color: #3b6d11; }
+.tp-page .kpi-band-dot.band-better { color: #d68910; }
+.tp-page .kpi-band-dot.band-good { color: #993c1d; }
+.tp-page .kpi-band-dot.band-red { color: #c0392b; }
 
 .empty-state {
   text-align: center;

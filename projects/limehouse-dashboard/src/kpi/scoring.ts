@@ -76,6 +76,16 @@ export interface KpiInput {
   actualValue: number | null;
   targetValue: number;
   higherIsBetter: boolean;
+  // targetOperator/unit/sourceSystem — ADDED 2026-07-19, per Jason directly,
+  // to match the vendor's real KPI table layout (Target/Actual columns and
+  // BD/RE/LS source badges), which this scoring engine previously had no
+  // way to surface at all. Pass-through fields only — scoreRole() doesn't
+  // use these for any math, it just carries them onto each KpiScoreResult
+  // so the API/frontend don't need a second lookup back to the KPI
+  // definition just to render what target/actual/source a score came from.
+  targetOperator: ">=" | "<=";
+  unit: string;
+  sourceSystem: string;
 }
 
 export interface KpiScoreResult {
@@ -85,6 +95,11 @@ export interface KpiScoreResult {
   scorePoints: number | null; // 0-3, null when hasData is false
   perKpiMax: number | null; // role_max_bonus / ORIGINAL kpi count, same for every KPI on this role
   payoutUsd: number | null; // 0 (not null) when hasData is false — contributes nothing but is a real, known $0
+  actualValue: number | null;
+  targetValue: number;
+  targetOperator: ">=" | "<=";
+  unit: string;
+  sourceSystem: string;
 }
 
 export interface RoleScoreResult {
@@ -94,6 +109,11 @@ export interface RoleScoreResult {
   scoredKpiCount: number; // denominator for percent (points side) — KPIs WITH data only
   totalPayoutUsd: number;
   percentOfMax: number; // points-based percent: scored points / (3 * scoredKpiCount), 0 when scoredKpiCount is 0
+  // totalScorePoints/maxScorePoints — ADDED 2026-07-19, per Jason directly,
+  // to reproduce the vendor's own "Score: 2/6 (33%)" text exactly (the
+  // raw fraction behind percentOfMax, not just the rounded percent).
+  totalScorePoints: number;
+  maxScorePoints: number; // 3 * scoredKpiCount
   kpis: KpiScoreResult[];
 }
 
@@ -157,6 +177,11 @@ export function scoreRole(role: string, maxBonusUsd: number, kpiInputs: KpiInput
         scorePoints: null,
         perKpiMax: roundCurrency(perKpiMax),
         payoutUsd: 0,
+        actualValue: null,
+        targetValue: k.targetValue,
+        targetOperator: k.targetOperator,
+        unit: k.unit,
+        sourceSystem: k.sourceSystem,
       };
     }
     const band = scoreBand(k.actualValue, k.targetValue, k.higherIsBetter);
@@ -169,6 +194,11 @@ export function scoreRole(role: string, maxBonusUsd: number, kpiInputs: KpiInput
       scorePoints,
       perKpiMax: roundCurrency(perKpiMax),
       payoutUsd,
+      actualValue: k.actualValue,
+      targetValue: k.targetValue,
+      targetOperator: k.targetOperator,
+      unit: k.unit,
+      sourceSystem: k.sourceSystem,
     };
   });
 
@@ -186,6 +216,8 @@ export function scoreRole(role: string, maxBonusUsd: number, kpiInputs: KpiInput
     scoredKpiCount,
     totalPayoutUsd,
     percentOfMax,
+    totalScorePoints,
+    maxScorePoints: 3 * scoredKpiCount,
     kpis,
   };
 }

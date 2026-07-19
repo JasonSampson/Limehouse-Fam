@@ -256,6 +256,9 @@ export async function getScoredRoles(
       actualValue: snapshot?.actualValue ?? null,
       targetValue: def.targetValue,
       higherIsBetter: def.higherIsBetter,
+      targetOperator: def.targetOperator,
+      unit: def.unit,
+      sourceSystem: def.sourceSystem,
     });
   }
 

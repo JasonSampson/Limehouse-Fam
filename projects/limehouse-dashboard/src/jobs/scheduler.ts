@@ -4,6 +4,7 @@ import {
   refreshRenewalRateCache,
   refreshCallActivityCache,
   refreshRentEngineLeasingPerformanceCache,
+  runTeamPerformanceKpisSync,
 } from "./cacheRefreshJobs.js";
 import { logError } from "../lib/logger.js";
 
@@ -51,15 +52,26 @@ const HOUR = 60 * MINUTE;
 //     callActivitySync.ts).
 //   - Security Deposit Withheld: every 4 hours — the slowest-moving of the
 //     five.
-//   - terminated-properties / financial-history / team-performance-kpis are
-//     deliberately NOT scheduled here — unconfirmed as user-facing tiles
-//     (per the investigation), left manual-only until a real tile is found
+//   - team-performance-kpis: every 6 hours — ADDED 2026-07-19, per Jason
+//     directly, so the Team Performance tab's Quarterly Trend chart
+//     actually accumulates real history going forward instead of staying
+//     permanently empty (it used to be manual-only, so past quarters have
+//     zero snapshot data unless someone happened to click "sync" during
+//     them). Slower than every other job here on purpose — this one loops
+//     over every active lease's transactions and every bank account's
+//     reconciliations, the heaviest single job in this file, and a
+//     quarterly business metric doesn't need to be fresher than a few
+//     hours anyway.
+//   - terminated-properties / financial-history are deliberately NOT
+//     scheduled here — unconfirmed as user-facing tiles (per the
+//     investigation), left manual-only until a real tile is found
 //     depending on one going stale.
 const JOBS: ScheduledJob[] = [
   { name: "rentengine-leasing-performance", fn: refreshRentEngineLeasingPerformanceCache, intervalMs: 8 * MINUTE, initialDelayMs: 0 },
   { name: "renewal-rate", fn: refreshRenewalRateCache, intervalMs: 2 * HOUR, initialDelayMs: 15 * 1000 },
   { name: "rent-collection", fn: refreshRentCollectionCache, intervalMs: 2 * HOUR, initialDelayMs: 30 * 1000 },
   { name: "call-activity", fn: refreshCallActivityCache, intervalMs: 2 * HOUR, initialDelayMs: 45 * 1000 },
+  { name: "team-performance-kpis", fn: () => runTeamPerformanceKpisSync().then(() => {}), intervalMs: 6 * HOUR, initialDelayMs: 90 * 1000 },
   { name: "security-deposit-withheld", fn: refreshSecurityDepositWithheldCache, intervalMs: 4 * HOUR, initialDelayMs: 60 * 1000 },
 ];
 

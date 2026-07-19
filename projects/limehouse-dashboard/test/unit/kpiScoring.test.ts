@@ -91,10 +91,10 @@ describe("scoreBand direction-aware banding", () => {
 describe("scoreRole reproduces known-good totals from the live vendor site", () => {
   it("Portfolio Manager: 1 Best + 3 Red across 4 KPIs (all scored) = $250 / $1000 (25%)", () => {
     const kpis: KpiInput[] = [
-      { kpiName: "Occupancy Rate", hasData: true, actualValue: 96, targetValue: 95, higherIsBetter: true }, // best
-      { kpiName: "Renewal Rate", hasData: true, actualValue: 40, targetValue: 70, higherIsBetter: true }, // red
-      { kpiName: "Response Time", hasData: true, actualValue: 20, targetValue: 5, higherIsBetter: false }, // red
-      { kpiName: "Inspection Compliance", hasData: true, actualValue: 30, targetValue: 90, higherIsBetter: true }, // red
+      { kpiName: "Occupancy Rate", hasData: true, actualValue: 96, targetValue: 95, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // best
+      { kpiName: "Renewal Rate", hasData: true, actualValue: 40, targetValue: 70, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // red
+      { kpiName: "Response Time", hasData: true, actualValue: 20, targetValue: 5, higherIsBetter: false, targetOperator: "<=", unit: "percent", sourceSystem: "buildium" }, // red
+      { kpiName: "Inspection Compliance", hasData: true, actualValue: 30, targetValue: 90, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // red
     ];
     const result = scoreRole("portfolio_manager", 1000, kpis);
     expect(result.originalKpiCount).toBe(4);
@@ -105,8 +105,8 @@ describe("scoreRole reproduces known-good totals from the live vendor site", () 
 
   it("Portfolio Assistant: Better + Red across 2 KPIs (all scored) = $250 / $750 (33%)", () => {
     const kpis: KpiInput[] = [
-      { kpiName: "Task Completion", hasData: true, actualValue: 91, targetValue: 100, higherIsBetter: true }, // better (>=90%)
-      { kpiName: "Data Accuracy", hasData: true, actualValue: 40, targetValue: 90, higherIsBetter: true }, // red
+      { kpiName: "Task Completion", hasData: true, actualValue: 91, targetValue: 100, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // better (>=90%)
+      { kpiName: "Data Accuracy", hasData: true, actualValue: 40, targetValue: 90, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // red
     ];
     const result = scoreRole("portfolio_assistant", 750, kpis);
     expect(result.originalKpiCount).toBe(2);
@@ -117,9 +117,9 @@ describe("scoreRole reproduces known-good totals from the live vendor site", () 
 
   it("Leasing Specialist: Better + Red + Red across 3 KPIs (all scored) = $111 / $500 (22%)", () => {
     const kpis: KpiInput[] = [
-      { kpiName: "Days on Market", hasData: true, actualValue: 11, targetValue: 10, higherIsBetter: false }, // better (<=11)
-      { kpiName: "Showing-to-Lease Ratio", hasData: true, actualValue: 5, targetValue: 20, higherIsBetter: true }, // red
-      { kpiName: "Application Turnaround", hasData: true, actualValue: 10, targetValue: 2, higherIsBetter: false }, // red
+      { kpiName: "Days on Market", hasData: true, actualValue: 11, targetValue: 10, higherIsBetter: false, targetOperator: "<=", unit: "percent", sourceSystem: "buildium" }, // better (<=11)
+      { kpiName: "Showing-to-Lease Ratio", hasData: true, actualValue: 5, targetValue: 20, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // red
+      { kpiName: "Application Turnaround", hasData: true, actualValue: 10, targetValue: 2, higherIsBetter: false, targetOperator: "<=", unit: "percent", sourceSystem: "buildium" }, // red
     ];
     const result = scoreRole("leasing_specialist", 500, kpis);
     expect(result.originalKpiCount).toBe(3);
@@ -130,9 +130,9 @@ describe("scoreRole reproduces known-good totals from the live vendor site", () 
 
   it("Administrative Assistant: Best + Better + Red across 3 KPIs (all scored) = $278 / $500 (56%)", () => {
     const kpis: KpiInput[] = [
-      { kpiName: "Filing Accuracy", hasData: true, actualValue: 100, targetValue: 95, higherIsBetter: true }, // best
-      { kpiName: "Response Time", hasData: true, actualValue: 5.4, targetValue: 5, higherIsBetter: false }, // better (<=5.5)
-      { kpiName: "Call Answer Rate", hasData: true, actualValue: 40, targetValue: 90, higherIsBetter: true }, // red
+      { kpiName: "Filing Accuracy", hasData: true, actualValue: 100, targetValue: 95, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // best
+      { kpiName: "Response Time", hasData: true, actualValue: 5.4, targetValue: 5, higherIsBetter: false, targetOperator: "<=", unit: "percent", sourceSystem: "buildium" }, // better (<=5.5)
+      { kpiName: "Call Answer Rate", hasData: true, actualValue: 40, targetValue: 90, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // red
     ];
     const result = scoreRole("administrative_assistant", 500, kpis);
     expect(result.originalKpiCount).toBe(3);
@@ -143,10 +143,10 @@ describe("scoreRole reproduces known-good totals from the live vendor site", () 
 
   it("Bookkeeper: Reconciliation Accuracy (no data) excluded from the PERCENT denominator, but per_kpi_max still divides by the ORIGINAL 4 KPIs = $167 / $500 (44%)", () => {
     const kpis: KpiInput[] = [
-      { kpiName: "Reconciliation Accuracy", hasData: false, actualValue: null, targetValue: 100, higherIsBetter: true },
-      { kpiName: "Rent Processing Accuracy", hasData: true, actualValue: 100, targetValue: 95, higherIsBetter: true }, // best (3pts)
-      { kpiName: "Vendor Compliance", hasData: true, actualValue: 40, targetValue: 90, higherIsBetter: true }, // red (0pts)
-      { kpiName: "1099 Compliance", hasData: true, actualValue: 75, targetValue: 90, higherIsBetter: true }, // good (1pt): 75 is in [72,81)
+      { kpiName: "Reconciliation Accuracy", hasData: false, actualValue: null, targetValue: 100, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" },
+      { kpiName: "Rent Processing Accuracy", hasData: true, actualValue: 100, targetValue: 95, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // best (3pts)
+      { kpiName: "Vendor Compliance", hasData: true, actualValue: 40, targetValue: 90, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // red (0pts)
+      { kpiName: "1099 Compliance", hasData: true, actualValue: 75, targetValue: 90, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" }, // good (1pt): 75 is in [72,81)
     ];
     const result = scoreRole("bookkeeper", 500, kpis);
 
@@ -162,6 +162,61 @@ describe("scoreRole reproduces known-good totals from the live vendor site", () 
     // Exact reproduction of the live site's own displayed numbers.
     expect(result.totalPayoutUsd).toBe(166.67);
     expect(result.percentOfMax).toBe(44.4);
+    // Same live site's own "Score: 4/9 (44%)" text — the raw fraction
+    // behind percentOfMax (3 scored KPIs x 3 points max = 9; actual points
+    // scored = 3+0+1 = 4).
+    expect(result.totalScorePoints).toBe(4);
+    expect(result.maxScorePoints).toBe(9);
+  });
+});
+
+// ADDED 2026-07-19, per Jason directly, for the Team Performance tab's
+// Target/Actual columns and source badges — confirms targetOperator/unit/
+// sourceSystem pass straight through from input to output unchanged, since
+// scoreRole() doesn't use them for any math, only carries them along.
+describe("scoreRole passes targetOperator/unit/sourceSystem through unchanged", () => {
+  it("carries the input fields onto the matching KpiScoreResult", () => {
+    const kpis: KpiInput[] = [
+      {
+        kpiName: "Days on Market",
+        hasData: true,
+        actualValue: 29,
+        targetValue: 21,
+        higherIsBetter: false,
+        targetOperator: "<=",
+        unit: "days",
+        sourceSystem: "rent_engine",
+      },
+    ];
+    const result = scoreRole("portfolio_manager", 1000, kpis);
+    const kpi = result.kpis[0];
+    expect(kpi.targetOperator).toBe("<=");
+    expect(kpi.unit).toBe("days");
+    expect(kpi.sourceSystem).toBe("rent_engine");
+    expect(kpi.actualValue).toBe(29);
+    expect(kpi.targetValue).toBe(21);
+  });
+
+  it("still carries targetValue/targetOperator/unit/sourceSystem through even when hasData is false", () => {
+    const kpis: KpiInput[] = [
+      {
+        kpiName: "Reconciliation Accuracy",
+        hasData: false,
+        actualValue: null,
+        targetValue: 100,
+        higherIsBetter: true,
+        targetOperator: ">=",
+        unit: "percent",
+        sourceSystem: "buildium",
+      },
+    ];
+    const result = scoreRole("bookkeeper", 500, kpis);
+    const kpi = result.kpis[0];
+    expect(kpi.actualValue).toBeNull();
+    expect(kpi.targetValue).toBe(100);
+    expect(kpi.targetOperator).toBe(">=");
+    expect(kpi.unit).toBe("percent");
+    expect(kpi.sourceSystem).toBe("buildium");
   });
 });
 
@@ -179,7 +234,7 @@ describe("scoreRole handles the Marketing Specialist empty-KPI state cleanly", (
 describe("scoreRole excludes no-data KPIs from the percent calculation without treating them as zero-scored", () => {
   it("a KPI with hasData=false contributes $0 (not null) to the dollar total, and null band/points", () => {
     const kpis: KpiInput[] = [
-      { kpiName: "Configured But No Data Yet", hasData: false, actualValue: null, targetValue: 50, higherIsBetter: true },
+      { kpiName: "Configured But No Data Yet", hasData: false, actualValue: null, targetValue: 50, higherIsBetter: true, targetOperator: ">=", unit: "percent", sourceSystem: "buildium" },
     ];
     const result = scoreRole("some_role", 500, kpis);
     expect(result.originalKpiCount).toBe(1);

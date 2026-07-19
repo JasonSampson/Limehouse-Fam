@@ -97,3 +97,17 @@ export function periodToSnapshotLabel(period: PeriodKey, now: Date = new Date())
   // should resolve to the CONTAINING quarter's label instead.
   return `${year}-Q${q + 1}`;
 }
+
+// ADDED 2026-07-19, per Jason directly, for the Team Performance tab's own
+// Q1-Q4 quarter tabs (independent of the shared this_month/this_quarter/etc.
+// dropdown) — turns a snapshot label like "2026-Q3" back into a real date
+// range, reusing the same quarterRange() this file's own resolvePeriod()
+// already relies on for "this_quarter"/"last_quarter" so both paths stay
+// consistent.
+export function quarterLabelToDateRange(label: string): DateRange {
+  const match = /^(\d{4})-Q([1-4])$/.exec(label);
+  if (!match) throw new Error(`Invalid quarter label: ${label}`);
+  const year = Number(match[1]);
+  const quarter = (Number(match[2]) - 1) as 0 | 1 | 2 | 3;
+  return quarterRange(year, quarter);
+}

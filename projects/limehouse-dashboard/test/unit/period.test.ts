@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolvePeriod, periodToSnapshotLabel } from "../../src/kpi/period.js";
+import { resolvePeriod, periodToSnapshotLabel, quarterLabelToDateRange } from "../../src/kpi/period.js";
 
 // Fixed "now" for deterministic tests: July 3, 2026 (Q3).
 const NOW = new Date("2026-07-03T12:00:00Z");
@@ -60,5 +60,25 @@ describe("periodToSnapshotLabel", () => {
   it("maps last_quarter across a year boundary", () => {
     const feb = new Date("2026-02-15T00:00:00Z");
     expect(periodToSnapshotLabel("last_quarter", feb)).toBe("2025-Q4");
+  });
+});
+
+// ADDED 2026-07-19, per Jason directly, for the Team Performance tab's own
+// Q1-Q4 quarter tabs.
+describe("quarterLabelToDateRange", () => {
+  it("resolves Q1", () => {
+    expect(quarterLabelToDateRange("2026-Q1")).toEqual({ from: "2026-01-01", to: "2026-03-31" });
+  });
+
+  it("resolves Q3", () => {
+    expect(quarterLabelToDateRange("2026-Q3")).toEqual({ from: "2026-07-01", to: "2026-09-30" });
+  });
+
+  it("resolves Q4", () => {
+    expect(quarterLabelToDateRange("2026-Q4")).toEqual({ from: "2026-10-01", to: "2026-12-31" });
+  });
+
+  it("throws on a malformed label", () => {
+    expect(() => quarterLabelToDateRange("not-a-quarter")).toThrow();
   });
 });

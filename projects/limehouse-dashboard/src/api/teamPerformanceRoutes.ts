@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireLogin, requireAdmin } from "../auth/session.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
-import { periodToSnapshotLabel, resolvePeriod, type PeriodKey } from "../kpi/period.js";
+import { periodToSnapshotLabel, resolvePeriod, quarterLabelToDateRange, type PeriodKey } from "../kpi/period.js";
 import { logError } from "../lib/logger.js";
 import {
   fetchActiveManagedUnits,
@@ -44,13 +44,63 @@ const periodQuerySchema = z
   .enum(["this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"])
   .default("this_quarter");
 
+const QUARTER_LABEL_PATTERN = /^\d{4}-Q[1-4]$/;
+
+// ADDED 2026-07-19, per Jason directly, against a real vendor screenshot:
+// the vendor's Team Performance tab has its OWN dedicated Q1-Q4 quarter
+// tabs, independent of the shared this_month/this_quarter/etc. dropdown
+// used everywhere else on the dashboard — a `quarter` param (e.g.
+// "2026-Q3") lets the frontend jump straight to any quarter of the current
+// year. Falls back to the existing `period`-based resolution (which
+// correctly lands on the REAL current quarter via periodToSnapshotLabel)
+// when no explicit quarter is given, so the page still defaults sensibly
+// on first load.
 teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAdmin, async (req, res) => {
-  const parsed = periodQuerySchema.safeParse(req.query.period);
-  const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
-  const snapshotLabel = periodToSnapshotLabel(period);
+  const quarterParam = req.query.quarter;
+  let snapshotLabel: string;
+  if (typeof quarterParam === "string" && QUARTER_LABEL_PATTERN.test(quarterParam)) {
+    snapshotLabel = quarterParam;
+  } else {
+    const parsed = periodQuerySchema.safeParse(req.query.period);
+    const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
+    snapshotLabel = periodToSnapshotLabel(period);
+  }
+
   try {
-    const roles = await getScoredRoles(snapshotLabel, "team_performance");
-    res.json({ period: snapshotLabel, roles });
+    const { from, to } = quarterLabelToDateRange(snapshotLabel);
+
+    // Quarterly Trend — real history across every quarter of the currently
+    // viewed year (matches the Q1-Q4 tab set), per role. Only actually
+    // populates once the (separately scheduled) KPI snapshot sync has run
+    // for a given quarter — a quarter with no snapshot data at all for a
+    // role just carries hasData:false so the frontend can honestly skip it
+    // rather than drawing a fake empty bar.
+    const year = Number(snapshotLabel.slice(0, 4));
+    const quarterLabelsThisYear = [1, 2, 3, 4].map((q) => `${year}-Q${q}`);
+    const otherQuarters = quarterLabelsThisYear.filter((label) => label !== snapshotLabel);
+
+    const [roles, ...otherResults] = await Promise.all([
+      getScoredRoles(snapshotLabel, "team_performance"),
+      ...otherQuarters.map((label) => getScoredRoles(label, "team_performance")),
+    ]);
+
+    const resultsByQuarter = new Map(otherQuarters.map((label, i) => [label, otherResults[i]]));
+    resultsByQuarter.set(snapshotLabel, roles);
+
+    const rolesWithTrend = roles.map((role) => ({
+      ...role,
+      trend: quarterLabelsThisYear.map((label) => {
+        const match = resultsByQuarter.get(label)!.find((r) => r.role === role.role);
+        return {
+          period: label,
+          hasData: (match?.scoredKpiCount ?? 0) > 0,
+          percentOfMax: match?.percentOfMax ?? 0,
+          totalPayoutUsd: match?.totalPayoutUsd ?? 0,
+        };
+      }),
+    }));
+
+    res.json({ period: snapshotLabel, periodStart: from, periodEnd: to, roles: rolesWithTrend });
   } catch (err) {
     logError("GET /api/team-performance/roles failed", { error: String(err) });
     res.status(500).json({ error: "Failed to load Team Performance data." });
@@ -76,6 +126,19 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   "Lease Renewal Rate": "Renewed ÷ decided, across Lease Renewal Processes CREATED in the trailing 12 months. \"Decided\" excludes still-in-progress processes (Upcoming, Send Lease) — everything else counts, including an Owner/Tenant Non-Renewal outcome even if it shows no closed date yet. \"Renewed\" = a completed Lease Renewed outcome.",
 };
 
+// ADDED 2026-07-19, per Jason directly: this used to only accept the
+// shared this_month/this_quarter/etc. period, so a KPI clicked while
+// viewing a past quarter's Q1-Q4 tab (added above) still explained
+// whatever the UNRELATED shared header dropdown happened to be set to,
+// not the quarter actually on screen — a real drill-down/tile mismatch,
+// exactly what Jason asked this deep-dive to catch. Accepts an explicit
+// `quarter` param now, same as /roles above, taking precedence over
+// `period`. Note this still can't show TRUE historical records for a
+// quarter that's fully in the past — every explain-rows function below
+// queries Buildium/RentEngine/LeadSimple live, as of right now, there's
+// no stored historical record set to read instead — but the date WINDOW
+// passed into each calculation is now at least the real quarter's bounds
+// instead of an unrelated one.
 teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requireAdmin, async (req, res) => {
   const kpiName = req.params.kpiName;
   const formula = KPI_EXPLAIN_FORMULAS[kpiName];
@@ -83,9 +146,19 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
     res.status(404).json({ error: `No live formula/drill-down wired up yet for "${kpiName}".` });
     return;
   }
-  const parsed = periodQuerySchema.safeParse(req.query.period);
-  const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
-  const { from, to } = resolvePeriod(period);
+  const quarterParam = req.query.quarter;
+  let from: string;
+  let to: string;
+  if (typeof quarterParam === "string" && QUARTER_LABEL_PATTERN.test(quarterParam)) {
+    const fullQuarter = quarterLabelToDateRange(quarterParam);
+    const today = new Date().toISOString().slice(0, 10);
+    from = fullQuarter.from;
+    to = fullQuarter.to > today ? today : fullQuarter.to;
+  } else {
+    const parsed = periodQuerySchema.safeParse(req.query.period);
+    const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
+    ({ from, to } = resolvePeriod(period));
+  }
 
   try {
     switch (kpiName) {

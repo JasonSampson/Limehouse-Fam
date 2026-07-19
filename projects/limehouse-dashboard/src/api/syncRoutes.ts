@@ -8,10 +8,6 @@ import {
   fetchAllLeases,
   fetchLeaseTransactions,
   fetchLeaseRecurringTransactions,
-  fetchActiveManagedUnits,
-  fetchVendors,
-  fetchBankAccounts,
-  fetchBankAccountReconciliations,
   fetchGlAccountsById,
   fetchOnboardingFeeDate,
 } from "../buildium/client.js";
@@ -29,42 +25,17 @@ import {
 } from "../kpi/rentCollection.js";
 import { securityDepositWithheldRows } from "../kpi/leaseRows.js";
 import { syncCallActivityForPeriod } from "../rentengine/callActivitySync.js";
-import { resolvePeriod } from "../kpi/period.js";
 import { logError, logInfo } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
-import { summarizeOccupancy, summarizeDelinquencyRate, summarizeRenewalRate, mostRecentRentEffectiveDate } from "../kpi/occupancy.js";
-import { renewalRateRows } from "../kpi/leaseRows.js";
-import { summarizeDaysOnMarket, summarizeShowingCompletionRate, fetchUnits } from "../rentengine/client.js";
-import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
-import {
-  summarizeReconciliationAccuracy,
-  summarizeRentProcessingAccuracy,
-  summarizeVendorCompliance,
-  summarize1099Compliance,
-  type ReconciliationAccuracyInput,
-} from "../kpi/bookkeeperMetrics.js";
-import {
-  fetchApplicationProcesses,
-  summarizeApplicationProcessingTime,
-  fetchApplicationsWithTasksForResponseTimeliness,
-  summarizeApplicantResponseTimeliness,
-  fetchLeaseRenewalProcesses,
-  summarizeLeaseRenewalRate,
-} from "../leadsimple/client.js";
-import {
-  findTerminatingCandidates,
-  matchCandidatesToActiveProperties,
-  isStillExcluded,
-  getExcludedPropertyIds,
-} from "../kpi/terminatedProperties.js";
-import { periodToSnapshotLabel } from "../kpi/period.js";
-import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
+import { fetchLeaseRenewalProcesses } from "../leadsimple/client.js";
+import { findTerminatingCandidates, matchCandidatesToActiveProperties, isStillExcluded } from "../kpi/terminatedProperties.js";
 import {
   refreshRentCollectionCache,
   refreshSecurityDepositWithheldCache,
   refreshRenewalRateCache,
   refreshCallActivityCache,
+  runTeamPerformanceKpisSync,
 } from "../jobs/cacheRefreshJobs.js";
 
 // requireLogin applied per-route, not via syncRoutes.use() — this router is
@@ -444,213 +415,18 @@ syncRoutes.post("/api/sync/financial-history", requireLogin, async (_req, res) =
 // stays correct, but no snapshot is written for it, which the existing
 // scoring engine already treats as "no data yet" (same tested pattern as
 // Bookkeeper's Reconciliation Accuracy before this migration).
-async function writeSnapshotForEveryDisplayGroup(
-  role: string,
-  kpiName: string,
-  period: string,
-  periodStart: string,
-  periodEnd: string,
-  hasData: boolean,
-  actualValue: number | null,
-  targetValue: number,
-  higherIsBetter: boolean,
-  sourceSystem: string
-): Promise<void> {
-  const definitionIds = await getKpiDefinitionIdsByName(role, kpiName);
-  for (const kpiDefinitionId of definitionIds) {
-    await upsertKpiSnapshot({
-      kpiDefinitionId,
-      period,
-      periodStart,
-      periodEnd,
-      hasData,
-      actualValue,
-      targetValue,
-      higherIsBetter,
-      sourceSystem,
-    });
-  }
-}
-
+//
+// EXTRACTED 2026-07-19, per Jason directly, into
+// src/jobs/cacheRefreshJobs.ts's runTeamPerformanceKpisSync() — same
+// "one implementation, called from the manual route and the automatic
+// scheduler" pattern already used for the other jobs in that file. This
+// route is now just the thin HTTP wrapper.
 syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, async (_req, res) => {
-  const syncLogId = await startSyncRun("buildium", "team_performance_kpis_sync");
   try {
-    const now = new Date();
-    const period = periodToSnapshotLabel("this_quarter", now);
-    const quarterStartMonth = Math.floor(now.getUTCMonth() / 3) * 3;
-    const periodStart = new Date(Date.UTC(now.getUTCFullYear(), quarterStartMonth, 1)).toISOString().slice(0, 10);
-    // Stored on the snapshot row as the quarter's real calendar end — but
-    // NEVER passed as the "to" bound into a KPI calculation itself. Same
-    // future-dates bug already fixed elsewhere today (This Month/Quarter/
-    // Year reaching past today): summarizeReconciliationAccuracy's
-    // "completed months in range" check only looks at whether a month's
-    // calendar end falls inside [from, to] — it doesn't independently know
-    // today's real date, so passing the quarter's true end (up to 3 months
-    // in the future) would make it count August/September as "completed"
-    // days after the quarter merely started. asOfDate clamps every KPI
-    // calculation's "to" bound to today; periodEnd is kept separately, for
-    // storage only.
-    const periodEnd = new Date(Date.UTC(now.getUTCFullYear(), quarterStartMonth + 3, 0)).toISOString().slice(0, 10);
-    const asOfDate = now.toISOString().slice(0, 10);
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10);
-    const monthEnd = now.toISOString().slice(0, 10);
-
-    // Portfolio Manager
-    // CHANGED 2026-07-10, per Jason directly: excludes terminated-but-not-
-    // yet-closed-out properties (see src/kpi/terminatedProperties.ts) from
-    // the unit count this KPI is scored against — a Portfolio Manager
-    // shouldn't be graded on vacancy that isn't really theirs to fix.
-    const [allUnits, activeLeases, excludedPropertyIds] = await Promise.all([
-      fetchActiveManagedUnits(),
-      fetchActiveLeases(),
-      getExcludedPropertyIds(),
-    ]);
-    const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
-    const occupancy = summarizeOccupancy(units.length, activeLeases);
-    await writeSnapshotForEveryDisplayGroup(
-      "portfolio_manager", "Portfolio Occupancy Rate", period, periodStart, periodEnd,
-      true, occupancy.occupancyRatePercent, 95, true, "buildium"
-    );
-
-    const balances = await fetchOutstandingBalances();
-    const delinquencyRate = summarizeDelinquencyRate(balances, activeLeases);
-    await writeSnapshotForEveryDisplayGroup(
-      "portfolio_manager", "Delinquency Rate", period, periodStart, periodEnd,
-      delinquencyRate.ratePercent !== null, delinquencyRate.ratePercent, 3, false, "buildium"
-    );
-
-    // Lease Renewal Rate is a fixed trailing-12-month window (the vendor's
-    // own label reads "(12 mo)"), scoped by each process's created_at —
-    // CONFIRMED LIVE 2026-07-06 by manually counting the vendor's own real
-    // drill-down data (73 renewed / 118 decided = 61.9%, exact match).
-    if (isLeadSimpleConnected()) {
-      const renewalWindowStart = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const renewalProcesses = await fetchLeaseRenewalProcesses();
-      if (renewalProcesses.connected && renewalProcesses.data) {
-        const renewalRate = summarizeLeaseRenewalRate(renewalProcesses.data, renewalWindowStart, asOfDate);
-        await writeSnapshotForEveryDisplayGroup(
-          "portfolio_manager", "Lease Renewal Rate", period, periodStart, periodEnd,
-          renewalRate.ratePercent !== null, renewalRate.ratePercent, 70, true, "lead_simple"
-        );
-      }
-    }
-
-    if (isRentEngineConnected()) {
-      const leasingPerf = await getOrFetchLeasingPerformanceForAllUnits(monthStart, monthEnd);
-      if (leasingPerf.connected && leasingPerf.rows) {
-        const dom = summarizeDaysOnMarket(leasingPerf.rows);
-        await writeSnapshotForEveryDisplayGroup(
-          "portfolio_manager", "Days on Market", period, periodStart, periodEnd,
-          dom.avgDaysOnMarket !== null, dom.avgDaysOnMarket, 21, false, "rent_engine"
-        );
-
-        // Portfolio Assistant — KPI definition not seeded yet (waiting on
-        // the role's other 2 KPIs so the $750/3-way split is correct from
-        // the start), but the calculation itself is confirmed live
-        // 2026-07-06 against the vendor's own drill-down (28/47 = 59.6%
-        // for June). writeSnapshotForEveryDisplayGroup is a no-op today
-        // since getKpiDefinitionIdsByName finds no matching definition —
-        // this starts writing real snapshots the moment the migration
-        // lands, no code change needed then.
-        const units = await fetchUnits();
-        if (units.connected && units.data) {
-          const showingCompletion = summarizeShowingCompletionRate(leasingPerf.rows, units.data);
-          await writeSnapshotForEveryDisplayGroup(
-            "portfolio_assistant", "Showing Completion Rate", period, periodStart, periodEnd,
-            showingCompletion.ratePercent !== null, showingCompletion.ratePercent, 95, true, "rent_engine"
-          );
-        }
-      }
-    }
-
-    // Bookkeeper
-    const vendors = await fetchVendors();
-    const vendorCompliance = summarizeVendorCompliance(vendors);
-    await writeSnapshotForEveryDisplayGroup(
-      "bookkeeper", "Vendor Compliance", period, periodStart, periodEnd,
-      vendorCompliance.compliancePercent !== null, vendorCompliance.compliancePercent, 100, true, "buildium"
-    );
-    const nineNine = summarize1099Compliance(vendors);
-    await writeSnapshotForEveryDisplayGroup(
-      "bookkeeper", "1099 Compliance", period, periodStart, periodEnd,
-      nineNine.compliancePercent !== null, nineNine.compliancePercent, 100, true, "buildium"
-    );
-
-    const bankAccounts = await fetchBankAccounts();
-    const reconInputs: ReconciliationAccuracyInput[] = [];
-    for (const account of bankAccounts) {
-      const { reconcilable, reconciliations } = await fetchBankAccountReconciliations(account.Id);
-      reconInputs.push({ account, reconcilable, reconciliations });
-    }
-    const reconciliationAccuracy = summarizeReconciliationAccuracy(reconInputs, periodStart, asOfDate);
-    await writeSnapshotForEveryDisplayGroup(
-      "bookkeeper", "Reconciliation Accuracy", period, periodStart, periodEnd,
-      reconciliationAccuracy.accuracyPercent !== null, reconciliationAccuracy.accuracyPercent, 100, true, "buildium"
-    );
-
-    const transactionsByLease: Awaited<ReturnType<typeof fetchLeaseTransactions>>[] = [];
-    for (const lease of activeLeases) {
-      transactionsByLease.push(await fetchLeaseTransactions(String(lease.Id)));
-    }
-    const rentProcessingAccuracy = summarizeRentProcessingAccuracy(transactionsByLease, periodStart, asOfDate);
-    await writeSnapshotForEveryDisplayGroup(
-      "bookkeeper", "Rent Processing Accuracy", period, periodStart, periodEnd,
-      rentProcessingAccuracy.accuracyPercent !== null, rentProcessingAccuracy.accuracyPercent, 100, true, "buildium"
-    );
-
-    // Leasing Specialist
-    let applicantResponseTimelinessPercent: number | null = null;
-    let applicationProcessingTimeHours: number | null = null;
-    if (isLeadSimpleConnected()) {
-      const applicationsResult = await fetchApplicationProcesses();
-      if (applicationsResult.connected && applicationsResult.data) {
-        const processingTime = summarizeApplicationProcessingTime(applicationsResult.data, periodStart, asOfDate);
-        applicationProcessingTimeHours = processingTime.averageHours;
-        await writeSnapshotForEveryDisplayGroup(
-          "leasing_specialist", "Application Processing Time", period, periodStart, periodEnd,
-          processingTime.averageHours !== null, processingTime.averageHours, 48, false, "lead_simple"
-        );
-      }
-
-      // Applicant Response Timeliness is a fixed trailing-90-day metric
-      // (the vendor's own label reads "(90d)", not tied to the quarter
-      // selector) — deliberately NOT scoped to periodStart/periodEnd like
-      // the KPIs above.
-      const responseWindowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const responseData = await fetchApplicationsWithTasksForResponseTimeliness(responseWindowStart);
-      if (responseData.connected && responseData.data) {
-        const responseTimeliness = summarizeApplicantResponseTimeliness(
-          responseData.data.processes,
-          responseData.data.tasksByProcessId,
-          responseWindowStart,
-          asOfDate
-        );
-        applicantResponseTimelinessPercent = responseTimeliness.ratePercent;
-        await writeSnapshotForEveryDisplayGroup(
-          "leasing_specialist", "Applicant Response Timeliness", period, periodStart, periodEnd,
-          responseTimeliness.ratePercent !== null, responseTimeliness.ratePercent, 95, true, "lead_simple"
-        );
-      }
-    }
-
-    const summary = {
-      period,
-      occupancyRatePercent: occupancy.occupancyRatePercent,
-      delinquencyRatePercent: delinquencyRate.ratePercent,
-      vendorCompliancePercent: vendorCompliance.compliancePercent,
-      nineNineCompliancePercent: nineNine.compliancePercent,
-      reconciliationAccuracyPercent: reconciliationAccuracy.accuracyPercent,
-      rentProcessingAccuracyPercent: rentProcessingAccuracy.accuracyPercent,
-      applicantResponseTimelinessPercent,
-      applicationProcessingTimeHours,
-    };
-    await completeSyncRun(syncLogId, bankAccounts.length + vendors.length + activeLeases.length);
-    logInfo("Team Performance KPIs sync completed", { syncLogId, ...summary });
+    const summary = await runTeamPerformanceKpisSync();
     res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await failSyncRun(syncLogId, message);
-    logError("Team Performance KPIs sync failed", { syncLogId, error: message });
     res.status(502).json({ error: "Team Performance KPIs sync failed.", detail: message });
   }
 });

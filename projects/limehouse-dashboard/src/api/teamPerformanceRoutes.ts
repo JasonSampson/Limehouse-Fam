@@ -39,6 +39,10 @@ import {
   applicantResponseTimelinessExplainRows,
   fetchLeaseRenewalProcesses,
   leaseRenewalRateExplainRows,
+  fetchMoveInTasks,
+  propertyReadinessExplainRows,
+  fetchResidentResponseTasks,
+  residentResponseTimeExplainRows,
 } from "../leadsimple/client.js";
 
 export const teamPerformanceRoutes = Router();
@@ -131,6 +135,8 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   "Application Processing Time": "Average hours from when an application came in to when it closed out, across every Applications Process that closed this period.",
   "Applicant Response Timeliness": "Of every Application that came in over the trailing 90 days, the share where the first task on it got completed within 24 hours. Applications with no completed task yet count against the rate. Note: this counts only applications that arrived in the last 90 days — it deliberately excludes old, already-closed applications whose only recent activity is an unrelated administrative task (e.g. a bookkeeping fee charge), which would otherwise skew the score with stale backlog noise.",
   "Showing Completion Rate": "Showings completed ÷ showings scheduled, across AVAILABLE listings only (RentEngine's own unit status isn't \"Leased\") for the selected period. RentEngine doesn't break showings into accompanied vs. self-guided, so self-showings can't be excluded from either side.",
+  "Property Readiness": "Of the tasks in LeadSimple's Move In Process due this period, the share completed by their due date. A task not yet completed counts against the rate. Source: LeadSimple tasks on the 06 Move In Process workflow.",
+  "Resident Response Time": "Average business hours (Mon-Fri, 9am-5pm Eastern, excluding US federal holidays) for Addison to complete her own email/todo/meet tasks in LeadSimple, from task creation to completion.",
   // CORRECTED 2026-07-19, per Jason directly, against a real vendor
   // screenshot: enumerates the same 4 non-renewal outcomes the vendor's
   // own note text lists by name — the underlying scoring logic already
@@ -303,6 +309,26 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
         }
         const rows = showingCompletionRateExplainRows(leasingPerf.rows, units.data);
         res.json({ kpiName, formula, rows });
+        return;
+      }
+      case "Property Readiness": {
+        const moveInTasks = await fetchMoveInTasks(from);
+        if (!moveInTasks.connected || !moveInTasks.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Property Readiness." });
+          return;
+        }
+        const rows = propertyReadinessExplainRows(moveInTasks.data, from, to);
+        res.json({ kpiName, formula, rows, from, to });
+        return;
+      }
+      case "Resident Response Time": {
+        const residentTasks = await fetchResidentResponseTasks(from);
+        if (!residentTasks.connected || !residentTasks.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Resident Response Time." });
+          return;
+        }
+        const rows = residentResponseTimeExplainRows(residentTasks.data, from, to);
+        res.json({ kpiName, formula, rows, from, to });
         return;
       }
       case "Lease Renewal Rate": {

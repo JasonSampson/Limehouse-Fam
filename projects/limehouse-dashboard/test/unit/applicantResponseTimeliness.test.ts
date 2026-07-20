@@ -24,9 +24,12 @@ function task(overrides: Partial<LeadSimpleTask>): LeadSimpleTask {
   return {
     id: "t1",
     description: "Is this property already leased or in progress?",
+    kind: "todo",
+    created_at: "2026-06-01T00:00:00Z",
+    due_at: null,
     completed_at: null,
-    process: { id: "p1", process_type_id: "apps-type", created_at: "2026-06-01T00:00:00Z" },
-    assignee: { name: "Belinda Jean Dabandan" },
+    process: { id: "p1", name: "05 Applications Process for Test Address", process_type_id: "apps-type", created_at: "2026-06-01T00:00:00Z" },
+    assignee: { name: "Belinda Jean Dabandan", email: "assistant@limehousepm.com" },
     ...overrides,
   };
 }
@@ -92,7 +95,7 @@ describe("summarizeApplicantResponseTimeliness", () => {
 describe("applicantResponseTimelinessExplainRows", () => {
   it("returns real formula inputs per application, including assignee and the task description", () => {
     const processes = [process({ id: "p1", name: "05 Applications Process for 123 Main St", created_at: "2026-06-01T00:00:00Z" })];
-    const tasksByProcessId = new Map([["p1", [task({ completed_at: "2026-06-01T06:00:00Z", assignee: { name: "Belinda Jean Dabandan" } })]]]);
+    const tasksByProcessId = new Map([["p1", [task({ completed_at: "2026-06-01T06:00:00Z", assignee: { name: "Belinda Jean Dabandan", email: "assistant@limehousepm.com" } })]]]);
     const rows = applicantResponseTimelinessExplainRows(processes, tasksByProcessId, "2026-01-01", "2026-12-31");
     expect(rows).toEqual([
       {

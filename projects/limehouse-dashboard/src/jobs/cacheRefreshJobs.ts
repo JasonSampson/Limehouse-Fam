@@ -43,6 +43,10 @@ import {
   summarizeApplicantResponseTimeliness,
   fetchLeaseRenewalProcesses,
   summarizeLeaseRenewalRate,
+  fetchMoveInTasks,
+  summarizePropertyReadiness,
+  fetchResidentResponseTasks,
+  summarizeResidentResponseTime,
 } from "../leadsimple/client.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
@@ -313,6 +317,32 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
             showingCompletion.ratePercent !== null, showingCompletion.ratePercent, 95, true, "rent_engine"
           );
         }
+      }
+    }
+
+    // Property Readiness / Resident Response Time — ADDED 2026-07-20, per
+    // Jason directly, against real vendor screenshots. Both are scored
+    // cumulatively over the whole quarter so far (periodStart to
+    // asOfDate), same window shape as Lease Renewal Rate above, not the
+    // "current month only" window Days on Market/Showing Completion Rate
+    // use.
+    if (isLeadSimpleConnected()) {
+      const moveInTasks = await fetchMoveInTasks(periodStart);
+      if (moveInTasks.connected && moveInTasks.data) {
+        const propertyReadiness = summarizePropertyReadiness(moveInTasks.data, periodStart, asOfDate);
+        await writeSnapshotForEveryDisplayGroup(
+          "portfolio_assistant", "Property Readiness", period, periodStart, periodEnd,
+          propertyReadiness.ratePercent !== null, propertyReadiness.ratePercent, 100, true, "lead_simple"
+        );
+      }
+
+      const residentTasks = await fetchResidentResponseTasks(periodStart);
+      if (residentTasks.connected && residentTasks.data) {
+        const residentResponse = summarizeResidentResponseTime(residentTasks.data, periodStart, asOfDate);
+        await writeSnapshotForEveryDisplayGroup(
+          "portfolio_assistant", "Resident Response Time", period, periodStart, periodEnd,
+          residentResponse.averageHours !== null, residentResponse.averageHours, 24, false, "lead_simple"
+        );
       }
     }
 

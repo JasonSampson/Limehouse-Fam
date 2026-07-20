@@ -107,7 +107,10 @@ Assistant never appear on CEO View.
 - Application Processing Time ≤48h — live
 - Renewal Follow-Up Timeliness ≥95% — **definition seeded, snapshot NOT wired** (Jason's description "Completed tasks in Lease Renewal Process" doesn't specify the same mechanics confirmed for Applicant Response Timeliness — will show "No data" honestly rather than a guessed formula)
 
-**Portfolio Assistant** — has a "Property Readiness" KPI mentioned in comments as not yet confirmed/seeded. Appears on CEO View as "Assistant Property Manager." Needs fresh investigation.
+**Portfolio Assistant** — 3 KPIs, $750 max, $250/KPI (confirmed against a real vendor screenshot, 2026-07-20 — "3 accountability KPIs · $750 max quarterly bonus"). Appears on CEO View as "Assistant Property Manager." All 3 are now seeded and live (migrations 0011/0012):
+- Showing Completion Rate ≥95% — live, RentEngine-sourced (same `summarizeShowingCompletionRate` already built for the Dashboard tile)
+- Property Readiness ≥100% — live, LeadSimple-sourced (06 Move In Process tasks, on-time-by-due-date rate) — **known discrepancy vs. vendor's own number, see below**
+- Resident Response Time ≤24h — live, LeadSimple-sourced (Addison's email/todo/meet tasks, real business-hours elapsed time — see `src/kpi/businessHours.ts`) — **known discrepancy vs. vendor's own number, see below**
 
 **Marketing Specialist** — zero KPI rows configured, matching the vendor's own real unconfigured state as of the last check (migration 0002 comment). Worth re-confirming this is still true.
 
@@ -128,13 +131,20 @@ Assistant never appear on CEO View.
 | Applicant Response Timeliness | Of applications in the trailing 90 days, % where the FIRST task completed within 24h. No completed task yet = counts against the rate. Deliberately 90-day fixed window, not tied to the period selector. |
 | Showing Completion Rate | Showings completed ÷ scheduled, AVAILABLE listings only (RentEngine status ≠ "Leased"). RentEngine doesn't split accompanied vs self-guided so neither side can exclude self-showings. |
 | Lease Renewal Rate | Renewed ÷ decided, across Lease Renewal Processes created in the trailing 12 months. "Decided" excludes still-in-progress (Upcoming, Send Lease). "Renewed" = completed Lease Renewed outcome. |
+| Property Readiness | Of the tasks in LeadSimple's 06 Move In Process due this period, % completed by their due date. Not-yet-completed counts against the rate. |
+| Resident Response Time | Avg real business hours (Mon-Fri 9am-5pm America/New_York, excl. US federal holidays) for Addison to complete her own email/todo/meet LeadSimple tasks, creation to completion. |
 
 Each of these already has a working drill-down (`/api/team-performance/kpi-explain/:kpiName`) returning the real underlying records — column shapes are in `KPI_EXPLAIN_COLUMNS` in `team-performance.js`.
+
+### Known, accepted discrepancies (real numbers, disclosed population mismatch — not bugs)
+
+- **Property Readiness**: Jason's real vendor screenshot for (2026-07-01 – 2026-07-18) showed "76.1% on time (51/67)"; the equivalent live query here for (2026-07-01 – 2026-07-20, just 2 days wider) returns 232 tasks due in-window (9.9%). Restricting to only still-open move-in processes narrows it to 137 — still nowhere near 67. Investigated live 2026-07-20 (open/closed process, unique-process-count, narrower windows) — no rule found reproduces the vendor's population. Jason doesn't have visibility into the vendor's internal filter either. Kept live per Jason directly, 2026-07-20: "Keep them live, document the discrepancy."
+- **Resident Response Time**: vendor screenshot for the same window showed exactly 8 tasks; the live query returns 102-104 of Addison's completed email/todo/meet tasks (63 Move In, 29 Marketing, 10 no-process, 2 Onboarding by process type — no subset isolates ~8). Same disposition: kept live, disclosed here and in code comments in `src/leadsimple/client.ts`.
+- If a narrower rule is ever confirmed for either (e.g. a specific task-name pattern, a shorter trailing window, or vendor documentation becomes available), revisit both the fetch and summarize functions in `src/leadsimple/client.ts` together.
 
 ### Open items flagged in the code but not yet resolved
 
 - Renewal Follow-Up Timeliness (Leasing Specialist) — formula not confirmed, shows "No data" honestly.
-- Property Readiness (Portfolio Assistant) — not yet seeded/confirmed.
 - Leasing Response Time (Administrative Assistant) — not yet confirmed.
 - 1099 Compliance modeled as a plain ≥100% threshold as a known simplification of the vendor's real deadline-based target — flagged, not fixed.
 - Marketing Specialist — zero KPIs configured; confirm this still matches the vendor's real state before assuming it's still accurate.

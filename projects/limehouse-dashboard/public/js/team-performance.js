@@ -441,6 +441,22 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Closed", render: (r) => (r.closedAt ? formatShortMonthDayYear(r.closedAt) : "open") },
     { label: "Renewed", render: (r) => (r.renewed ? "yes" : "no") },
   ],
+  "Property Readiness": [
+    { label: "Task", render: (r) => r.taskDescription ?? "—" },
+    { label: "Process", render: (r) => r.processName ?? "—" },
+    { label: "Due", render: (r) => formatShortMonthDayYear(r.dueAt) },
+    { label: "Completed", render: (r) => (r.completedAt ? formatShortMonthDayYear(r.completedAt) : "open") },
+    { label: "On Time", render: (r) => (r.onTime ? "yes" : "no") },
+    { label: "Assignee", render: (r) => r.assignee ?? "—" },
+  ],
+  "Resident Response Time": [
+    { label: "Task", render: (r) => r.taskDescription ?? "—" },
+    { label: "Kind", key: "kind" },
+    { label: "Start", render: (r) => formatShortMonthDayYear(r.startAt) },
+    { label: "Completed", render: (r) => (r.completedAt ? formatShortMonthDayYear(r.completedAt) : "open") },
+    { label: "Hours", render: (r) => (r.hours === null ? "—" : r.hours) },
+    { label: "Within 24h", render: (r) => (r.within24BusinessHours === null ? "—" : r.within24BusinessHours ? "yes" : "no") },
+  ],
 };
 
 // KPI name is clickable (has a "›" chevron) — matches the vendor site's own
@@ -493,14 +509,44 @@ const KPI_SUBTITLE_BUILDERS = {
     const median = result.medianDaysOnMarket === null ? "—" : `${Math.round(result.medianDaysOnMarket)}d`;
     return `Avg ${avg} · Median ${median}`;
   },
+  // CONFIRMED against a real vendor screenshot (2026-07-20): "76.1% on
+  // time (51/67) -- target 100%" -- note the target has NO ">="/"≥"
+  // symbol here, a third distinct subtitle style alongside Occupancy's
+  // "·"/"≥" and Renewal Rate's "--"/">=".
+  "Property Readiness": (result, kpi) => {
+    const onTime = result.rows.filter((r) => r.onTime).length;
+    const total = result.rows.length;
+    return `${formatKpiActual(kpi)} on time (${onTime}/${total}) -- target ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-20): "Avg 5.5
+  // hours -- 8/8 within 24 biz hours -- target <=24h" -- written out
+  // manually (not via formatKpiActual/formatKpiValue) since the vendor
+  // shows one decimal place and the word "hours", not the rounded "5h"
+  // style used elsewhere for this unit.
+  "Resident Response Time": (result, kpi) => {
+    const within = result.rows.filter((r) => r.within24BusinessHours).length;
+    const total = result.rows.length;
+    return `Avg ${kpi.actualValue} hours -- ${within}/${total} within 24 biz hours -- target <=${Math.round(kpi.targetValue)}h`;
+  },
 };
 
 // Most KPIs' modal title is just the bare KPI name — a few have their own
-// real vendor wording confirmed against a screenshot.
+// real vendor wording confirmed against a screenshot. A value can be a
+// plain string or, for titles that embed the actual date range queried
+// (Property Readiness, Resident Response Time), a function of the API
+// result.
 const KPI_TITLE_OVERRIDES = {
   "Lease Renewal Rate": "Lease Renewal Rate -- LS Process View (12 mo)",
   "Days on Market": "Days on market",
+  "Property Readiness": (result) => `Property Readiness -- Move In Tasks (${result.from} – ${result.to})`,
+  "Resident Response Time": (result) => `Resident Response Time -- Asst. Property Manager (${result.from} – ${result.to})`,
 };
+
+function resolveKpiTitle(kpiName, result) {
+  const override = KPI_TITLE_OVERRIDES[kpiName];
+  if (typeof override === "function") return override(result);
+  return override ?? kpiName;
+}
 
 function buildKpiSubtitle(kpiName, result) {
   const builder = KPI_SUBTITLE_BUILDERS[kpiName];
@@ -523,7 +569,7 @@ function wireKpiNameClicks() {
         );
         const columns = KPI_EXPLAIN_COLUMNS[kpiName] ?? [];
         openDrillDownModal({
-          title: KPI_TITLE_OVERRIDES[kpiName] ?? kpiName,
+          title: resolveKpiTitle(kpiName, result),
           subtitle: buildKpiSubtitle(kpiName, result),
           note: `Formula: ${result.formula}`,
           columns,

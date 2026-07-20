@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { loadEnv, isLeadSimpleConnected } from "../config/env.js";
 import { logWarn } from "../lib/logger.js";
+import { businessHoursBetween } from "../kpi/businessHours.js";
 
 // REBUILT 2026-07-05 against LeadSimple's REAL REST API, confirmed live
 // via docs Jason retrieved himself from https://app.leadsimple.com/api_docs
@@ -235,22 +236,32 @@ export function applicationProcessingTimeExplainRows(
     }));
 }
 
-// Task shape for the Applicant Response Timeliness KPI. LeadSimple's
-// /tasks endpoint returns far more fields than this (deal, step, kind,
-// etc.) — zod silently strips anything not declared here, so only what
-// this KPI actually needs is modeled.
+// Task shape shared by every task-based KPI (Applicant Response
+// Timeliness, Property Readiness, Resident Response Time). LeadSimple's
+// /tasks endpoint returns far more fields than this (deal, step, etc.) —
+// zod silently strips anything not declared here, so only what these KPIs
+// actually need is modeled. created_at/due_at/kind and process.name/
+// assignee.email were ADDED 2026-07-20 for Property Readiness and
+// Resident Response Time — confirmed live real fields on every task
+// (e.g. real case: {kind: "email", due_at: "2026-07-21T17:13:43Z",
+// assignee: {email: "addison@limehousepm.com"}, process: {name: "06 Move
+// In Process for 8032 Van Patten Road"}}).
 const leadSimpleTaskSchema = z.object({
   id: z.string(),
   description: z.string().nullable(),
+  kind: z.string(),
+  created_at: z.string(),
+  due_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   process: z
     .object({
       id: z.string(),
+      name: z.string(),
       process_type_id: z.string(),
       created_at: z.string(),
     })
     .nullable(),
-  assignee: z.object({ name: z.string() }).nullable(),
+  assignee: z.object({ name: z.string(), email: z.string() }).nullable(),
 });
 export type LeadSimpleTask = z.infer<typeof leadSimpleTaskSchema>;
 
@@ -488,4 +499,215 @@ export function leaseRenewalRateExplainRows(
     // Newest first — matches the vendor's own real drill-down ordering,
     // confirmed against a real screenshot (2026-07-19).
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+// ============================================================================
+// Property Readiness (Portfolio Assistant) — ADDED 2026-07-20, per Jason
+// directly, against a real vendor screenshot: of the tasks in LeadSimple's
+// "06 Move In Process" workflow that were due in the window, what share
+// were completed by their due date. Confirmed live real process type id
+// via GET /process_types.
+//
+// KNOWN, ACCEPTED DISCREPANCY vs. the vendor's own number — same
+// "deliberate divergence" posture as Applicant Response Timeliness above,
+// not a bug: Jason's real vendor screenshot for (2026-07-01 - 2026-07-18)
+// showed "76.1% on time (51/67)"; the equivalent live query here for
+// (2026-07-01 - 2026-07-20), just 2 days wider, returns 232 tasks due
+// in-window (9.9% on time) — restricting to only still-OPEN move-in
+// processes narrows it to 137, still nowhere near 67. Investigated live
+// 2026-07-20: no combination of open/closed process, unique-process-count,
+// or narrower date window found reproduces the vendor's population size.
+// The vendor's exact internal filter is undocumented and Jason doesn't
+// have visibility into it either ("I'm not sure how to narrow that down
+// because I don't know what the filter limits are") — per Jason directly,
+// kept live as a real, honest number rather than reverted to "No data,"
+// with this discrepancy disclosed rather than silently guessed away. If a
+// narrower rule is ever confirmed (e.g. a specific task-name subset, or a
+// shorter trailing window), revisit both the fetch and summarize functions
+// below together.
+// ============================================================================
+
+export const MOVE_IN_PROCESS_TYPE_ID = "004d2402-f868-421d-b0de-4592c1083922";
+
+// Same accepted imperfection as fetchApplicationsWithTasksForResponseTimeliness
+// above: /tasks only supports a real updated_since filter (process_id is
+// silently ignored server-side, confirmed live) — a task due in-window but
+// untouched since before windowStartDate could be missed. windowStartDate
+// should be the query's own `from` date, same as every other task-based KPI.
+export async function fetchMoveInTasks(windowStartDate: string): Promise<LeadSimpleResult<LeadSimpleTask[]>> {
+  return withConnectionGuard(async () => {
+    const sinceEpoch = Math.floor(new Date(windowStartDate).getTime() / 1000);
+    const tasks = await fetchTasksUpdatedSince(sinceEpoch);
+    return tasks.filter((t) => t.process?.process_type_id === MOVE_IN_PROCESS_TYPE_ID);
+  });
+}
+
+export interface PropertyReadinessSummary {
+  onTimeCount: number;
+  totalCount: number;
+  ratePercent: number | null;
+}
+
+// A task counts as "on time" only if it has actually been completed by its
+// due date. A task still open past its due date, or not yet due at all
+// within the window, is scored by whether it's already late — matching the
+// same "no data yet counts against the rate" posture already established
+// for Applicant Response Timeliness above.
+export function summarizePropertyReadiness(tasks: LeadSimpleTask[], fromDate: string, toDate: string): PropertyReadinessSummary {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  const inWindow = tasks.filter((t) => t.due_at !== null && new Date(t.due_at) >= from && new Date(t.due_at) <= to);
+  if (inWindow.length === 0) {
+    return { onTimeCount: 0, totalCount: 0, ratePercent: null };
+  }
+  const onTimeCount = inWindow.filter((t) => t.completed_at !== null && new Date(t.completed_at) <= new Date(t.due_at!)).length;
+  return {
+    onTimeCount,
+    totalCount: inWindow.length,
+    ratePercent: roundPercent((onTimeCount / inWindow.length) * 100),
+  };
+}
+
+export interface PropertyReadinessExplainRow {
+  taskDescription: string | null;
+  processName: string | null;
+  dueAt: string;
+  completedAt: string | null;
+  onTime: boolean;
+  assignee: string | null;
+}
+
+export function propertyReadinessExplainRows(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): PropertyReadinessExplainRow[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  return tasks
+    .filter((t) => t.due_at !== null && new Date(t.due_at) >= from && new Date(t.due_at) <= to)
+    .map((t) => ({
+      taskDescription: t.description,
+      processName: t.process?.name ?? null,
+      dueAt: t.due_at!,
+      completedAt: t.completed_at,
+      onTime: t.completed_at !== null && new Date(t.completed_at) <= new Date(t.due_at!),
+      assignee: t.assignee?.name ?? null,
+    }))
+    .sort((a, b) => b.dueAt.localeCompare(a.dueAt));
+}
+
+// ============================================================================
+// Resident Response Time (Portfolio Assistant) — ADDED 2026-07-20, per
+// Jason directly, against a real vendor screenshot: how fast the Assistant
+// Property Manager completes her own communication tasks, in real business
+// hours (Mon-Fri 9am-5pm America/New_York, excluding US federal holidays —
+// see src/kpi/businessHours.ts).
+//
+// Hardcoded to Addison's real LeadSimple email, matching the vendor's own
+// literal behavior ("Communication tasks assigned to Addison") — this is
+// tied to the specific person holding the Assistant Property Manager role
+// today, not a role lookup. If that person changes, this constant needs a
+// manual update (same known limitation already accepted for other
+// per-person KPIs in this project).
+//
+// KNOWN, ACCEPTED DISCREPANCY vs. the vendor's own number, same posture as
+// Property Readiness above: Jason's real vendor screenshot for
+// (2026-07-01 - 2026-07-18) showed exactly 8 tasks ("Avg 5.5 hours -- 8/8
+// within 24 biz hours"); the equivalent live query here for
+// (2026-07-01 - 2026-07-20), just 2 days wider, returns 102-104 of
+// Addison's completed email/todo/meet tasks. Investigated live
+// 2026-07-20: broke her tasks down by process type (63 Move In, 29
+// Marketing, 10 with no process, 2 Onboarding) — none of those subsets,
+// nor any obvious task-description pattern, cleanly isolates a group of
+// ~8. The vendor's exact internal filter is undocumented and Jason
+// doesn't have visibility into it either. Per Jason directly, kept live
+// as a real, honest number rather than reverted to "No data," with this
+// discrepancy disclosed rather than silently guessed away.
+export const RESIDENT_RESPONSE_ASSIGNEE_EMAIL = "addison@limehousepm.com";
+
+// Confirmed live 2026-07-20: real task kinds seen in this account are
+// todo/email/call/meet/sms/change_stage/process. change_stage and process
+// are LeadSimple-automated, not something a person does. call/sms don't
+// appear in Addison's real task queue in the sample checked — per Jason
+// directly, only email/todo/meet count as "communication tasks" here.
+const RESIDENT_RESPONSE_TASK_KINDS = new Set(["email", "todo", "meet"]);
+
+export async function fetchResidentResponseTasks(windowStartDate: string): Promise<LeadSimpleResult<LeadSimpleTask[]>> {
+  return withConnectionGuard(async () => {
+    const sinceEpoch = Math.floor(new Date(windowStartDate).getTime() / 1000);
+    const tasks = await fetchTasksUpdatedSince(sinceEpoch);
+    return tasks.filter(
+      (t) => t.assignee?.email === RESIDENT_RESPONSE_ASSIGNEE_EMAIL && RESIDENT_RESPONSE_TASK_KINDS.has(t.kind)
+    );
+  });
+}
+
+export interface ResidentResponseTimeSummary {
+  averageHours: number | null;
+  withinCount: number;
+  totalCount: number;
+}
+
+// Only completed tasks contribute an elapsed time — an open task has no
+// "hours to complete" yet, so (matching Days on Market/Application
+// Processing Time's pattern above) it's excluded from the average rather
+// than treated as 0 or infinite.
+export function summarizeResidentResponseTime(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): ResidentResponseTimeSummary {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  const completed = tasks.filter((t) => {
+    const createdAt = new Date(t.created_at);
+    return t.completed_at !== null && createdAt >= from && createdAt <= to;
+  });
+  if (completed.length === 0) {
+    return { averageHours: null, withinCount: 0, totalCount: 0 };
+  }
+  const hoursPerTask = completed.map((t) => businessHoursBetween(t.created_at, t.completed_at!));
+  const withinCount = hoursPerTask.filter((h) => h <= 24).length;
+  const averageHours = hoursPerTask.reduce((sum, h) => sum + h, 0) / hoursPerTask.length;
+  return {
+    averageHours: Math.round(averageHours * 10) / 10,
+    withinCount,
+    totalCount: completed.length,
+  };
+}
+
+export interface ResidentResponseTimeExplainRow {
+  taskDescription: string | null;
+  kind: string;
+  startAt: string;
+  completedAt: string | null;
+  hours: number | null;
+  within24BusinessHours: boolean | null;
+}
+
+export function residentResponseTimeExplainRows(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): ResidentResponseTimeExplainRow[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  return tasks
+    .filter((t) => {
+      const createdAt = new Date(t.created_at);
+      return t.completed_at !== null && createdAt >= from && createdAt <= to;
+    })
+    .map((t) => {
+      const hours = businessHoursBetween(t.created_at, t.completed_at!);
+      return {
+        taskDescription: t.description,
+        kind: t.kind,
+        startAt: t.created_at,
+        completedAt: t.completed_at,
+        hours: Math.round(hours * 10) / 10,
+        within24BusinessHours: hours <= 24,
+      };
+    })
+    .sort((a, b) => b.startAt.localeCompare(a.startAt));
 }

@@ -47,6 +47,11 @@ export interface MapTenant {
   isPrimary: boolean;
 }
 
+export interface MapRecurringCharge {
+  label: string;
+  amount: string;
+}
+
 export interface MapUnit {
   id: number;
   unitLabel: string;
@@ -60,6 +65,11 @@ export interface MapUnit {
   askingRent: string | null;
   isVacant: boolean;
   tenants: MapTenant[];
+  // Recurring charges beyond base rent — utilities, etc. Already filtered to
+  // excluded_from_display = false (e.g. "Resident Benefits Package" is
+  // synced but never reaches here — see src/lib/feeClassification.ts in
+  // projects/map). Empty array, not null, when there are none.
+  recurringCharges: MapRecurringCharge[];
 }
 
 export interface MapExclusion {
@@ -189,8 +199,8 @@ export async function fetchActiveMapProperties(pool: Pool): Promise<MapProperty[
         )
       : Promise.resolve({ rows: [] as never[] }),
     unitIds.length
-      ? pool.query<{ unit_id: string | null; asking_rent: string; listed_at: string | null }>(
-          `SELECT unit_id, asking_rent, listed_at
+      ? pool.query<{ id: number; unit_id: string | null; asking_rent: string; listed_at: string | null }>(
+          `SELECT id, unit_id, asking_rent, listed_at
            FROM vacant_unit_asking_rents WHERE unit_id = ANY($1::bigint[])
            ORDER BY unit_id, listed_at DESC NULLS LAST`,
           [unitIds],
@@ -215,27 +225,60 @@ export async function fetchActiveMapProperties(pool: Pool): Promise<MapProperty[
     if (!currentLeaseByUnit.has(unitId)) currentLeaseByUnit.set(unitId, lease);
   }
 
-  const askingRentByUnit = new Map<number, string>();
+  // Stores the vacant_unit_asking_rents row's OWN id (not just the rent
+  // figure) — needed below to look up that listing's recurring charges,
+  // which key off this id (see migration 0018 in projects/map).
+  const askingRentByUnit = new Map<number, { id: number; askingRent: string }>();
   for (const row of askingRentsResult.rows as Array<{
+    id: number;
     unit_id: string | null;
     asking_rent: string;
     listed_at: string | null;
   }>) {
     if (row.unit_id !== null) {
       const unitId = Number(row.unit_id);
-      if (!askingRentByUnit.has(unitId)) askingRentByUnit.set(unitId, row.asking_rent);
+      if (!askingRentByUnit.has(unitId)) askingRentByUnit.set(unitId, { id: row.id, askingRent: row.asking_rent });
     }
   }
 
   const leaseIds = [...currentLeaseByUnit.values()].map((l) => l.id);
-  const tenantsResult = leaseIds.length
-    ? await pool.query<{ lease_id: string; full_name: string; phone: string | null; is_primary: boolean }>(
-        `SELECT lease_id, full_name, phone, is_primary
-         FROM lease_tenants WHERE lease_id = ANY($1::bigint[])
-         ORDER BY lease_id, is_primary DESC, full_name`,
-        [leaseIds],
-      )
-    : { rows: [] as Array<{ lease_id: string; full_name: string; phone: string | null; is_primary: boolean }> };
+  const askingRentIds = [...askingRentByUnit.values()].map((a) => a.id);
+  const [tenantsResult, leaseChargesResult, vacantChargesResult] = await Promise.all([
+    leaseIds.length
+      ? pool.query<{ lease_id: string; full_name: string; phone: string | null; is_primary: boolean }>(
+          `SELECT lease_id, full_name, phone, is_primary
+           FROM lease_tenants WHERE lease_id = ANY($1::bigint[])
+           ORDER BY lease_id, is_primary DESC, full_name`,
+          [leaseIds],
+        )
+      : Promise.resolve({ rows: [] as Array<{ lease_id: string; full_name: string; phone: string | null; is_primary: boolean }> }),
+    // Recurring charges beyond base rent, leased side (synced from
+    // Buildium's /leases/{id}/recurringtransactions — see projects/map's
+    // src/buildium/sync.ts). excluded_from_display filters out charges like
+    // "Resident Benefits Package" that Jason doesn't want on the popup
+    // (src/lib/feeClassification.ts in projects/map is the single source of
+    // truth for that classification, applied at sync time).
+    leaseIds.length
+      ? pool.query<{ lease_id: string; label: string; amount: string }>(
+          `SELECT lease_id, label, amount
+           FROM lease_recurring_charges
+           WHERE lease_id = ANY($1::bigint[]) AND NOT excluded_from_display
+           ORDER BY lease_id, label`,
+          [leaseIds],
+        )
+      : Promise.resolve({ rows: [] as Array<{ lease_id: string; label: string; amount: string }> }),
+    // Same idea, vacant-listing side (synced from RentEngine's monthly_fees
+    // — see projects/map's src/rentengine/sync.ts).
+    askingRentIds.length
+      ? pool.query<{ vacant_unit_asking_rent_id: string; label: string; amount: string }>(
+          `SELECT vacant_unit_asking_rent_id, label, amount
+           FROM vacant_listing_recurring_charges
+           WHERE vacant_unit_asking_rent_id = ANY($1::bigint[]) AND NOT excluded_from_display
+           ORDER BY vacant_unit_asking_rent_id, label`,
+          [askingRentIds],
+        )
+      : Promise.resolve({ rows: [] as Array<{ vacant_unit_asking_rent_id: string; label: string; amount: string }> }),
+  ]);
 
   const tenantsByLease = new Map<number, MapTenant[]>();
   for (const t of tenantsResult.rows) {
@@ -245,10 +288,26 @@ export async function fetchActiveMapProperties(pool: Pool): Promise<MapProperty[
     tenantsByLease.set(leaseId, arr);
   }
 
+  const chargesByLease = new Map<number, MapRecurringCharge[]>();
+  for (const c of leaseChargesResult.rows) {
+    const leaseId = Number(c.lease_id);
+    const arr = chargesByLease.get(leaseId) ?? [];
+    arr.push({ label: c.label, amount: c.amount });
+    chargesByLease.set(leaseId, arr);
+  }
+
+  const chargesByAskingRentId = new Map<number, MapRecurringCharge[]>();
+  for (const c of vacantChargesResult.rows) {
+    const askingRentId = Number(c.vacant_unit_asking_rent_id);
+    const arr = chargesByAskingRentId.get(askingRentId) ?? [];
+    arr.push({ label: c.label, amount: c.amount });
+    chargesByAskingRentId.set(askingRentId, arr);
+  }
+
   const unitsByProperty = new Map<number, MapUnit[]>();
   for (const u of unitsResult.rows) {
     const lease = currentLeaseByUnit.get(u.id);
-    const askingRent = askingRentByUnit.get(u.id) ?? null;
+    const askingRentRow = askingRentByUnit.get(u.id) ?? null;
     const propertyId = Number(u.property_id);
     const arr = unitsByProperty.get(propertyId) ?? [];
     arr.push({
@@ -261,9 +320,14 @@ export async function fetchActiveMapProperties(pool: Pool): Promise<MapProperty[
       leaseFrom: lease?.lease_from ?? null,
       leaseTo: lease?.lease_to ?? null,
       currentRent: lease?.current_rent ?? null,
-      askingRent: !lease ? askingRent : null,
+      askingRent: !lease ? (askingRentRow?.askingRent ?? null) : null,
       isVacant: !lease,
       tenants: lease ? (tenantsByLease.get(lease.id) ?? []) : [],
+      recurringCharges: lease
+        ? (chargesByLease.get(lease.id) ?? [])
+        : askingRentRow
+          ? (chargesByAskingRentId.get(askingRentRow.id) ?? [])
+          : [],
     });
     unitsByProperty.set(propertyId, arr);
   }

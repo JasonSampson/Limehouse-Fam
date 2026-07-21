@@ -70,6 +70,21 @@
     return parts.join(" · ") || "Size not on file";
   }
 
+  // Extra recurring charges beyond base rent (utilities, etc.) — shown as
+  // their own line right after the rent line, e.g. "+ $75/mo Utility Rent -
+  // water/sewer/trash", never folded silently into the rent figure (Jason's
+  // explicit ask). The API already excludes charges like "Resident Benefits
+  // Package" (see mapQueries.ts) — this just renders whatever comes back.
+  function recurringChargesHtml(u) {
+    if (!u.recurringCharges || !u.recurringCharges.length) return "";
+    return u.recurringCharges
+      .map(
+        (c) =>
+          `<div class="unit-detail-row unit-extra-charge">+ ${esc(fmtMoney(c.amount))}/mo ${esc(c.label)}</div>`,
+      )
+      .join("");
+  }
+
   function unitDetailHtml(u) {
     const rentLine = u.isVacant
       ? u.askingRent
@@ -95,6 +110,7 @@
     return `
       <div class="unit-detail-row">${esc(unitSummary(u))}</div>
       ${rentLine}
+      ${recurringChargesHtml(u)}
       ${leaseLine}
       ${tenantsLine}
     `;

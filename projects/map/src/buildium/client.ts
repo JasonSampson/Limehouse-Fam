@@ -401,6 +401,45 @@ export async function fetchPropertyImages(buildiumPropertyId: number): Promise<B
   }));
 }
 
+// CONFIRMED LIVE (2026-07-21, real Jason account): photos in Buildium are
+// actually uploaded at the UNIT level, not the property level — the
+// property-level endpoint above (GET /rentals/{propertyId}/images) has only
+// ever seen a photo for 20 of 196 real synced properties, while a spot
+// check of unit 1621709 (property 167, 1505 Eagleton Lane) turned up 13 real
+// photos, and 10/10 other randomly-sampled units each had real photos too.
+// This isn't a Buildium data gap — the sync has been checking the wrong
+// scope almost the whole time.
+//
+// The correct endpoint is GET /rentals/units/{unitId}/images — same
+// resource family as the property-level one (`/rentals/...`), just nested
+// under `units/{unitId}` instead of `{propertyId}` directly, and confirmed
+// to return the identical response shape (Id, Description,
+// PhysicalFileName, Provider, ShowInListing), so it reuses
+// buildiumRentalImageSchema/BuildiumPropertyImage/isRealUploadedPhoto as-is
+// rather than a parallel type. A bogus unit id 404s ("requested unit could
+// not be found") rather than silently returning someone else's list, so
+// this is genuinely path-scoped like the property-level endpoint — not the
+// entityId-ignoring bug class the old /files?entityId= endpoint had.
+//
+// Property-level and unit-level photos are NOT mutually exclusive — both
+// can have separate uploads for the same real-world property — so this is
+// an ADDITIONAL source to check, not a replacement for fetchPropertyImages
+// above. See the precedence logic in photoSync.ts for how the two are
+// combined into one "primary" photo per property.
+export async function fetchUnitImages(buildiumUnitId: number): Promise<BuildiumPropertyImage[]> {
+  const rows = await buildiumGet(
+    `/rentals/units/${buildiumUnitId}/images?limit=1000`,
+    z.array(buildiumRentalImageSchema)
+  );
+  return rows.map((r) => ({
+    id: r.Id,
+    fileName: r.PhysicalFileName ?? `image-${r.Id}`,
+    provider: r.Provider ?? "None",
+    description: r.Description ?? null,
+    showInListing: r.ShowInListing ?? false,
+  }));
+}
+
 // Guesses a MIME type from the file extension, since the rental-images
 // resource doesn't return ContentType directly (see note above). Falls
 // back to image/jpeg — every result from this endpoint is a photo, so an
@@ -490,16 +529,29 @@ export function detectImageFormat(bytes: Buffer): string | null {
 // Response is { DownloadUrl }, a short-lived signed CloudFront URL —
 // confirmed by actually downloading real bytes from it and checking the
 // JPEG magic number (ff d8 ff) matched.
-export async function downloadPropertyImage(
-  buildiumPropertyId: number,
-  buildiumImageId: number
+//
+// CONFIRMED LIVE (2026-07-21): a unit-level image id does NOT download
+// through this same property-scoped path — POST
+// /rentals/608456/images/{unit-level image id}/downloadrequests 404s with
+// "No image found with the id", even though that exact image id is real and
+// listed by fetchUnitImages() above. The image belongs to a different path
+// scope (/rentals/units/{unitId}/images/{imageId}/downloadrequests, which
+// does return 201 + a real signed URL for the same id) — Buildium's rental
+// images are scoped by whichever parent (property or unit) they were
+// fetched under, not globally addressable by image id alone. This is why
+// downloadUnitImage below is a separate function/path, not a shared one
+// with an optional param — passing the wrong scope silently 404s rather
+// than downloading the wrong thing, but only if callers use the function
+// matching where the image id came from.
+async function downloadImageByRequestPath(
+  requestPath: string,
+  buildiumImageId: number,
+  contextLabel: string
 ): Promise<{ bytes: Buffer; contentType: string | null }> {
-  const meta = (await buildiumPostRaw(
-    `/rentals/${buildiumPropertyId}/images/${buildiumImageId}/downloadrequests`
-  )) as { DownloadUrl?: string };
+  const meta = (await buildiumPostRaw(requestPath)) as { DownloadUrl?: string };
   if (!meta.DownloadUrl) {
     throw new BuildiumApiError(
-      `Buildium image ${buildiumImageId} (property ${buildiumPropertyId}) download request did not return a DownloadUrl`,
+      `Buildium image ${buildiumImageId} (${contextLabel}) download request did not return a DownloadUrl`,
       502,
       JSON.stringify(meta)
     );
@@ -514,13 +566,13 @@ export async function downloadPropertyImage(
 
   // Reject anything that isn't recognizably an image BEFORE it reaches the
   // caller — this is the fix for the property 53 silent-corruption bug.
-  // Checked here (not just in photoSync.ts) so every current and future
-  // caller of downloadPropertyImage gets this for free, per Jason's
-  // no-duplicated-validation-logic rule.
+  // Checked here (once, shared by both downloadPropertyImage and
+  // downloadUnitImage below) so every current and future caller gets this
+  // for free, per Jason's no-duplicated-validation-logic rule.
   if (!detectImageFormat(bytes)) {
     throw new BuildiumApiError(
-      `Buildium image ${buildiumImageId} (property ${buildiumPropertyId}) did not download as real image ` +
-        `bytes — got ${bytes.length} bytes, declared content-type "${contentType ?? "none"}", first bytes: ` +
+      `Buildium image ${buildiumImageId} (${contextLabel}) did not download as real image bytes — got ` +
+        `${bytes.length} bytes, declared content-type "${contentType ?? "none"}", first bytes: ` +
         `${bytes.subarray(0, 16).toString("hex")}. This usually means the signed download URL returned an ` +
         `error/login page instead of the photo (e.g. an expired request).`,
       fileRes.status,
@@ -529,4 +581,29 @@ export async function downloadPropertyImage(
   }
 
   return { bytes, contentType };
+}
+
+export async function downloadPropertyImage(
+  buildiumPropertyId: number,
+  buildiumImageId: number
+): Promise<{ bytes: Buffer; contentType: string | null }> {
+  return downloadImageByRequestPath(
+    `/rentals/${buildiumPropertyId}/images/${buildiumImageId}/downloadrequests`,
+    buildiumImageId,
+    `property ${buildiumPropertyId}`
+  );
+}
+
+// Companion to fetchUnitImages() — see the CONFIRMED LIVE note above for why
+// this needs its own unit-scoped download path rather than reusing
+// downloadPropertyImage with the image's property id.
+export async function downloadUnitImage(
+  buildiumUnitId: number,
+  buildiumImageId: number
+): Promise<{ bytes: Buffer; contentType: string | null }> {
+  return downloadImageByRequestPath(
+    `/rentals/units/${buildiumUnitId}/images/${buildiumImageId}/downloadrequests`,
+    buildiumImageId,
+    `unit ${buildiumUnitId}`
+  );
 }

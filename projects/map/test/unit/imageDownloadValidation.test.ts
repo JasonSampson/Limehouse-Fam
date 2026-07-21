@@ -41,6 +41,113 @@ describe("detectImageFormat", () => {
   });
 });
 
+describe("fetchUnitImages", () => {
+  beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    setRequiredEnvDefaults();
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    global.fetch = ORIGINAL_FETCH;
+  });
+
+  // Covers the real bug this file exists to fix: photos live at the UNIT
+  // level (confirmed live, property 167 / Buildium unit 1621709 — 13 real
+  // photos found there that the old property-only sync never saw). This
+  // checks the request hits the unit-scoped path, not the property one.
+  it("calls the unit-scoped images endpoint, not the property-scoped one", async () => {
+    const { fetchUnitImages } = await import("../../src/buildium/client.js?t=" + Date.now());
+    let requestedUrl = "";
+    global.fetch = vi.fn(async (url: string) => {
+      requestedUrl = url;
+      return new Response(
+        JSON.stringify([
+          { Id: 1, Description: "", PhysicalFileName: "a.jpg", Provider: "None", ShowInListing: true },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }) as unknown as typeof fetch;
+
+    const images = await fetchUnitImages(1621709);
+    expect(requestedUrl).toContain("/rentals/units/1621709/images");
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatchObject({ id: 1, provider: "None", showInListing: true });
+  });
+
+  it("still surfaces video entries (Provider != None) so isRealUploadedPhoto can filter them out downstream", async () => {
+    const { fetchUnitImages, isRealUploadedPhoto } = await import("../../src/buildium/client.js?t=" + Date.now());
+    global.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify([
+          {
+            Id: 2,
+            Description: "",
+            PhysicalFileName: "//www.youtube.com/embed/xyz",
+            Provider: "YouTube",
+            ShowInListing: true,
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    ) as unknown as typeof fetch;
+
+    const images = await fetchUnitImages(1621709);
+    expect(images.filter(isRealUploadedPhoto)).toHaveLength(0);
+  });
+});
+
+describe("downloadUnitImage", () => {
+  beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    setRequiredEnvDefaults();
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    global.fetch = ORIGINAL_FETCH;
+  });
+
+  // Covers the confirmed-live finding that a unit-level image id does NOT
+  // download through the property-scoped download path (real 404: "No
+  // image found with the id") — it needs its own unit-scoped
+  // downloadrequests path.
+  it("posts to the unit-scoped downloadrequests path, not the property-scoped one", async () => {
+    const { downloadUnitImage } = await import("../../src/buildium/client.js?t=" + Date.now());
+    let postedUrl = "";
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+    global.fetch = vi.fn(async (url: string, opts?: RequestInit) => {
+      if (opts?.method === "POST") {
+        postedUrl = url;
+        return new Response(JSON.stringify({ DownloadUrl: "https://cdn.example.com/unit-signed-url" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(jpegBytes, { status: 200, headers: { "content-type": "image/jpeg" } });
+    }) as unknown as typeof fetch;
+
+    const result = await downloadUnitImage(1621709, 3744361);
+    expect(postedUrl).toContain("/rentals/units/1621709/images/3744361/downloadrequests");
+    expect(result.bytes.equals(jpegBytes)).toBe(true);
+  });
+
+  it("rejects non-image bytes the same way downloadPropertyImage does (shared validation, not duplicated)", async () => {
+    const { downloadUnitImage } = await import("../../src/buildium/client.js?t=" + Date.now());
+    global.fetch = vi.fn(async (url: string, opts?: RequestInit) => {
+      if (opts?.method === "POST") {
+        return new Response(JSON.stringify({ DownloadUrl: "https://cdn.example.com/expired" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("<html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+
+    await expect(downloadUnitImage(1621709, 3744361)).rejects.toThrow(/did not download as real image/);
+  });
+});
+
 describe("downloadPropertyImage", () => {
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };

@@ -276,6 +276,39 @@ that's an additive column change (`unit_id` nullable alongside
 `property_id`), not a redesign. Flagging this as a v1 simplification, not an
 oversight.
 
+**RESOLVED 2026-07-21 by Q, real-data bug fix**: the sync originally only
+ever checked Buildium's property-level images endpoint
+(`GET /rentals/{propertyId}/images`), which — confirmed live — only had a
+photo for 20 of 196 real properties. The actual photos live at the
+**unit** level almost all the time: a spot check of property 167 (1505
+Eagleton Lane, Buildium property 608456)'s one unit (Buildium unit 1621709)
+turned up 13 real photos the sync had never looked at, and a random
+10-unit sample independently came back 10/10 with real unit-level photos.
+This is not a Buildium data gap on Jason's side — it's the sync checking
+the wrong scope almost the whole time.
+
+Property-level and unit-level photos are **not mutually exclusive** — both
+can have separate uploads for the same real property — so
+`syncPropertyPhotos()` (`src/photos/photoSync.ts`) now checks both scopes
+and picks one "primary" photo per property (still one row here, per the v1
+simplification above) using this precedence, implemented in the pure,
+tested `selectPrimaryPhoto()`:
+
+1. The first unit (in `units.id` order — there's no Buildium "primary unit"
+   concept to key off of) that has a photo marked `ShowInListing`.
+2. Else the property-level `ShowInListing` photo, if the property has one.
+3. Else the first real photo found at all, checking units (in order)
+   before the property-level list, since unit-level is where photos
+   actually live for this portfolio.
+
+Unit-level photos are fetched via `GET /rentals/units/{unitId}/images`
+(same response shape as the property-level endpoint, confirmed live) and
+downloaded via a **different** signed-URL path than property-level photos
+(`POST /rentals/units/{unitId}/images/{imageId}/downloadrequests` — the
+property-scoped download path 404s for a unit-level image id, confirmed
+live). The same video-vs-photo filter (`Provider !== "None"` = video, e.g.
+YouTube) applies to both scopes.
+
 **Placeholder handling (Risk #1) is a display-layer concern, not a schema
 one** — a property with zero rows in this table simply has no photo; Tron
 shows the "photo not available" placeholder. No `has_photo` flag needed.
@@ -599,11 +632,14 @@ against Buildium's live OpenAPI spec yet:
    `/v1/rentalunits` — I've modeled them at the unit level per Oracle's
    research, but Q should pull Buildium's actual schema before writing the
    sync code against `units.bedrooms`/`bathrooms`/`square_feet`.
-2. **Whether every property has a reliably-tagged "primary" photo category**
-   in Buildium's file/document API, or whether photo presence/organization
-   is inconsistent across the portfolio — affects how `property_photos.
-   is_primary` actually gets set by the sync (first photo found? a specific
-   category match? needs a real look at a sample of accounts).
+2. **RESOLVED 2026-07-21 by Q, real-data bug fix.** Photos are not
+   organized by a "primary" category at all — they live at the unit level
+   almost all the time (not the property level, which is where the sync
+   originally and incorrectly only looked), and `ShowInListing` is the only
+   "this is the featured one" signal Buildium exposes. See the
+   `property_photos` section above for the full precedence logic and the
+   real numbers (20/196 properties had a property-level photo; unit-level
+   photos are present for the large majority of real units checked).
 3. **RentEngine — resolved 2026-07-20 by Jarvis, reusing already-confirmed
    research from `projects/limehouse-dashboard`** (which already integrates
    this exact RentEngine account live): real base URL

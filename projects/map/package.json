@@ -1,0 +1,33 @@
+{
+  "name": "map-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Background sync job for Map (Limehouse Property Management): pulls property/unit/lease/tenant/photo data from Buildium and vacant-unit asking rent from RentEngine into Supabase, on a daily schedule. No map UI in this project — Tron builds that separately.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "migrate": "node-pg-migrate",
+    "migrate:up": "node-pg-migrate up --config-file .node-pg-migraterc.json --tsx",
+    "migrate:down": "node-pg-migrate down --config-file .node-pg-migraterc.json --tsx",
+    "job:sync": "cross-env NODE_OPTIONS=--use-system-ca tsx src/jobs/runMapSyncEntryPoint.ts",
+    "job:sync:now": "cross-env NODE_OPTIONS=--use-system-ca MAP_SYNC_FORCE_RUN=true tsx src/jobs/runMapSyncEntryPoint.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "cross-env": "^10.1.0",
+    "node-pg-migrate": "^7.6.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.9"
+  }
+}

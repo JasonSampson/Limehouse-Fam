@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Where We Manage — Limehouse Property Management</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="description" content="Limehouse Property Management's coverage across Hampton Roads: Virginia Beach, Norfolk, Chesapeake, Portsmouth, and Suffolk."/>
+<style>
+  /* Font files are bundled in this folder (./fonts/), not referenced from
+     LimeHQ's /fonts/ path — this page deploys onto limehousepm.com, a
+     separate site/host from LimeHQ, so it can't assume LimeHQ's static
+     assets are reachable from here. Copy this whole public-site/ folder
+     as one deployable unit. */
+  @font-face { font-family:'Quicksand'; src:url('fonts/Quicksand-Regular.ttf') format('truetype'); font-weight:400; }
+  @font-face { font-family:'Quicksand'; src:url('fonts/Quicksand-Bold.ttf') format('truetype'); font-weight:700; }
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; font-family:'Quicksand', system-ui, sans-serif; }
+  .header {
+    background:#fff; padding:0.9rem 1.25rem; box-shadow:0 1px 4px rgba(0,0,0,.08);
+    display:flex; align-items:center; justify-content:space-between; position:relative; z-index:5;
+  }
+  .brand { font-weight:700; font-size:1.25rem; }
+  .brand .lime { color:#74b62e; }
+  .brand .dark { color:#009344; }
+  .tagline { font-size:0.85rem; color:#666; display:none; }
+  @media (min-width:520px) { .tagline { display:block; } }
+  #map-wrap { position:relative; height:calc(100% - 58px); }
+  #public-map { position:absolute; inset:0; }
+  .legend {
+    position:absolute; bottom:16px; left:16px; background:#fff; border-radius:10px;
+    box-shadow:0 2px 12px rgba(0,0,0,.15); padding:.6rem .9rem; font-size:.8rem; color:#333;
+    display:flex; align-items:center; gap:.5rem; z-index:5;
+  }
+  .legend-dot { width:10px; height:10px; border-radius:50%; background:#74b62e; display:inline-block; }
+  .state-msg {
+    position:absolute; top:16px; left:50%; transform:translateX(-50%); background:#fff;
+    padding:.5rem 1rem; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:.85rem; color:#444; z-index:6;
+  }
+</style>
+</head>
+<body>
+  <header class="header">
+    <div class="brand"><span class="lime">lime</span><span class="dark">house</span></div>
+    <div class="tagline">Managing real properties across Hampton Roads</div>
+  </header>
+  <div id="map-wrap">
+    <div id="public-map"></div>
+  </div>
+
+  <script>
+    // -----------------------------------------------------------------
+    // Config — filled in at deploy time by Scotty. Both values below are
+    // meant to be public/exposed in browser page source by design:
+    //
+    //   SUPABASE_ANON_KEY: Supabase's "anon" public API key. This is NOT
+    //   the service role key (that one must never appear in any file that
+    //   ships to a browser) — it is scoped by the database's own grants to
+    //   read exactly one thing: the map_public.locations_public view
+    //   (city, latitude, longitude, neighborhood_label — nothing else),
+    //   per Limehouse-Fam/projects/map/migrations/0012's REVOKE/GRANT
+    //   statements. Even a leaked/copied anon key can't be used to reach
+    //   any other table.
+    //
+    //   GOOGLE_MAPS_API_KEY: same vendor/key concept as the internal map —
+    //   restrict it to limehousepm.com's real domain via HTTP-referrer
+    //   allowlisting in Google Cloud Console.
+    //
+    // Deployment note for Scotty: this page calls Supabase's PostgREST API
+    // directly (Accept-Profile: map_public header) — Supabase's Data API
+    // must have `map_public` added to its "Exposed schemas" list (Project
+    // Settings → API) before this will return data. Without that one
+    // toggle, the fetch below 404s and the page just shows an empty map
+    // (fails safe — never falls back to any other data source).
+    // -----------------------------------------------------------------
+    window.MAP_PUBLIC_CONFIG = {
+      SUPABASE_URL: "https://qafzhvccodchweeebovd.supabase.co",
+      SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhZnpodmNjb2RjaHdlZWVib3ZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1MDE3MTUsImV4cCI6MjA5ODA3NzcxNX0.fXvm5bMiti1MIBa7W5T2ILgHU3Auf2_GjBijM46t7c0",
+      GOOGLE_MAPS_API_KEY: "AIzaSyCc4n-Wu_UNJ_EGAZv4IUIXwQYglhOeoQY",
+    };
+  </script>
+  <script src="app.js"></script>
+  <script
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCc4n-Wu_UNJ_EGAZv4IUIXwQYglhOeoQY&callback=publicMapInit&loading=async"
+    async defer
+  ></script>
+</body>
+</html>

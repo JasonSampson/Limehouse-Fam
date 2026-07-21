@@ -30,6 +30,12 @@
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-limehq\\projects\\limehq && npm run dev"],
       "port": 3300
+    },
+    {
+      "name": "limehq-qa-verify",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set PORT=3301 && set QA_MINT_SESSION=1 && cd /d C:\\Users\\Jason-Limehouse\\Limehouse-Fam-limehq\\projects\\limehq && npm run dev"],
+      "port": 3301
     }
   ]
 }

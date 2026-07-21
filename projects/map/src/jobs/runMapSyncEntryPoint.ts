@@ -18,9 +18,10 @@ import { logInfo } from "../lib/appLogger.js";
 
 // Daily off-peak run time. Not legally time-sensitive the way late-rent
 // notices are (spec: "daily is almost certainly often enough... roughly
-// current is entirely acceptable") — 3:00 AM Eastern keeps it off Buildium
-// and Google's peak hours and out of staff's way.
-const MAP_SYNC_HOUR_LOCAL = 3;
+// current is entirely acceptable") — 2:00 AM Eastern (Jason's explicit
+// choice) keeps it off Buildium and Google's peak hours and out of staff's
+// way.
+const MAP_SYNC_HOUR_LOCAL = 2;
 const MAP_SYNC_MINUTE_LOCAL = 0;
 
 async function main(): Promise<void> {

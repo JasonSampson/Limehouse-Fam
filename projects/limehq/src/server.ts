@@ -9,6 +9,7 @@ import { logInfo, logError } from "./lib/appLogger.js";
 import { authRouter } from "./auth/authRoutes.js";
 import { staffRouter } from "./staff/staffRoutes.js";
 import { rolesRouter } from "./roles/rolesRoutes.js";
+import { mapRouter } from "./map/mapRoutes.js";
 import { ApiError } from "./lib/apiError.js";
 import { requireSession } from "./auth/requireSession.js";
 import { SESSION_COOKIE_NAME } from "./auth/session.js";
@@ -33,12 +34,31 @@ const formActionTargets = [
   ),
 ];
 
+// The internal Map module (src/map/) loads Google's Maps JavaScript API
+// (script tag, Places/drawing libraries, map tile images, and Places/
+// Geocoding XHR calls) directly in the browser — none of that works under
+// helmet's default script-src 'self' / img-src 'self' data: / connect-src
+// 'self'. These are additive overrides on top of the same
+// getDefaultDirectives() spread already used for form-action above, scoped
+// as narrowly as Google's own documented domains allow rather than
+// wildcarding all of "https:".
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
         "form-action": formActionTargets,
+        "script-src": ["'self'", "https://maps.googleapis.com"],
+        "img-src": [
+          "'self'",
+          "data:",
+          "https://maps.gstatic.com",
+          "https://maps.googleapis.com",
+          "https://*.googleapis.com",
+          "https://*.ggpht.com",
+          "https://*.supabase.co",
+        ],
+        "connect-src": ["'self'", "https://maps.googleapis.com", "https://*.googleapis.com"],
       },
     },
   }),
@@ -60,6 +80,10 @@ app.use("/staff", staffRouter);
 
 // Roles & Permissions routes — protected, session-required.
 app.use("/roles", rolesRouter);
+
+// Map — protected, session-required. A native LimeHQ module (like /staff),
+// not a handoff target like Dashboard/Late Rent Notices/Limona.
+app.use("/map", mapRouter);
 
 // Account self-service (change password) — protected, session-required.
 app.use("/", accountRouter);
@@ -90,7 +114,7 @@ app.get(
   try {
     const pool = getAppPool();
 
-    const [nameResult, canDashboard, canLimona, canNotices, canStaff] = await Promise.all([
+    const [nameResult, canDashboard, canLimona, canNotices, canStaff, canMap] = await Promise.all([
       pool.query<{ display_name: string }>(
         "SELECT display_name FROM users WHERE id = $1",
         [req.user.userId],
@@ -99,6 +123,7 @@ app.get(
       hasPermission(req.user.userId, "limona.chat.access"),
       hasPermission(req.user.userId, "late_rent_notices.notices.view"),
       hasPermission(req.user.userId, "limehq.staff_management.view"),
+      hasPermission(req.user.userId, "map.properties.view"),
     ]);
 
     const displayName = nameResult.rows[0]?.display_name ?? "there";
@@ -157,6 +182,16 @@ app.get(
           <line x1="10.5" y1="10" x2="12" y2="10" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
           <line x1="20" y1="10" x2="21.5" y2="10" stroke="white" stroke-width="1.5" stroke-linecap="round"/>`,
         available: canStaff,
+      },
+      {
+        name: "Map",
+        description: "See every property you manage on one coverage map",
+        href: "/map",
+        iconPath: `<path d="M9 4 L4 6 L4 20 L9 18 L15 20 L20 18 L20 4 L15 6 L9 4 Z" stroke="white" stroke-width="2" stroke-linejoin="round" fill="none"/>
+          <line x1="9" y1="4" x2="9" y2="18" stroke="white" stroke-width="2"/>
+          <line x1="15" y1="6" x2="15" y2="20" stroke="white" stroke-width="2"/>
+          <circle cx="12.5" cy="11" r="2.25" fill="#e53e3e"/>`,
+        available: canMap,
       },
     ];
 

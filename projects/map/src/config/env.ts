@@ -25,10 +25,20 @@ const envSchema = z.object({
   BUILDIUM_CLIENT_SECRET: z.string().min(1),
   BUILDIUM_BASE_URL: z.string().url(),
 
-  // --- RentEngine API (optional — stubbed until Jason hands over
-  // credentials + endpoint docs; see src/rentengine/sync.ts) ---
-  RENTENGINE_API_KEY: z.string().optional(),
-  RENTENGINE_BASE_URL: z.string().url().optional(),
+  // --- RentEngine API (optional — see src/rentengine/sync.ts) ---
+  // Blank string ("" — e.g. a .env line present but empty) is treated the
+  // same as fully unset, not a validation error. FIXED 2026-07-21: without
+  // this, a blank RENTENGINE_BASE_URL crashed the whole app at startup
+  // (failed .url()) instead of being treated as "not configured yet",
+  // which is exactly the state this pair of vars is meant to represent.
+  RENTENGINE_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v === "" ? undefined : v)),
+  RENTENGINE_BASE_URL: z
+    .union([z.string().url(), z.literal("")])
+    .optional()
+    .transform((v) => (v === "" ? undefined : v)),
 
   // --- Google Maps / Geocoding API ---
   GOOGLE_MAPS_API_KEY: z.string().min(1),

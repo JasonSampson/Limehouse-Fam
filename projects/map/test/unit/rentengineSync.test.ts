@@ -14,8 +14,15 @@ function setRequiredEnvDefaults() {
   process.env.GOOGLE_MAPS_API_KEY = "test-key";
   process.env.JASON_ALERT_EMAIL = "jason@limehousepm.com";
   process.env.TEAMS_ALERT_WEBHOOK_URL = "https://example.com/webhook";
-  delete process.env.RENTENGINE_API_KEY;
-  delete process.env.RENTENGINE_BASE_URL;
+  // Set to "" rather than deleted: dotenv's populate() only fills in a key
+  // that is genuinely ABSENT from process.env (hasOwnProperty check) — a
+  // deleted key would get silently refilled from this machine's real .env
+  // (which has real, working RentEngine credentials) the next time env.ts
+  // is freshly imported below, defeating this test. "" stays present (so
+  // dotenv leaves it alone) and env.ts's schema now treats "" the same as
+  // unset (see src/config/env.ts).
+  process.env.RENTENGINE_API_KEY = "";
+  process.env.RENTENGINE_BASE_URL = "";
 }
 
 describe("syncVacantUnitAskingRents (documented stub)", () => {

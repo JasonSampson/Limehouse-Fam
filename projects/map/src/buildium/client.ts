@@ -260,6 +260,57 @@ export async function fetchLeasesForProperty(buildiumPropertyId: number): Promis
   );
 }
 
+// --- Lease recurring charges (extra charges beyond base rent) ---
+// CONFIRMED LIVE (2026-07-21, real Jason account, lease 2873091 — 2642 East
+// Ocean View Ave Unit A1, and cross-checked against leases 2535032, 2050776,
+// 2736118): GET /leases/{id}/recurringtransactions returns EVERY recurring
+// line on the lease, not just extra charges — the rent line itself is in
+// here too, distinguished by RentId being set (it points back at the
+// /leases/{id}/rent sub-resource entry). A real extra recurring charge is
+// RentId === null. Frequency/IsExpired matter too: the same feed can
+// contain a genuine one-time fee ("Tenant Lease Renewal Fee", Frequency
+// "OneTime", Duration "SpecificNumber") and a future already-scheduled rent
+// increase (a second RentId-linked entry with a later FirstOccurrenceDate) —
+// neither belongs in "current extra charges beyond rent". isExtraRecurringCharge
+// below is the single filter for this; do not re-derive it elsewhere.
+//
+// Memo is free text a human typed into Buildium — confirmed inconsistent
+// for the same real-world charge across leases ("Utility Rent -
+// water/sewer/trash" vs "Water, Sewer, Trash", "Resident Benefits Package"
+// vs "Resident Benefit Package"). Stored verbatim; only classified for
+// display via src/lib/feeClassification.ts, never rewritten here.
+const buildiumRecurringTransactionSchema = z.object({
+  Id: z.number(),
+  TransactionType: z.string(),
+  IsExpired: z.boolean(),
+  RentId: z.number().nullable(),
+  Amount: z.number(),
+  Memo: z.string().nullable(),
+  Frequency: z.string(),
+});
+
+export interface BuildiumRecurringCharge {
+  id: number;
+  label: string;
+  amount: number;
+}
+
+// The one real-data filter for "is this row an extra recurring charge
+// beyond base rent" — see the confirmed-live findings in the comment above.
+export function isExtraRecurringCharge(t: z.infer<typeof buildiumRecurringTransactionSchema>): boolean {
+  return t.RentId === null && t.Frequency === "Monthly" && !t.IsExpired;
+}
+
+export async function fetchLeaseRecurringCharges(leaseId: number): Promise<BuildiumRecurringCharge[]> {
+  const rows = await buildiumGet(
+    `/leases/${leaseId}/recurringtransactions`,
+    z.array(buildiumRecurringTransactionSchema)
+  );
+  return rows
+    .filter(isExtraRecurringCharge)
+    .map((t) => ({ id: t.Id, label: t.Memo ?? `Charge ${t.Id}`, amount: t.Amount }));
+}
+
 // --- Property photos ---
 // CONFIRMED LIVE (2026-07-21, real Jason account, real credentials, all 196
 // synced properties): the two endpoints Oracle's spec originally guessed at

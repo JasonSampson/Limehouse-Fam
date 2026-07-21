@@ -282,24 +282,36 @@ shows the "photo not available" placeholder. No `has_photo` flag needed.
 
 ### `vacant_unit_asking_rents`
 
-From RentEngine. **This table's shape is my best-guess design, not confirmed
-against a real RentEngine schema** — Oracle's spec is explicit that
-RentEngine's API details are still unknown (Section 2: no public docs, Jason
-has/can get a key but the endpoint shapes haven't been seen yet). Treat this
-as a placeholder Q and I revisit together once Jason hands over real API
-access, specifically the **matching key** between a RentEngine listing and a
-Buildium unit (address match? a shared ID RentEngine already knows about?
-unconfirmed).
+From RentEngine. **RESOLVED 2026-07-21 by Q**: the matching key is the
+property **address**, confirmed directly by Jason — neither he nor his team
+ever sees or uses a RentEngine listing id as a link to Buildium, so that was
+never a viable join key regardless of the `extracted_from` lead noted below.
+`src/rentengine/addressMatch.ts` normalizes and matches on address
+(street number + street name, with abbreviation/directional normalization,
+plus unit label when a property has more than one unit); `src/rentengine/sync.ts`
+wires this into the real sync. Verified live 2026-07-21: 15 of 15 real
+on-market RentEngine listings matched to the correct real Buildium
+property/unit (manually cross-checked by address). A listing that can't be
+confidently matched is never guessed at — it's logged as a real item error
+(`sync_runs.error_message`, same pattern as every other sync step) so it
+surfaces for a manual look instead of silently showing no data or a wrong
+rent.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | serial, PK | |
-| `unit_id` | bigint, references `units`, `ON DELETE RESTRICT` | nullable until matching is confirmed working |
-| `rentengine_listing_id` | text, not null, unique | |
-| `asking_rent` | numeric(10,2), not null | |
-| `listed_at` | timestamptz | |
+| `unit_id` | bigint, references `units`, `ON DELETE RESTRICT` | nullable — stays null for a listing that can't be confidently matched (it isn't synced at all in that case, so no row exists rather than a null-unit_id row) |
+| `rentengine_listing_id` | text, not null, unique | RentEngine's own numeric unit id, as text |
+| `asking_rent` | numeric(10,2), not null | from RentEngine's `target_rental_rate` |
+| `listed_at` | timestamptz | left null — RentEngine's API has no confirmed "date first listed" field (see Dashboard's client.ts research on this same account) |
 | `synced_at` | timestamptz, not null | |
 | `created_at` / `updated_at` | timestamptz, not null | standard trigger |
+
+Only RentEngine units with status `Available` or `On Hold` are synced here
+(same "on market" definition Dashboard's `isUnitOnMarket` already established
+for this account) — a `Leased` or `Incomplete` listing's `target_rental_rate`
+isn't a current asking figure, so it's intentionally left out rather than
+polluting this table with stale numbers.
 
 Popup logic: if a unit has no Active/Future lease (vacant) and has a row
 here, show `asking_rent` labeled "asking rent"; otherwise show the lease's
@@ -604,16 +616,19 @@ against Buildium's live OpenAPI spec yet:
      a real unit). Dashboard's own client code never needed this field so
      it isn't in that project's schema, but it's a real field on the same
      `/units` response.
-   - **Possible matching key found, NOT yet confirmed**: Dashboard's
-     client.ts states RentEngine's own `id` has no relationship to
-     Buildium's unit IDs (separate ID spaces, confirmed live there). But
-     each `/units` row here also has an `extracted_from` field — a URL
-     back to Limehouse's Buildium resident portal
-     (`limehousepm.managebuilding.com/Resident/public/rentals/{id}`) — and
-     that `{id}` may be a real Buildium-side identifier. This is a
-     promising lead, not a confirmed fact — whoever finishes this sync
-     (Q) should verify whether that id actually matches something on the
-     Buildium side (a rental/listing id) before building the join on it.
+   - **Matching key RESOLVED 2026-07-21 by Q, per Jason directly: address,
+     not any id.** The `extracted_from` URL id above was a promising lead
+     but was never actually pursued as the join key — Jason confirmed
+     directly that neither he nor his team ever sees or uses a RentEngine
+     id for this purpose, so an id-based join (RentEngine's own `id` or the
+     `extracted_from` id) wasn't a viable long-term matching key even if it
+     happened to line up today. `/units`'s `address` sub-object has
+     structured `street_number`/`street_name`/`unit`/`city`/`zip_code`
+     fields (richer than just `formatted_address`, which Dashboard's
+     client.ts uses) — `src/rentengine/addressMatch.ts` normalizes and
+     matches on these against `map.properties`/`map.units`. Verified live:
+     15 of 15 real on-market listings matched correctly. See the
+     `vacant_unit_asking_rents` section above for the full result.
 4. **Whether Buildium keeps returning very old inactive/sold properties**
    via its API indefinitely, or eventually stops — doesn't change this
    schema's design (the additive/preserving sync means a property, once

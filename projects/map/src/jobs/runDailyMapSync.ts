@@ -55,10 +55,15 @@ export async function runDailyMapSync(jobPool: Pool, scheduledFor: Date): Promis
           // Not configured is a known, documented gap — record it visibly
           // (error_message populated, queryable in sync_runs) without
           // paging Jason about something he already knows isn't built yet.
-          // Once configured=true, any real failure alerts like any other
-          // step (alertOnErrors defaults true, unset here).
+          // Once configured=true, a listing that couldn't be confidently
+          // matched to a Buildium property/unit is a real, specific item
+          // error (never silently dropped — see sync.ts) and alerts like
+          // any other step's per-item errors (alertOnErrors defaults true,
+          // unset here). counts.units_synced reuses the generic sync_runs
+          // column, scoped to this job's own row, for "asking-rent rows
+          // synced this run" — no schema change needed for this count.
           return outcome.configured
-            ? { counts: {}, errors: [] }
+            ? { counts: { units_synced: outcome.matched }, errors: outcome.errors }
             : { counts: {}, errors: [outcome.note], alertOnErrors: false };
         }),
     ],

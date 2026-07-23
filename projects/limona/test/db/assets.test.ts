@@ -2,8 +2,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
-import bcrypt from "bcryptjs";
 import { getTestPool, truncateAllTables, closeTestPool } from "../support/testDb.js";
+import { loginAsLimeHqUser } from "../support/testAuth.js";
 
 process.env.SESSION_COOKIE_SECRET ||= "test-secret-at-least-32-characters-long";
 
@@ -11,16 +11,8 @@ const { buildTestApp } = await import("../support/testApp.js");
 const { ingestAsset, absoluteAssetOriginalPath } = await import("../../src/rag/assetIngest.js");
 const { loadEnv } = await import("../../src/config/env.js");
 
-async function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
-  const pool = getTestPool();
-  const passwordHash = await bcrypt.hash("correct-password", 10);
-  await pool.query(
-    `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Admin Person', 'admin', 'active', $2)`,
-    ["admin@limehousepm.com", passwordHash]
-  );
-  const agent = request.agent(app);
-  await agent.post("/api/auth/login").send({ email: "admin@limehousepm.com", password: "correct-password" });
-  return agent;
+function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
+  return loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
 }
 
 describe("ingestAsset", () => {
@@ -106,19 +98,6 @@ describe("admin asset routes", () => {
   it("blocks an unauthenticated request", async () => {
     const res = await request(app).get("/api/admin/assets");
     expect(res.status).toBe(401);
-  });
-
-  it("blocks a non-admin (member) request", async () => {
-    const passwordHash = await bcrypt.hash("correct-password", 10);
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Member Person', 'member', 'active', $2)`,
-      ["member@limehousepm.com", passwordHash]
-    );
-    const agent = request.agent(app);
-    await agent.post("/api/auth/login").send({ email: "member@limehousepm.com", password: "correct-password" });
-
-    const res = await agent.get("/api/admin/assets");
-    expect(res.status).toBe(403);
   });
 
   it("uploads, lists, downloads, and deletes an asset end-to-end", async () => {

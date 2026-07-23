@@ -38,8 +38,8 @@ const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
 
 // authRoutes has no auth gate (it IS the login/invite flow). chatRoutes
-// gates with requireAuth, adminUserRoutes/adminDocumentRoutes/
-// adminDashboardRoutes gate with requireAdmin — each applied inside the
+// gates with requireAuth, adminDocumentRoutes/adminDashboardRoutes and the
+// other admin routers gate with requireAdmin — each applied inside the
 // router itself (see those files).
 app.use(authRoutes);
 app.use(chatRoutes);

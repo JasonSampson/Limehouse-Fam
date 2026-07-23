@@ -327,7 +327,7 @@ th { color: var(--color-muted); font-weight: 600; }
 
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   margin-bottom: 20px;
 }

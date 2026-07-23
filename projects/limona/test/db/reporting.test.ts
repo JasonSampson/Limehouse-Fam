@@ -1,23 +1,11 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
-import bcrypt from "bcryptjs";
 import { getTestPool, truncateAllTables, closeTestPool } from "../support/testDb.js";
+import { loginAsLimeHqUser } from "../support/testAuth.js";
 
 process.env.SESSION_COOKIE_SECRET ||= "test-secret-at-least-32-characters-long";
 
 const { buildTestApp } = await import("../support/testApp.js");
-
-async function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
-  const pool = getTestPool();
-  const passwordHash = await bcrypt.hash("correct-password", 10);
-  const result = await pool.query(
-    `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Admin Person', 'admin', 'active', $2) RETURNING id`,
-    ["admin@limehousepm.com", passwordHash]
-  );
-  const agent = request.agent(app);
-  await agent.post("/api/auth/login").send({ email: "admin@limehousepm.com", password: "correct-password" });
-  return { agent, adminId: result.rows[0].id };
-}
 
 describe("admin reporting routes", () => {
   const pool = getTestPool();
@@ -36,21 +24,9 @@ describe("admin reporting routes", () => {
     expect(res.status).toBe(401);
   });
 
-  it("blocks a non-admin (member) request", async () => {
-    const passwordHash = await bcrypt.hash("correct-password", 10);
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Member Person', 'member', 'active', $2)`,
-      ["member@limehousepm.com", passwordHash]
-    );
-    const agent = request.agent(app);
-    await agent.post("/api/auth/login").send({ email: "member@limehousepm.com", password: "correct-password" });
-
-    const res = await agent.get("/api/admin/reporting/recent-questions");
-    expect(res.status).toBe(403);
-  });
-
   it("lists recent questions most-recent-first with answered flag and asker name", async () => {
-    const { agent, adminId } = await loginAsAdmin(app);
+    const agent = await loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
+    const adminId = "1";
 
     await pool.query(
       `INSERT INTO chat_queries (user_id, question, answered, created_at) VALUES
@@ -72,15 +48,24 @@ describe("admin reporting routes", () => {
     expect(res.body.questions[0].asked_by).toBe("Admin Person");
   });
 
+  it("falls back to email when the asker has no display name set", async () => {
+    const agent = await loginAsLimeHqUser(app, { id: 2, email: "no-display-name@limehousepm.com", displayName: null });
+
+    await pool.query(`INSERT INTO chat_queries (user_id, question, answered) VALUES ('2', 'a question', true)`);
+
+    const res = await agent.get("/api/admin/reporting/recent-questions");
+    expect(res.status).toBe(200);
+    expect(res.body.questions[0].asked_by).toBe("no-display-name@limehousepm.com");
+  });
+
   it("only surfaces answered=false questions as knowledge gaps", async () => {
-    const { agent, adminId } = await loginAsAdmin(app);
+    const agent = await loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
 
     await pool.query(
       `INSERT INTO chat_queries (user_id, question, answered) VALUES
-       ($1, 'answered question', true),
-       ($1, 'unanswered question one', false),
-       ($1, 'unanswered question two', false)`,
-      [adminId]
+       ('1', 'answered question', true),
+       ('1', 'unanswered question one', false),
+       ('1', 'unanswered question two', false)`
     );
 
     const res = await agent.get("/api/admin/reporting/knowledge-gaps");
@@ -93,7 +78,7 @@ describe("admin reporting routes", () => {
   });
 
   it("returns empty lists (not an error) when there are no chat queries yet", async () => {
-    const { agent } = await loginAsAdmin(app);
+    const agent = await loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
     const recentRes = await agent.get("/api/admin/reporting/recent-questions");
     expect(recentRes.status).toBe(200);
     expect(recentRes.body.questions).toEqual([]);

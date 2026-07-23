@@ -34,9 +34,6 @@ async function loadStats() {
   document.getElementById("stat-documents").textContent = stats.documentsCount;
   document.getElementById("stat-gaps").textContent = stats.knowledgeGapsCount;
   document.getElementById("stat-questions").textContent = stats.questionsAskedCount;
-  // Team members stat removed — user management has moved to LimeHQ.
-  const teamEl = document.getElementById("stat-team");
-  if (teamEl) teamEl.closest(".stat-card")?.remove();
 }
 
 init();

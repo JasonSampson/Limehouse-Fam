@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
-import bcrypt from "bcryptjs";
 import { getTestPool, truncateAllTables, closeTestPool } from "../support/testDb.js";
+import { loginAsLimeHqUser } from "../support/testAuth.js";
 import { installFakeAiProviders, hashToUnitVector } from "../support/fakeAiProviders.js";
 
 installFakeAiProviders();
@@ -23,16 +23,8 @@ process.env.SESSION_COOKIE_SECRET ||= "test-secret-at-least-32-characters-long";
 const { buildTestApp } = await import("../support/testApp.js");
 const { retrieveTeamKnowledgeMatch } = await import("../../src/rag/retrieve.js");
 
-async function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
-  const pool = getTestPool();
-  const passwordHash = await bcrypt.hash("correct-password", 10);
-  await pool.query(
-    `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Admin Person', 'admin', 'active', $2)`,
-    ["admin@limehousepm.com", passwordHash]
-  );
-  const agent = request.agent(app);
-  await agent.post("/api/auth/login").send({ email: "admin@limehousepm.com", password: "correct-password" });
-  return agent;
+function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
+  return loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
 }
 
 describe("admin team knowledge routes", () => {
@@ -46,19 +38,6 @@ describe("admin team knowledge routes", () => {
   it("blocks an unauthenticated request", async () => {
     const res = await request(app).get("/api/admin/team-knowledge");
     expect(res.status).toBe(401);
-  });
-
-  it("blocks a non-admin (member) request", async () => {
-    const passwordHash = await bcrypt.hash("correct-password", 10);
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Member Person', 'member', 'active', $2)`,
-      ["member@limehousepm.com", passwordHash]
-    );
-    const agent = request.agent(app);
-    await agent.post("/api/auth/login").send({ email: "member@limehousepm.com", password: "correct-password" });
-
-    const res = await agent.post("/api/admin/team-knowledge").send({ question: "q", answer: "a" });
-    expect(res.status).toBe(403);
   });
 
   it("creates, lists, and deletes an entry end-to-end", async () => {
@@ -148,19 +127,12 @@ describe("chat integration: Team Knowledge is preferred and cited over documents
     await closeTestPool();
   });
 
-  async function loginAsMember() {
-    const passwordHash = await bcrypt.hash("correct-password", 10);
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Member Person', 'member', 'active', $2)`,
-      ["member@limehousepm.com", passwordHash]
-    );
-    const agent = request.agent(app);
-    await agent.post("/api/auth/login").send({ email: "member@limehousepm.com", password: "correct-password" });
-    return agent;
+  function loginAsUser() {
+    return loginAsLimeHqUser(app, { id: 2, email: "staff@limehousepm.com", displayName: "Staff Person" });
   }
 
   it("answers from Team Knowledge and cites 'Team Knowledge' when a strong match exists, without calling generateAnswer", async () => {
-    const agent = await loginAsMember();
+    const agent = await loginAsUser();
 
     const question = "What's the after-hours maintenance number?";
     const answer = "Call Property Meld at 555-0100.";
@@ -183,7 +155,7 @@ describe("chat integration: Team Knowledge is preferred and cited over documents
   });
 
   it("falls through to normal document retrieval when there is no Team Knowledge match (existing behavior undisturbed)", async () => {
-    const agent = await loginAsMember();
+    const agent = await loginAsUser();
     // No Team Knowledge entries and no documents at all.
     const res = await agent.post("/api/chat/ask").send({ question: "Some question nobody has answered" });
     expect(res.status).toBe(200);

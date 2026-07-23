@@ -1,23 +1,11 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
-import bcrypt from "bcryptjs";
 import { getTestPool, truncateAllTables, closeTestPool } from "../support/testDb.js";
+import { loginAsLimeHqUser } from "../support/testAuth.js";
 
 process.env.SESSION_COOKIE_SECRET ||= "test-secret-at-least-32-characters-long";
 
 const { buildTestApp } = await import("../support/testApp.js");
-
-async function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
-  const pool = getTestPool();
-  const passwordHash = await bcrypt.hash("correct-password", 10);
-  await pool.query(
-    `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Admin Person', 'admin', 'active', $2)`,
-    ["admin@limehousepm.com", passwordHash]
-  );
-  const agent = request.agent(app);
-  await agent.post("/api/auth/login").send({ email: "admin@limehousepm.com", password: "correct-password" });
-  return agent;
-}
 
 describe("GET /api/admin/dashboard-stats", () => {
   const pool = getTestPool();
@@ -36,31 +24,8 @@ describe("GET /api/admin/dashboard-stats", () => {
     expect(res.status).toBe(401);
   });
 
-  it("blocks a non-admin (member) request", async () => {
-    const passwordHash = await bcrypt.hash("correct-password", 10);
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Member Person', 'member', 'active', $2)`,
-      ["member@limehousepm.com", passwordHash]
-    );
-    const agent = request.agent(app);
-    await agent.post("/api/auth/login").send({ email: "member@limehousepm.com", password: "correct-password" });
-
-    const res = await agent.get("/api/admin/dashboard-stats");
-    expect(res.status).toBe(403);
-  });
-
-  it("returns accurate counts across documents, users, and chat_queries", async () => {
-    const agent = await loginAsAdmin(app);
-
-    // Two more users beyond the admin created in loginAsAdmin: one active, one invited.
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Active Member', 'member', 'active', 'x')`,
-      ["active-member@limehousepm.com"]
-    );
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, invite_token) VALUES ($1, 'Invited Member', 'member', 'invited', 'tok-abc')`,
-      ["invited-member@limehousepm.com"]
-    );
+  it("returns accurate counts across documents and chat_queries", async () => {
+    const agent = await loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
 
     // Documents: one ready, one processing, one superseded — only "ready" counts.
     await pool.query(
@@ -77,10 +42,8 @@ describe("GET /api/admin/dashboard-stats", () => {
     );
 
     // chat_queries: 2 answered, 1 not answered.
-    const adminId = (await pool.query("SELECT id FROM users WHERE email = 'admin@limehousepm.com'")).rows[0].id;
     await pool.query(
-      `INSERT INTO chat_queries (user_id, question, answered) VALUES ($1, 'q1', true), ($1, 'q2', true), ($1, 'q3', false)`,
-      [adminId]
+      `INSERT INTO chat_queries (user_id, question, answered) VALUES ('1', 'q1', true), ('1', 'q2', true), ('1', 'q3', false)`
     );
 
     const res = await agent.get("/api/admin/dashboard-stats");
@@ -91,48 +54,26 @@ describe("GET /api/admin/dashboard-stats", () => {
       questionsAskedCount: 3,
       assetsCount: 0,
       teamKnowledgeCount: 0,
-      teamMembers: { admin: 1, member: 2, invited: 1 },
     });
   });
 
   it("counts assets and team_knowledge entries", async () => {
-    const agent = await loginAsAdmin(app);
-    const adminId = (await pool.query("SELECT id FROM users WHERE email = 'admin@limehousepm.com'")).rows[0].id;
+    const agent = await loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
 
     await pool.query(
       `INSERT INTO assets (filename, description, category, size_bytes, storage_path, uploaded_by)
-       VALUES ('logo.png', 'Brand logo', 'Branding', 100, 'assets/1/original/logo.png', $1),
-              ('flyer.pdf', 'Flyer template', 'Templates', 200, 'assets/2/original/flyer.pdf', $1)`,
-      [adminId]
+       VALUES ('logo.png', 'Brand logo', 'Branding', 100, 'assets/1/original/logo.png', '1'),
+              ('flyer.pdf', 'Flyer template', 'Templates', 200, 'assets/2/original/flyer.pdf', '1')`
     );
     await pool.query(
       `INSERT INTO team_knowledge (question, answer, embedding, created_by)
-       VALUES ('Where is the thermostat?', 'In the hallway closet.', $2, $1)`,
-      [adminId, `[${Array(384).fill(0).join(",")}]`]
+       VALUES ('Where is the thermostat?', 'In the hallway closet.', $1, '1')`,
+      [`[${Array(384).fill(0).join(",")}]`]
     );
 
     const res = await agent.get("/api/admin/dashboard-stats");
     expect(res.status).toBe(200);
     expect(res.body.assetsCount).toBe(2);
     expect(res.body.teamKnowledgeCount).toBe(1);
-  });
-
-  it("does not conflate active member accounts into the admin count", async () => {
-    // Reproduces the bug TARS found: 2 admins + 1 member, all status='active',
-    // previously rendered as "3 admin" because the query only counted by
-    // status, not role. Assert role and status are counted independently.
-    const agent = await loginAsAdmin(app); // 1 admin, status='active'
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Second Admin', 'admin', 'active', 'x')`,
-      ["second-admin@limehousepm.com"]
-    );
-    await pool.query(
-      `INSERT INTO users (email, name, role, status, password_hash) VALUES ($1, 'Active Member', 'member', 'active', 'x')`,
-      ["active-member@limehousepm.com"]
-    );
-
-    const res = await agent.get("/api/admin/dashboard-stats");
-    expect(res.status).toBe(200);
-    expect(res.body.teamMembers).toEqual({ admin: 2, member: 1, invited: 0 });
   });
 });

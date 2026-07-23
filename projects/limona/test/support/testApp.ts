@@ -2,7 +2,6 @@ import express, { type Express } from "express";
 import cookieParser from "cookie-parser";
 import { attachUser } from "../../src/auth/middleware.js";
 import { authRoutes } from "../../src/routes/authRoutes.js";
-import { adminUserRoutes } from "../../src/routes/adminUserRoutes.js";
 import { adminDocumentRoutes } from "../../src/routes/adminDocumentRoutes.js";
 import { adminDashboardRoutes } from "../../src/routes/adminDashboardRoutes.js";
 import { adminAssetRoutes } from "../../src/routes/adminAssetRoutes.js";
@@ -22,7 +21,6 @@ export function buildTestApp(): Express {
 
   app.use(authRoutes);
   app.use(chatRoutes);
-  app.use(adminUserRoutes);
   app.use(adminDocumentRoutes);
   app.use(adminDashboardRoutes);
   app.use(adminAssetRoutes);

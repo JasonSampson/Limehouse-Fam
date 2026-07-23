@@ -90,8 +90,25 @@ export async function closeTestPool(): Promise<void> {
 export async function truncateAllTables(): Promise<void> {
   requireTestDatabaseUrl();
   const testPool = getTestPool();
+
+  // LimeHQ's shared "users" table (id, email, display_name) lives in the
+  // real Supabase database alongside Limona's own tables, but this
+  // disposable test container only has Limona's own migrated schema (that
+  // table was dropped from Limona's own migrations in 0009_drop_users.ts).
+  // Admin routes that JOIN against it read-only (e.g. reporting's asked_by
+  // name lookup) still need something to join against in tests, so a
+  // minimal stand-in is created here. test/support/testAuth.ts populates
+  // rows in it as part of the real LimeHQ-handoff login flow.
   await testPool.query(`
-    TRUNCATE TABLE chat_queries, document_chunks, documents, assets, team_knowledge
+    CREATE TABLE IF NOT EXISTS users (
+      id integer PRIMARY KEY,
+      email text NOT NULL,
+      display_name text
+    )
+  `);
+
+  await testPool.query(`
+    TRUNCATE TABLE chat_queries, document_chunks, documents, assets, team_knowledge, users
     RESTART IDENTITY CASCADE;
   `);
 }

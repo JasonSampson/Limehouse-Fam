@@ -28,3 +28,11 @@ change that isn't about that app's own data.
   Limona's tables) still had Supabase's default `anon`/`authenticated`
   grants in place. See the file header for full detail and the confirmation
   that none of the four apps use that access path.
+- `0002_create_limona_test_schema` — replaces Limona's old Docker-based
+  disposable test database with a dedicated `limona_test` schema + a
+  scoped `limona_test_app` role inside this same shared project (a second
+  Supabase project for test data was considered and rejected, to avoid
+  multiplying the number of projects that need securing). Written as a
+  reusable pattern — other projects wanting the same Docker-free test setup
+  can add their own `<project>_test` schema + role as a follow-up migration
+  here, same shape.

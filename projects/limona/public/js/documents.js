@@ -84,6 +84,7 @@ function renderCategorySection(categoryName, docs) {
       (d) => `
         <tr data-id="${d.id}">
           <td><a href="/api/admin/documents/${d.id}/preview" target="_blank" class="doc-name-link">${escapeHtml(d.filename)}</a></td>
+          <td class="doc-description-cell">${d.description ? escapeHtml(d.description) : "—"}</td>
           <td class="doc-created-cell">${renderDocCreatedDisplay(d)}</td>
           <td>${new Date(d.created_at).toLocaleDateString()}</td>
           <td class="actions-cell">
@@ -106,7 +107,7 @@ function renderCategorySection(categoryName, docs) {
       </div>
       <table>
         <thead>
-          <tr><th>Document</th><th>Doc Created</th><th>Uploaded</th><th></th></tr>
+          <tr><th>Document</th><th>Description</th><th>Doc Created</th><th>Uploaded</th><th></th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>

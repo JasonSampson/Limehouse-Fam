@@ -6,9 +6,13 @@
 // the same <nav> block into dashboard.html, admin.html, documents.html, etc.
 //
 // Usage: include this script, then call renderSidebar({ activePage, user })
-// after fetching /api/auth/me. "user" is the object from that endpoint
-// ({ name, email, ... }); "activePage" is one of the NAV_ITEMS hrefs below,
-// used only to highlight the current link.
+// after fetching /api/auth/me. "user" is the object from that endpoint, used
+// only for the LimeHQ launcher link (limehqUrl) — the sidebar intentionally
+// does not surface who's logged in or a per-app sign-out (confirmed with
+// Jason: with only 7 staff total, nobody shares accounts, and "sign out of
+// just this app" while staying logged into LimeHQ isn't useful). "activePage"
+// is one of the NAV_SECTIONS hrefs below, used only to highlight the current
+// link.
 //
 // Icons are small hand-written inline SVGs (line-style, 16x16, stroke
 // currentColor) rather than an icon font/library — keeps the no-build-step,
@@ -24,6 +28,7 @@ const ICONS = {
   diamond: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4.5 2h7L14 6.5 8 14 2 6.5z"/><path d="M2 6.5h12"/></svg>',
   people: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="5" r="2"/><path d="M1.5 14c0-2.2 1.8-3.5 4-3.5s4 1.3 4 3.5"/><circle cx="11.5" cy="5.5" r="1.6"/><path d="M9.8 10.6c.5-.2 1.1-.3 1.7-.3 2.2 0 4 1.3 4 3.5"/></svg>',
   bars: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14V8.5"/><path d="M8 14V2"/><path d="M13 14v-5"/><path d="M1.5 14h13"/></svg>',
+  chat: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H6l-3 3v-3H3.5A1.5 1.5 0 0 1 2 9.5z"/></svg>',
 };
 
 // statKey maps a nav item to a field on GET /api/admin/dashboard-stats, used
@@ -32,7 +37,10 @@ const ICONS = {
 const NAV_SECTIONS = [
   {
     label: "Workspace",
-    items: [{ href: "/dashboard.html", label: "Dashboard", icon: "grid" }],
+    items: [
+      { href: "/dashboard.html", label: "Dashboard", icon: "grid" },
+      { href: "/chat.html", label: "Chat - Ask Limona", icon: "chat" },
+    ],
   },
   {
     label: "Knowledge Base",
@@ -51,14 +59,6 @@ const NAV_SECTIONS = [
     items: [{ href: "/reporting.html", label: "Reporting", icon: "bars", statKey: "knowledgeGapsCount" }],
   },
 ];
-
-function initialsFor(name) {
-  if (!name) return "?";
-  const parts = name.trim().split(/\s+/);
-  const first = parts[0]?.[0] || "";
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
-  return (first + last).toUpperCase();
-}
 
 function renderSidebar({ activePage, user }) {
   const root = document.getElementById("sidebar-root");
@@ -91,30 +91,12 @@ function renderSidebar({ activePage, user }) {
       <span class="sidebar-mascot-name">Limona</span>
     </div>
     <div class="sidebar-brand">
-      <a href="${limehqHref}" style="display:inline-flex;align-items:center;gap:0.35rem;text-decoration:none;font-weight:700;font-size:1.15rem;line-height:1;letter-spacing:-0.3px">
-        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width:20px;height:20px;flex-shrink:0"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="#ffffff"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="73.2" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="73.2" stroke="#009344" stroke-width="2.5"/><circle cx="50" cy="50" r="5" fill="#009344"/></svg>
-        <span style="color:#74b62e">lime</span><span style="color:#009344">HQ</span>
+      <a href="${limehqHref}" style="display:inline-flex;align-items:center;text-decoration:none">
+        <img src="/images/limehq-logo.png" alt="LimeHQ" style="height:44px;width:auto" />
       </a>
     </div>
     <div class="sidebar-nav">${sectionsHtml}</div>
-    <div class="sidebar-account">
-      <div class="sidebar-avatar">${initialsFor(user?.name)}</div>
-      <div class="sidebar-account-info">
-        <div class="sidebar-account-name">${user?.name || ""}</div>
-        <div class="sidebar-account-email">${user?.email || ""}</div>
-      </div>
-      <div class="sidebar-account-actions">
-        <a href="/chat.html" class="sidebar-account-btn">Chat</a>
-        <a href="#" id="sidebar-signout" class="sidebar-account-btn">Out</a>
-      </div>
-    </div>
   `;
-
-  document.getElementById("sidebar-signout").addEventListener("click", async (e) => {
-    e.preventDefault();
-    await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/auth/login";
-  });
 
   loadSidebarCounts();
 }

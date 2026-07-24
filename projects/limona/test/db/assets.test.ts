@@ -1,5 +1,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import * as XLSX from "xlsx";
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import { getTestPool, truncateAllTables, closeTestPool } from "../support/testDb.js";
@@ -10,6 +12,19 @@ process.env.SESSION_COOKIE_SECRET ||= "test-secret-at-least-32-characters-long";
 const { buildTestApp } = await import("../support/testApp.js");
 const { ingestAsset, absoluteAssetOriginalPath } = await import("../../src/rag/assetIngest.js");
 const { loadEnv } = await import("../../src/config/env.js");
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const fixturesDir = path.resolve(__dirname, "../fixtures");
+
+function buildXlsxBuffer(): Buffer {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["Name", "Age"],
+    ["Alice", "30"],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+}
 
 function loginAsAdmin(app: ReturnType<typeof buildTestApp>) {
   return loginAsLimeHqUser(app, { id: 1, email: "admin@limehousepm.com", displayName: "Admin Person" });
@@ -152,5 +167,175 @@ describe("admin asset routes", () => {
     expect(downloadRes.status).toBe(404);
     const deleteRes = await agent.delete(`/api/admin/assets/${fakeId}`);
     expect(deleteRes.status).toBe(404);
+  });
+
+  // Assets accept ANY file type on upload — unlike documents, there is no
+  // extToSupportedExt() gate in adminAssetRoutes.ts. Covers a file type with
+  // an extension that documents explicitly rejects (.zip) and a file with no
+  // extension at all, both of which must upload successfully.
+  it("accepts an upload with no restriction on file type", async () => {
+    const agent = await loginAsAdmin(app);
+
+    const zipRes = await agent
+      .post("/api/admin/assets/upload")
+      .field("description", "Archived brand kit")
+      .field("category", "Marketing")
+      .attach("file", Buffer.from("PK\x03\x04fake-zip-bytes"), "brand-kit.zip");
+    expect(zipRes.status).toBe(200);
+
+    const noExtRes = await agent
+      .post("/api/admin/assets/upload")
+      .field("description", "Font file with no extension")
+      .field("category", "Marketing")
+      .attach("file", Buffer.from("fake-font-bytes"), "customfont");
+    expect(noExtRes.status).toBe(200);
+
+    const listRes = await agent.get("/api/admin/assets");
+    expect(listRes.body.assets.map((a: { filename: string }) => a.filename).sort()).toEqual([
+      "brand-kit.zip",
+      "customfont",
+    ]);
+  });
+
+  describe("GET /:id/preview", () => {
+    it("404s for an unknown asset", async () => {
+      const agent = await loginAsAdmin(app);
+      const res = await agent.get("/api/admin/assets/00000000-0000-0000-0000-000000000000/preview");
+      expect(res.status).toBe(404);
+    });
+
+    it("renders a .png image inline with the correct content type", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "logo.png",
+        description: "Company logo",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("fake-png-bytes"),
+      });
+
+      const res = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/image\/png/);
+      expect(res.headers["content-disposition"]).toMatch(/inline/);
+    });
+
+    it("renders a .pdf inline (Content-Type: application/pdf, Content-Disposition: inline)", async () => {
+      const agent = await loginAsAdmin(app);
+      const pdfBytes = Buffer.from("%PDF-1.4\n%fake-pdf-bytes-for-preview-test\n%%EOF");
+      const { assetId } = await ingestAsset({
+        originalFilename: "onepager.pdf",
+        description: "One pager",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: pdfBytes,
+      });
+
+      const res = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/application\/pdf/);
+      expect(res.headers["content-disposition"]).toMatch(/inline/);
+    });
+
+    it("renders a .docx as converted HTML", async () => {
+      const agent = await loginAsAdmin(app);
+      const buffer = await fs.readFile(path.join(fixturesDir, "sample.docx"));
+      const { assetId } = await ingestAsset({
+        originalFilename: "color-guide.docx",
+        description: "Brand color guide",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: buffer,
+      });
+
+      const res = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/text\/html/);
+      expect(res.text).toContain("<p>");
+    });
+
+    it("renders an .xlsx as an HTML table", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "pricing.xlsx",
+        description: "Pricing calculator",
+        category: "Calculators",
+        uploadedBy: null,
+        fileBuffer: buildXlsxBuffer(),
+      });
+
+      const res = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/text\/html/);
+      expect(res.text).toContain("<table");
+      expect(res.text).toContain("Alice");
+    });
+
+    it("renders a .csv as an HTML table", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "data.csv",
+        description: "Raw data",
+        category: "Calculators",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("name,age\nBob,25\n"),
+      });
+
+      const res = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/text\/html/);
+      expect(res.text).toContain("<table");
+      expect(res.text).toContain("Bob");
+    });
+
+    // Core security property under test: a .zip (a stand-in for "any
+    // unrenderable/exotic type") must never be served inline with a guessed
+    // content-type — it should behave exactly like /download.
+    it("falls back to a download for an unhandled file type (.zip)", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "brand-kit.zip",
+        description: "Archived brand kit",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("PK\x03\x04fake-zip-bytes"),
+      });
+
+      const previewRes = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      const downloadRes = await agent.get(`/api/admin/assets/${assetId}/download`);
+
+      expect(previewRes.status).toBe(200);
+      expect(previewRes.headers["content-disposition"]).not.toMatch(/inline/);
+      expect(previewRes.headers["content-disposition"]).toMatch(/attachment/);
+      expect(previewRes.headers["content-disposition"]).toBe(downloadRes.headers["content-disposition"]);
+      expect(previewRes.text).toBe(downloadRes.text);
+    });
+
+    // The other core security property under test: .svg is technically an
+    // image, but can carry an embedded <script>, so it must NEVER come back
+    // with Content-Disposition: inline (the browser rendering it as a page
+    // in our origin is the actual danger, regardless of what Content-Type
+    // the response reports) — it must behave like /download instead, exactly
+    // like the .zip case above.
+    it("never serves an .svg inline — falls back to download (Content-Disposition: attachment) instead", async () => {
+      const agent = await loginAsAdmin(app);
+      const svgBytes = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`);
+      const { assetId } = await ingestAsset({
+        originalFilename: "icon.svg",
+        description: "Icon",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: svgBytes,
+      });
+
+      const previewRes = await agent.get(`/api/admin/assets/${assetId}/preview`);
+      const downloadRes = await agent.get(`/api/admin/assets/${assetId}/download`);
+
+      expect(previewRes.status).toBe(200);
+      expect(previewRes.headers["content-disposition"]).not.toMatch(/inline/);
+      expect(previewRes.headers["content-disposition"]).toMatch(/attachment/);
+      expect(previewRes.headers["content-disposition"]).toBe(downloadRes.headers["content-disposition"]);
+      expect(previewRes.text).toBe(downloadRes.text);
+    });
   });
 });

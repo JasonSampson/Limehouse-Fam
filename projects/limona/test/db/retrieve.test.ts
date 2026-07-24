@@ -58,7 +58,7 @@ describe("retrieveRelevantChunks", () => {
     const chunkContent = "Late rent notice paragraph: after 14 days, a notice is generated automatically.";
     const result = await ingestDocument({
       originalFilename: "late-rent-sop.docx",
-      categoryId: 6,
+      category: "SOP",
       uploadedBy: null,
       fileBuffer: Buffer.from(chunkContent, "utf8"),
     });
@@ -77,7 +77,7 @@ describe("retrieveRelevantChunks", () => {
     // — confirm retrieval sees nothing from it and reports don't-know.
     const failed = await ingestDocument({
       originalFilename: "blank.docx",
-      categoryId: 1,
+      category: "Company Info",
       uploadedBy: null,
       fileBuffer: Buffer.from("   ", "utf8"),
     });
@@ -129,17 +129,12 @@ describe("retrieveRelevantChunks", () => {
     const queryVector = new Array(dim).fill(0);
     queryVector[0] = 1;
 
-    const categoryResult = await pool.query<{ id: number }>(
-      "SELECT id FROM document_categories ORDER BY id LIMIT 1"
-    );
-    const categoryId = categoryResult.rows[0].id;
-
     async function insertChunk(filename: string, content: string, distance: number): Promise<void> {
       const docResult = await pool.query<{ id: string }>(
-        `INSERT INTO documents (filename, category_id, file_size_bytes, file_ext, storage_path, status)
-         VALUES ($1, $2, 0, 'docx', 'documents/test/original/test.docx', 'ready')
+        `INSERT INTO documents (filename, category, file_size_bytes, file_ext, storage_path, status)
+         VALUES ($1, 'SOP', 0, 'docx', 'documents/test/original/test.docx', 'ready')
          RETURNING id`,
-        [filename, categoryId]
+        [filename]
       );
       const documentId = docResult.rows[0].id;
       await pool.query(

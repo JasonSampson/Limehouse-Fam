@@ -11,7 +11,9 @@ import { sanitizeFilename } from "./sanitizeFilename.js";
 
 export interface IngestParams {
   originalFilename: string;
-  categoryId: number;
+  category: string;
+  description?: string | null;
+  documentCreatedAt?: string | null;
   uploadedBy: string | null;
   fileBuffer: Buffer;
   // If set, this is a re-upload replacing an existing ready document.
@@ -44,7 +46,9 @@ function relativeOriginalPath(documentId: string, filename: string): string {
 export async function ingestDocument(params: IngestParams): Promise<IngestResult> {
   const ext = extToSupportedExt(path.extname(params.originalFilename));
   if (!ext) {
-    throw new Error(`Unsupported file type for "${params.originalFilename}". Only .docx and .pdf are supported.`);
+    throw new Error(
+      `Unsupported file type for "${params.originalFilename}". Only .pdf, .docx, .xlsx, .csv, .txt, and .md are supported.`
+    );
   }
 
   const pool = getPool();
@@ -68,13 +72,15 @@ export async function ingestDocument(params: IngestParams): Promise<IngestResult
   await pool.query(
     `
     INSERT INTO documents
-      (id, filename, category_id, file_size_bytes, file_ext, storage_path, uploaded_by, status, version, replaces_document_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing', $8, $9)
+      (id, filename, category, description, document_created_at, file_size_bytes, file_ext, storage_path, uploaded_by, status, version, replaces_document_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'processing', $10, $11)
     `,
     [
       documentId,
       params.originalFilename,
-      params.categoryId,
+      params.category,
+      params.description ?? null,
+      params.documentCreatedAt ?? null,
       params.fileBuffer.length,
       ext,
       relPath,

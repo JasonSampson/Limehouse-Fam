@@ -5,6 +5,16 @@ function showError(message) {
   errorEl.style.display = "block";
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[c]));
+}
+
 async function init() {
   const meRes = await fetch("/api/auth/me");
   if (!meRes.ok) {
@@ -22,6 +32,9 @@ async function init() {
   await loadCategories();
 }
 
+// Categories are free-form text now (see adminDocumentRoutes.ts) — the
+// category field here is a text input with autocomplete off the live
+// in-use category list, not a fixed dropdown.
 let categoriesCache = [];
 
 async function loadCategories() {
@@ -29,17 +42,27 @@ async function loadCategories() {
   const body = await res.json();
   categoriesCache = body.categories;
 
-  const uploadSelect = document.getElementById("upload-category");
-  uploadSelect.innerHTML = categoriesCache.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
+  const datalist = document.getElementById("category-datalist");
+  datalist.innerHTML = categoriesCache.map((c) => `<option value="${escapeHtml(c)}"></option>`).join("");
 }
 
 document.getElementById("upload-button").addEventListener("click", async () => {
-  const categoryId = document.getElementById("upload-category").value;
+  const category = document.getElementById("upload-category").value.trim();
+  const description = document.getElementById("upload-description").value.trim();
+  const documentCreatedAt = document.getElementById("upload-doc-created-at").value || "";
   const files = document.getElementById("upload-files").files;
   const statusEl = document.getElementById("upload-status");
 
   if (files.length === 0) {
     showError("Select at least one file to upload.");
+    return;
+  }
+  if (!category) {
+    showError("A category is required.");
+    return;
+  }
+  if (!description) {
+    showError("A description is required.");
     return;
   }
 
@@ -49,7 +72,9 @@ document.getElementById("upload-button").addEventListener("click", async () => {
     if (files.length === 1) {
       const formData = new FormData();
       formData.append("file", files[0]);
-      formData.append("categoryId", categoryId);
+      formData.append("category", category);
+      formData.append("description", description);
+      formData.append("documentCreatedAt", documentCreatedAt);
       const res = await fetch("/api/admin/documents/upload", { method: "POST", body: formData });
       const body = await res.json();
       if (!res.ok) {
@@ -61,7 +86,9 @@ document.getElementById("upload-button").addEventListener("click", async () => {
     } else {
       const formData = new FormData();
       for (const file of files) formData.append("files", file);
-      formData.append("categoryId", categoryId);
+      formData.append("category", category);
+      formData.append("description", description);
+      formData.append("documentCreatedAt", documentCreatedAt);
       const res = await fetch("/api/admin/documents/bulk-upload", { method: "POST", body: formData });
       const body = await res.json();
       if (!res.ok) {
@@ -75,6 +102,7 @@ document.getElementById("upload-button").addEventListener("click", async () => {
     }
     document.getElementById("upload-files").value = "";
     statusEl.innerHTML += `<a href="/documents.html">View in Document Library</a>`;
+    await loadCategories();
   } catch (err) {
     showError("Upload failed: " + err.message);
     statusEl.textContent = "";

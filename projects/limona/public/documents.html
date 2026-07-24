@@ -16,19 +16,14 @@
     <div class="admin-content">
       <div id="error" class="error" style="display:none;"></div>
 
-      <h1>Document Library</h1>
+      <div class="page-header-row">
+        <h1>Document Library</h1>
+        <a href="/admin.html" class="button-link">Upload New</a>
+      </div>
       <p class="muted">Every document currently in the knowledge base.</p>
 
-      <div class="card">
-        <label for="filter-category">Filter by category</label>
-        <select id="filter-category"></select>
-        <table id="documents-table">
-          <thead>
-            <tr><th>Filename</th><th>Category</th><th>Status</th><th>Version</th><th>Uploaded</th><th></th></tr>
-          </thead>
-          <tbody id="documents-body"></tbody>
-        </table>
-      </div>
+      <datalist id="category-datalist"></datalist>
+      <div id="documents-container"></div>
     </div>
   </div>
   <script src="/js/sidebar.js"></script>

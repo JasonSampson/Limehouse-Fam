@@ -62,7 +62,7 @@ describe("ingestDocument", () => {
 
     const result = await ingestDocument({
       originalFilename: "test-policy.docx",
-      categoryId: 6, // SOP
+      category: "SOP",
       uploadedBy: null,
       fileBuffer: makeDocxBuffer(text),
     });
@@ -70,12 +70,12 @@ describe("ingestDocument", () => {
     expect(result.status).toBe("ready");
     expect(result.chunkCount).toBeGreaterThan(0);
 
-    const docRow = await pool.query("SELECT status, filename, category_id FROM documents WHERE id = $1", [
+    const docRow = await pool.query("SELECT status, filename, category FROM documents WHERE id = $1", [
       result.documentId,
     ]);
     expect(docRow.rows[0].status).toBe("ready");
     expect(docRow.rows[0].filename).toBe("test-policy.docx");
-    expect(docRow.rows[0].category_id).toBe(6);
+    expect(docRow.rows[0].category).toBe("SOP");
 
     const chunkRows = await pool.query("SELECT count(*)::int AS n FROM document_chunks WHERE document_id = $1", [
       result.documentId,
@@ -86,7 +86,7 @@ describe("ingestDocument", () => {
   it("marks the document failed (not crashing) when there is no extractable text", async () => {
     const result = await ingestDocument({
       originalFilename: "empty.docx",
-      categoryId: 1,
+      category: "Company Info",
       uploadedBy: null,
       fileBuffer: makeDocxBuffer("   "),
     });
@@ -102,7 +102,7 @@ describe("ingestDocument", () => {
     );
     const first = await ingestDocument({
       originalFilename: "sop-late-rent.docx",
-      categoryId: 6,
+      category: "SOP",
       uploadedBy: null,
       fileBuffer: makeDocxBuffer(originalText),
     });
@@ -113,7 +113,7 @@ describe("ingestDocument", () => {
     );
     const second = await ingestDocument({
       originalFilename: "sop-late-rent.docx",
-      categoryId: 6,
+      category: "SOP",
       uploadedBy: null,
       fileBuffer: makeDocxBuffer(updatedText),
       replacesDocumentId: first.documentId,
@@ -167,7 +167,7 @@ describe("ingestDocument", () => {
   ])("sanitizes %s in the uploaded filename so the file stays inside its documents/<id>/original folder", async (_label, maliciousName) => {
     const result = await ingestDocument({
       originalFilename: maliciousName,
-      categoryId: 1,
+      category: "Company Info",
       uploadedBy: null,
       fileBuffer: makeDocxBuffer("some content that is long enough to extract as a real chunk of text here"),
     });

@@ -81,8 +81,9 @@ export async function closeTestPool(): Promise<void> {
 }
 
 // Wipes all app tables so each test file starts from a clean slate.
-// document_categories is NOT truncated — it's a fixed, migration-seeded
-// lookup table (1-7), not test fixture data.
+// (document_categories was a fixed, migration-seeded lookup table this used
+// to skip truncating — it was dropped in migration 0011 in favor of a plain
+// text column on documents, so there's no longer a lookup table to skip.)
 //
 // Re-checks requireTestDatabaseUrl() here too (not just in getTestPool())
 // so this destructive call can never run against a non-test database even

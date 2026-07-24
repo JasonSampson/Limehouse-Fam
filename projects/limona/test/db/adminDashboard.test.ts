@@ -29,16 +29,16 @@ describe("GET /api/admin/dashboard-stats", () => {
 
     // Documents: one ready, one processing, one superseded — only "ready" counts.
     await pool.query(
-      `INSERT INTO documents (filename, category_id, file_size_bytes, file_ext, storage_path, status)
-       VALUES ('a.pdf', 1, 100, '.pdf', 'documents/a/original/a.pdf', 'ready')`
+      `INSERT INTO documents (filename, category, file_size_bytes, file_ext, storage_path, status)
+       VALUES ('a.pdf', 'Company Info', 100, '.pdf', 'documents/a/original/a.pdf', 'ready')`
     );
     await pool.query(
-      `INSERT INTO documents (filename, category_id, file_size_bytes, file_ext, storage_path, status)
-       VALUES ('b.pdf', 1, 100, '.pdf', 'documents/b/original/b.pdf', 'processing')`
+      `INSERT INTO documents (filename, category, file_size_bytes, file_ext, storage_path, status)
+       VALUES ('b.pdf', 'Company Info', 100, '.pdf', 'documents/b/original/b.pdf', 'processing')`
     );
     await pool.query(
-      `INSERT INTO documents (filename, category_id, file_size_bytes, file_ext, storage_path, status)
-       VALUES ('c.pdf', 1, 100, '.pdf', 'documents/c/original/c.pdf', 'superseded')`
+      `INSERT INTO documents (filename, category, file_size_bytes, file_ext, storage_path, status)
+       VALUES ('c.pdf', 'Company Info', 100, '.pdf', 'documents/c/original/c.pdf', 'superseded')`
     );
 
     // chat_queries: 2 answered, 1 not answered.

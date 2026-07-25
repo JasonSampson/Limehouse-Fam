@@ -17,25 +17,34 @@
       <div id="error" class="error" style="display:none;"></div>
 
       <h1>Reporting</h1>
-      <p class="muted">Usage history and knowledge gaps, one level deeper than the Dashboard's summary counts.</p>
+      <p class="muted">What people are asking — and where the knowledge gaps are.</p>
 
       <div class="card">
-        <h2>Knowledge gaps</h2>
-        <p class="muted">Questions Limona could not answer. Consider uploading a document or adding a Team Knowledge entry to close these.</p>
+        <div class="page-header-row">
+          <h2>Knowledge Gaps</h2>
+          <button id="clear-log-btn" class="danger">Clear Log</button>
+        </div>
+        <p class="muted">Questions Limona couldn't answer from the current knowledge base. Use this to find topics worth adding.</p>
         <table id="gaps-table">
           <thead>
-            <tr><th>Question</th><th>Asked by</th><th>When</th></tr>
+            <tr><th>Question</th><th>Asked by</th><th>When</th><th></th></tr>
           </thead>
           <tbody id="gaps-body"></tbody>
         </table>
       </div>
 
       <div class="card">
-        <h2>Recent questions</h2>
+        <h2>Most Common Questions</h2>
+        <p class="muted">The questions people ask most often, and the documents Limona pulls from to answer them.</p>
+        <div id="common-questions-list"></div>
+      </div>
+
+      <div class="card">
+        <h2>Recent Questions</h2>
         <p class="muted">Last 100 questions asked, most recent first.</p>
         <table id="questions-table">
           <thead>
-            <tr><th>Question</th><th>Answered</th><th>Asked by</th><th>When</th></tr>
+            <tr><th>Question</th><th>Answered</th><th>Asked by</th><th>When</th><th></th></tr>
           </thead>
           <tbody id="questions-body"></tbody>
         </table>

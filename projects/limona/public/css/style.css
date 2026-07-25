@@ -86,6 +86,11 @@ button.secondary {
 }
 button.secondary:hover { background: var(--color-bg); }
 button.danger { background: var(--color-danger); }
+
+/* Clear Log is scoped separately (not button.danger) so this doesn't affect
+   the Remove/Delete buttons elsewhere that intentionally stay solid red. */
+#clear-log-btn { background: white; color: var(--color-danger); border: 1px solid var(--color-danger); }
+#clear-log-btn:hover { background: #fdf0ef; }
 button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .error { color: var(--color-danger); font-size: 14px; margin-bottom: 12px; }
@@ -94,6 +99,22 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
 th { color: var(--color-muted); font-weight: 600; }
+
+/* Recent Questions rows sit tighter than other tables — this is a long,
+   scan-through activity log, not a table where each row needs room to
+   click into (unlike Document Library/Assets/Team Knowledge). */
+#questions-table td { padding: 4px 10px; }
+#questions-table .remove-recent-btn { padding: 3px 7px; font-size: 10.5px; }
+
+/* Team Knowledge: Answer is the widest column since answers tend to be full
+   sentences/paragraphs while Question, Added By, and When are short. */
+#entries-table { table-layout: fixed; }
+#entries-table th:nth-child(1), #entries-table td:nth-child(1) { width: 15%; }
+#entries-table th:nth-child(2), #entries-table td:nth-child(2) { width: 52%; }
+#entries-table th:nth-child(3), #entries-table td:nth-child(3) { width: 12%; }
+#entries-table th:nth-child(4), #entries-table td:nth-child(4) { width: 13%; }
+#entries-table th:nth-child(5), #entries-table td:nth-child(5) { width: 8%; }
+#entries-table td { overflow-wrap: break-word; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
 .badge-ready { background: #e3f3ea; color: #1e7a45; }
@@ -163,7 +184,29 @@ th { color: var(--color-muted); font-weight: 600; }
 .actions-cell { white-space: nowrap; }
 .actions-cell button { padding: 7px 8px; font-size: 12px; margin-right: 6px; }
 .actions-cell button:last-child { margin-right: 0; }
+
+/* Reporting: the inline "Answer" form on a Knowledge Gap needs to wrap
+   normally and take the cell's full width, unlike the nowrap button row it
+   replaces. */
+.gap-answer-form { white-space: normal; min-width: 260px; }
+.gap-answer-input { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
 .recategorize-input { margin-bottom: 0; width: 100%; }
+
+/* Reporting: Most Common Questions — matches the vendor tool's format:
+   rank + question + count badge on one line, then two stacked "meta row"
+   sections (Asked by / Documents cited), each followed by a wrapping row of
+   small pill chips with the count in the chip's own accent color. */
+.top-q-item { padding: 14px 0; border-bottom: 1px solid var(--color-border); }
+.top-q-item:last-child { border-bottom: none; }
+.top-q-header-row { display: flex; align-items: baseline; gap: 10px; }
+.top-q-header-row button { padding: 3px 8px; font-size: 10px; }
+.top-q-text { font-size: 14px; flex: 1; }
+.top-q-rank { color: var(--color-muted); font-weight: 700; margin-right: 6px; }
+.top-q-count { background: #f3f8ef; color: var(--color-primary); border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.top-q-meta-row { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-muted); margin: 10px 0 4px; }
+.top-q-sources { display: flex; flex-wrap: wrap; gap: 4px; }
+.source-chip { display: inline-flex; align-items: center; gap: 4px; background: #f4f5f3; color: #6b7566; border: 1px solid #e5e8e2; border-radius: 999px; padding: 3px 9px; font-size: 11.5px; }
+.source-chip .count { color: var(--color-primary); font-weight: 700; }
 
 .doc-name-link { color: var(--color-primary); font-weight: 600; text-decoration: none; }
 .doc-name-link:hover { text-decoration: underline; }
@@ -181,7 +224,7 @@ th { color: var(--color-muted); font-weight: 600; }
   gap: 12px;
   flex-wrap: wrap;
 }
-.page-header-row h1 { margin: 0; }
+.page-header-row h1, .page-header-row h2 { margin: 0; }
 
 a.button-link {
   background: var(--color-primary);

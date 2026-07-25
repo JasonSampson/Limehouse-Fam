@@ -9,6 +9,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 8; // 8 hours
 export interface SessionPayload {
   userId: string;   // LimeHQ integer userId stored as string
   email: string;
+  name: string;
   issuedAt: number;
 }
 
@@ -20,8 +21,8 @@ function sign(value: string): string {
   return crypto.createHmac("sha256", getSecret()).update(value).digest("hex");
 }
 
-export function createSessionCookieValue(userId: string, email: string): string {
-  const payload: SessionPayload = { userId, email, issuedAt: Date.now() };
+export function createSessionCookieValue(userId: string, email: string, name: string): string {
+  const payload: SessionPayload = { userId, email, name, issuedAt: Date.now() };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = sign(body);
   return `${body}.${signature}`;
@@ -45,6 +46,10 @@ export function verifySessionCookieValue(cookieValue: string | undefined): Sessi
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SessionPayload;
     if (typeof payload.userId !== "string" || typeof payload.email !== "string" || typeof payload.issuedAt !== "number") return null;
     if (Date.now() - payload.issuedAt > SESSION_TTL_MS) return null;
+    // name was added after some sessions may have been issued — default to ""
+    // rather than rejecting the cookie, so attachUser's nameFromEmail fallback
+    // (src/auth/middleware.ts) can still kick in for those.
+    if (typeof payload.name !== "string") payload.name = "";
     return payload;
   } catch {
     return null;

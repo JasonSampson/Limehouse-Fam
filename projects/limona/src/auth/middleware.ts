@@ -40,7 +40,7 @@ export async function attachUser(req: Request, _res: Response, next: NextFunctio
   req.user = {
     id: payload.userId,
     email: payload.email,
-    name: nameFromEmail(payload.email),
+    name: payload.name || nameFromEmail(payload.email),
     role: "admin",
     status: "active",
   };

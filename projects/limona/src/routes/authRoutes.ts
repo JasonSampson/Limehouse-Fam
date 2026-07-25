@@ -25,17 +25,18 @@ authRoutes.post("/auth/limehq-callback", async (req, res) => {
     const secret = new TextEncoder().encode(env.LIMEHQ_HANDOFF_SECRET);
     const { payload } = await jwtVerify(token, secret);
 
-    // userId and email come directly from the LimeHQ handoff JWT.
+    // userId, email, and name come directly from the LimeHQ handoff JWT.
     // No local users table lookup — Limona's users table has been dropped.
     const limehqUserId = String(payload.userId);
     const email = payload.email as string;
+    const name = (payload.name as string) || "";
 
     if (!limehqUserId || !email) {
       res.status(400).send("Invalid sign-in token payload.");
       return;
     }
 
-    const cookieValue = createSessionCookieValue(limehqUserId, email);
+    const cookieValue = createSessionCookieValue(limehqUserId, email, name);
     res.cookie(SESSION_COOKIE_NAME, cookieValue, sessionCookieOptions(env));
     res.redirect("/dashboard.html");
   } catch {

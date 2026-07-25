@@ -190,6 +190,9 @@ th { color: var(--color-muted); font-weight: 600; }
    replaces. */
 .gap-answer-form { white-space: normal; min-width: 260px; }
 .gap-answer-input { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+
+.gap-draft-preview { margin-top: 6px; padding: 8px 10px; background: #f3f8ef; border: 1px solid #dbe9d3; border-radius: 6px; font-weight: 400; font-size: 13px; color: var(--color-text); }
+.gap-draft-label { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-primary); margin-bottom: 3px; }
 .recategorize-input { margin-bottom: 0; width: 100%; }
 
 /* Reporting: Most Common Questions — matches the vendor tool's format:
@@ -207,6 +210,10 @@ th { color: var(--color-muted); font-weight: 600; }
 .top-q-sources { display: flex; flex-wrap: wrap; gap: 4px; }
 .source-chip { display: inline-flex; align-items: center; gap: 4px; background: #f4f5f3; color: #6b7566; border: 1px solid #e5e8e2; border-radius: 999px; padding: 3px 9px; font-size: 11.5px; }
 .source-chip .count { color: var(--color-primary); font-weight: 700; }
+
+.top-q-promote { margin-top: 12px; padding: 8px 12px; background: #f3f8ef; border: 1px solid #dbe9d3; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.top-q-promote .promote-btn { flex-shrink: 0; padding: 5px 10px; font-size: 11px; }
+.top-q-promote-done { color: var(--color-primary); font-weight: 600; font-size: 12px; }
 
 .doc-name-link { color: var(--color-primary); font-weight: 600; text-decoration: none; }
 .doc-name-link:hover { text-decoration: underline; }
@@ -251,12 +258,37 @@ a.button-link:hover { background: var(--color-primary-dark); }
 .chat-msg-avatar { width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto; }
 .chat-msg-content { flex: 1; min-width: 0; }
 
+.chat-toolbar { display: flex; justify-content: center; gap: 8px; margin: 16px 0; }
+.chat-toolbar button.secondary { color: var(--color-primary); }
+
+/* History is a click-to-open panel, not a permanently-visible sidebar list —
+   deliberately less cluttered than the vendor tool's always-on history/
+   files sidebar (confirmed with Jason). */
+.history-panel { border: 1px solid var(--color-border); border-radius: 8px; padding: 10px; margin-bottom: 16px; max-height: 240px; overflow-y: auto; }
+.history-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+.history-item:hover { background: var(--color-bg); }
+.history-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item-when { color: var(--color-muted); font-size: 12px; white-space: nowrap; }
+.history-empty { color: var(--color-muted); padding: 8px 10px; }
+
+.chat-welcome { text-align: center; padding: 32px 16px; }
+.chat-welcome-avatar { width: 64px; height: 64px; border-radius: 50%; margin-bottom: 12px; }
+.chat-welcome h3 { margin: 0 0 8px; }
+.chat-welcome .muted { max-width: 480px; margin: 0 auto; }
+.chat-starter-questions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 20px; }
+.chat-starter-questions .starter-question { white-space: normal; text-align: left; text-transform: none; letter-spacing: normal; }
+
 .brand-icon { width: 24px; height: 24px; border-radius: 50%; vertical-align: middle; margin-right: 8px; }
 .sidebar-brand-icon { height: 22px; width: auto; vertical-align: middle; margin-right: 8px; }
 
-.row { display: flex; gap: 10px; align-items: flex-end; }
+/* #question keeps the standard field margin-bottom everywhere else in the
+   app (stacked forms need the spacing) except here — inside this one flex
+   row it was invisibly inflating the row's height, throwing off vertical
+   centering against the Ask button next to it. */
+.row { display: flex; gap: 10px; align-items: center; }
+.row #question { margin-bottom: 0; }
 .row > * { flex: 1; }
-.row > button { flex: 0 0 auto; }
+.row > button { flex: 0 0 auto; min-width: 160px; }
 
 .muted { color: var(--color-muted); font-size: 13px; }
 

@@ -52,7 +52,7 @@ adminReportingRoutes.delete("/api/admin/reporting/recent-questions/:id", async (
 adminReportingRoutes.get("/api/admin/reporting/knowledge-gaps", async (_req, res) => {
   const result = await getPool().query(
     `
-    SELECT cq.id, cq.question, cq.created_at,
+    SELECT cq.id, cq.question, cq.created_at, cq.draft_answer,
            COALESCE(u.display_name, cq.asked_by_name, u.email) AS asked_by,
            u.email AS asked_by_email
     FROM chat_queries cq
@@ -99,6 +99,22 @@ adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/answer", asyn
     logError("Reporting answer-gap failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Failed to save this answer." });
   }
+});
+
+// Dismisses Limona's suggested draft for one gap without answering it —
+// the row reverts to a plain, blank "Answer" action, same as a gap that
+// never got a draft. The gap itself stays open; only the suggestion goes
+// away.
+adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/reject-draft", async (req, res) => {
+  const result = await getPool().query(
+    `UPDATE chat_queries SET draft_answer = NULL WHERE id = $1 RETURNING id`,
+    [req.params.id]
+  );
+  if (result.rows.length === 0) {
+    res.status(404).json({ error: "Question not found." });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // "Clear Log" is a real, permanent delete of every currently-listed gap —
@@ -185,15 +201,59 @@ adminReportingRoutes.get("/api/admin/reporting/most-common-questions", async (_r
     }
     documentsCited.sort((a, b) => b.count - a.count);
 
+    // Whether this repeat question is worth suggesting as a "lock this in"
+    // promotion to Team Knowledge — already-promoted questions (exact text
+    // match) don't get the suggestion again.
+    const alreadyPromoted = await pool.query(`SELECT id FROM team_knowledge WHERE question = $1 LIMIT 1`, [
+      row.question,
+    ]);
+
     results.push({
       question: row.question,
       askCount: Number(row.ask_count),
       askers: askers.rows.map((a) => ({ name: a.asked_by, count: Number(a.ask_count) })),
       documentsCited,
+      alreadyInTeamKnowledge: alreadyPromoted.rows.length > 0,
     });
   }
 
   res.json({ questions: results });
+});
+
+const promoteCommonQuestionSchema = z.object({
+  question: z.string().min(1),
+});
+
+// "Lock this in" — turns a repeat question Limona's been successfully
+// answering from documents into a permanent Team Knowledge entry, so future
+// staff get the instant hand-written answer instead of a fresh document
+// search every time. Uses the most recent answer for that question (rather
+// than the first) since documents/policies may have been updated since
+// earlier asks.
+adminReportingRoutes.post("/api/admin/reporting/most-common-questions/promote", async (req, res) => {
+  const parsed = promoteCommonQuestionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
+    return;
+  }
+
+  try {
+    const latest = await getPool().query(
+      `SELECT answer_text FROM chat_queries
+       WHERE question = $1 AND answered = true AND answer_text IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [parsed.data.question]
+    );
+    if (latest.rows.length === 0) {
+      res.status(404).json({ error: "No saved answer found for this question." });
+      return;
+    }
+    await createTeamKnowledgeEntry(parsed.data.question, latest.rows[0].answer_text, req.user!.id, req.user!.name);
+    res.json({ ok: true });
+  } catch (err) {
+    logError("Reporting promote-common-question failed", { error: err instanceof Error ? err.message : String(err) });
+    res.status(500).json({ error: "Failed to save this as a Team Knowledge entry." });
+  }
 });
 
 const removeCommonQuestionSchema = z.object({

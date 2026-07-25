@@ -18,9 +18,16 @@ export interface RetrievedChunk {
   chunkId: string;
   documentId: string;
   documentFilename: string;
+  documentCategory: string;
   content: string;
   pageOrSectionLabel: string | null;
 }
+
+// Category that means "general legal reference" (e.g. the Virginia
+// Residential Landlord and Tenant Act) rather than Limehouse's own policy.
+// See the "prefer company policy over general law" rule in SYSTEM_PROMPT
+// below — this is the one category name that rule keys off of.
+const LAW_REFERENCE_CATEGORY = "Laws";
 
 export interface GeneratedAnswer {
   answerText: string;
@@ -31,9 +38,13 @@ const SYSTEM_PROMPT = `You are Limona, an internal knowledge base assistant for 
 
 You will be given a staff question and a set of excerpts pulled from the company's own uploaded documents. Answer ONLY using the information in those excerpts.
 
+Each excerpt is labeled with its source type: "Company Policy" (Limehouse's own lease, management agreements, SOPs, and other internal documents) or "General Legal Reference" (state/federal law, e.g. the Virginia Residential Landlord and Tenant Act).
+
 Rules:
 - If the excerpts do not contain enough information to answer confidently, say plainly that you don't know and do not guess. Never invent an answer.
-- Always name which document(s) your answer came from, in plain language (e.g. "According to the Late Rent SOP...").
+- When BOTH a Company Policy excerpt and a General Legal Reference excerpt are relevant to the question, your answer MUST be based on and lead with the Company Policy excerpt — that is what actually governs how Limehouse operates day to day, since it was written to already comply with the law. Only mention the law as brief supporting context, never as the primary basis for the answer.
+- Only fall back to a General Legal Reference excerpt as your primary answer when no Company Policy excerpt addresses the question at all.
+- Always name which document(s) your answer came from, in plain language (e.g. "According to the Limehouse Lease...").
 - Keep answers short and plain-language — the reader is a property management staffer, not a lawyer or developer.
 - For anything with legal weight (evictions, Fair Housing, notices), remind the reader to verify against the cited source before acting, since this is a summary.`;
 
@@ -45,12 +56,12 @@ export async function generateAnswer(
   const env = loadEnv();
 
   const contextBlock = chunks
-    .map(
-      (c, i) =>
-        `[Excerpt ${i + 1} — from "${c.documentFilename}"${
-          c.pageOrSectionLabel ? `, ${c.pageOrSectionLabel}` : ""
-        }]\n${c.content}`
-    )
+    .map((c, i) => {
+      const sourceType = c.documentCategory === LAW_REFERENCE_CATEGORY ? "General Legal Reference" : "Company Policy";
+      return `[Excerpt ${i + 1} — ${sourceType} — from "${c.documentFilename}"${
+        c.pageOrSectionLabel ? `, ${c.pageOrSectionLabel}` : ""
+      }]\n${c.content}`;
+    })
     .join("\n\n");
 
   const userMessage = `Question: ${question}\n\nExcerpts:\n\n${contextBlock}`;

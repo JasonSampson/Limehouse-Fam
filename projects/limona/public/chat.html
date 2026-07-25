@@ -18,9 +18,32 @@
         Limona isn't fully set up yet — ask an administrator to add the AI service keys before chat can answer questions.
       </div>
       <div class="card">
-        <h2>Ask a question</h2>
+        <h2>Ask a Question</h2>
         <p class="muted">Ask about company policy, SOPs, laws, vendors, or anything else in Limehouse's uploaded documents. Limona will say so if it doesn't know.</p>
+
+        <div id="history-panel" class="history-panel" style="display:none;">
+          <div id="history-list"></div>
+        </div>
+
+        <div id="chat-welcome" class="chat-welcome">
+          <img src="/images/limona-avatar.png" alt="Limona" class="chat-welcome-avatar" />
+          <h3>How can I help?</h3>
+          <p class="muted">I answer questions using Limehouse's uploaded company documents — SOPs, policies, employee info, leasing materials, and more. Ask me anything.</p>
+          <div class="chat-starter-questions">
+            <button type="button" class="secondary starter-question">What's the late rent notice process?</button>
+            <button type="button" class="secondary starter-question">What's our policy on pet approvals?</button>
+            <button type="button" class="secondary starter-question">How do we handle a maintenance emergency after hours?</button>
+            <button type="button" class="secondary starter-question">What's our move-in inspection process?</button>
+          </div>
+        </div>
+
         <div id="chat-log" class="chat-log"></div>
+
+        <div class="chat-toolbar">
+          <button type="button" id="history-btn" class="secondary">History</button>
+          <button type="button" id="new-chat-btn" class="secondary">New Chat</button>
+        </div>
+
         <form id="ask-form" class="row">
           <div>
             <label for="question" style="display:none;">Question</label>

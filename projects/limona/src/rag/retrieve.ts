@@ -78,6 +78,7 @@ export async function retrieveRelevantChunks(question: string): Promise<Retrieva
       dc.id AS chunk_id,
       dc.document_id,
       d.filename AS document_filename,
+      d.category AS document_category,
       dc.content,
       dc.page_or_section_label,
       dc.embedding <=> $1::vector AS distance
@@ -99,9 +100,51 @@ export async function retrieveRelevantChunks(question: string): Promise<Retrieva
     chunkId: row.chunk_id,
     documentId: row.document_id,
     documentFilename: row.document_filename,
+    documentCategory: row.document_category,
     content: row.content,
     pageOrSectionLabel: row.page_or_section_label,
   }));
 
   return { chunks, answered: true };
+}
+
+// Same nearest-neighbor search as retrieveRelevantChunks but WITHOUT the
+// MAX_DISTANCE cutoff — used only to draft a candidate answer for admin
+// review when a question fails the real threshold (see chatRoutes.ts). The
+// staff member who asked never sees this draft; a human always reviews it
+// before it can become a trusted Team Knowledge answer. A small cap
+// (DRAFT_TOP_K) keeps the draft grounded in only the closest few chunks
+// rather than padding it with barely-related noise.
+const DRAFT_TOP_K = 5;
+
+export async function retrieveLoosestChunks(question: string): Promise<RetrievedChunk[]> {
+  const queryEmbedding = await embedQuery(question);
+  const vectorLiteral = toVectorLiteral(queryEmbedding);
+
+  const result = await getPool().query(
+    `
+    SELECT
+      dc.id AS chunk_id,
+      dc.document_id,
+      d.filename AS document_filename,
+      d.category AS document_category,
+      dc.content,
+      dc.page_or_section_label
+    FROM document_chunks dc
+    JOIN documents d ON d.id = dc.document_id
+    WHERE d.status = 'ready'
+    ORDER BY dc.embedding <=> $1::vector
+    LIMIT $2
+    `,
+    [vectorLiteral, DRAFT_TOP_K]
+  );
+
+  return result.rows.map((row) => ({
+    chunkId: row.chunk_id,
+    documentId: row.document_id,
+    documentFilename: row.document_filename,
+    documentCategory: row.document_category,
+    content: row.content,
+    pageOrSectionLabel: row.page_or_section_label,
+  }));
 }

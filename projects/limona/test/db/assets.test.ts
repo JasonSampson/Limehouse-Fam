@@ -169,6 +169,153 @@ describe("admin asset routes", () => {
     expect(deleteRes.status).toBe(404);
   });
 
+  it("GET /api/admin/asset-categories returns distinct category strings actually in use, not a fixed list, and never mixes with documents' categories", async () => {
+    const agent = await loginAsAdmin(app);
+    await ingestAsset({
+      originalFilename: "a.png",
+      description: "d",
+      category: "Marketing",
+      uploadedBy: null,
+      fileBuffer: Buffer.from("a"),
+    });
+    await ingestAsset({
+      originalFilename: "b.png",
+      description: "d",
+      category: "Calculators",
+      uploadedBy: null,
+      fileBuffer: Buffer.from("b"),
+    });
+    await ingestAsset({
+      originalFilename: "c.png",
+      description: "d",
+      category: "Marketing",
+      uploadedBy: null,
+      fileBuffer: Buffer.from("c"),
+    });
+    // A document with a category not used by any asset — must not leak into
+    // the assets categories list, since the two are independent sets.
+    await pool.query(
+      `INSERT INTO documents (filename, category, description, file_size_bytes, file_ext, storage_path, status)
+       VALUES ('doc.txt', 'SOP', 'd', 10, 'txt', 'documents/doc/original/doc.txt', 'ready')`
+    );
+
+    const res = await agent.get("/api/admin/asset-categories");
+    expect(res.status).toBe(200);
+    expect(res.body.categories).toEqual(["Calculators", "Marketing"]);
+  });
+
+  describe("PATCH /:id/category", () => {
+    it("updates the category text", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "a.png",
+        description: "d",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("a"),
+      });
+
+      const res = await agent.patch(`/api/admin/assets/${assetId}/category`).send({ category: "Calculators" });
+      expect(res.status).toBe(200);
+
+      const row = await pool.query("SELECT category FROM assets WHERE id = $1", [assetId]);
+      expect(row.rows[0].category).toBe("Calculators");
+    });
+
+    it("rejects an empty-string category (an asset must always belong to some category)", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "a.png",
+        description: "d",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("a"),
+      });
+
+      const res = await agent.patch(`/api/admin/assets/${assetId}/category`).send({ category: "" });
+      expect(res.status).toBe(400);
+
+      const row = await pool.query("SELECT category FROM assets WHERE id = $1", [assetId]);
+      expect(row.rows[0].category).toBe("Marketing");
+    });
+
+    it("404s for an unknown asset", async () => {
+      const agent = await loginAsAdmin(app);
+      const res = await agent
+        .patch("/api/admin/assets/00000000-0000-0000-0000-000000000000/category")
+        .send({ category: "Marketing" });
+      expect(res.status).toBe(404);
+    });
+
+    it("blocks an unauthenticated request", async () => {
+      const { assetId } = await ingestAsset({
+        originalFilename: "a.png",
+        description: "d",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("a"),
+      });
+      const res = await request(app).patch(`/api/admin/assets/${assetId}/category`).send({ category: "Nope" });
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe("PATCH /:id/description", () => {
+    it("updates the description text", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "a.png",
+        description: "Original description",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("a"),
+      });
+
+      const res = await agent.patch(`/api/admin/assets/${assetId}/description`).send({ description: "Updated description" });
+      expect(res.status).toBe(200);
+
+      const row = await pool.query("SELECT description FROM assets WHERE id = $1", [assetId]);
+      expect(row.rows[0].description).toBe("Updated description");
+    });
+
+    it("clears the description back to an empty string", async () => {
+      const agent = await loginAsAdmin(app);
+      const { assetId } = await ingestAsset({
+        originalFilename: "a.png",
+        description: "Original description",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("a"),
+      });
+
+      const res = await agent.patch(`/api/admin/assets/${assetId}/description`).send({ description: "" });
+      expect(res.status).toBe(200);
+
+      const row = await pool.query("SELECT description FROM assets WHERE id = $1", [assetId]);
+      expect(row.rows[0].description).toBe("");
+    });
+
+    it("404s for an unknown asset", async () => {
+      const agent = await loginAsAdmin(app);
+      const res = await agent
+        .patch("/api/admin/assets/00000000-0000-0000-0000-000000000000/description")
+        .send({ description: "Anything" });
+      expect(res.status).toBe(404);
+    });
+
+    it("blocks an unauthenticated request", async () => {
+      const { assetId } = await ingestAsset({
+        originalFilename: "a.png",
+        description: "d",
+        category: "Marketing",
+        uploadedBy: null,
+        fileBuffer: Buffer.from("a"),
+      });
+      const res = await request(app).patch(`/api/admin/assets/${assetId}/description`).send({ description: "Nope" });
+      expect(res.status).toBe(401);
+    });
+  });
+
   // Assets accept ANY file type on upload — unlike documents, there is no
   // extToSupportedExt() gate in adminAssetRoutes.ts. Covers a file type with
   // an extension that documents explicitly rejects (.zip) and a file with no

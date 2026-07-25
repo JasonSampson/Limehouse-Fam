@@ -234,6 +234,43 @@ describe("admin document routes", () => {
     expect(res.status).toBe(400);
   });
 
+  it("PATCH /:id/description updates the description text", async () => {
+    const agent = await loginAsAdmin(app);
+    const id = await seedReadyDocument(pool, { filename: "a.txt", ext: "txt", buffer: Buffer.from("hi") });
+
+    const res = await agent.patch(`/api/admin/documents/${id}/description`).send({ description: "Updated description" });
+    expect(res.status).toBe(200);
+
+    const row = await pool.query("SELECT description FROM documents WHERE id = $1", [id]);
+    expect(row.rows[0].description).toBe("Updated description");
+  });
+
+  it("PATCH /:id/description clears the description back to an empty string", async () => {
+    const agent = await loginAsAdmin(app);
+    const id = await seedReadyDocument(pool, { filename: "a.txt", ext: "txt", buffer: Buffer.from("hi") });
+    await pool.query("UPDATE documents SET description = $1 WHERE id = $2", ["Original description", id]);
+
+    const res = await agent.patch(`/api/admin/documents/${id}/description`).send({ description: "" });
+    expect(res.status).toBe(200);
+
+    const row = await pool.query("SELECT description FROM documents WHERE id = $1", [id]);
+    expect(row.rows[0].description).toBe("");
+  });
+
+  it("PATCH /:id/description 404s for an unknown document", async () => {
+    const agent = await loginAsAdmin(app);
+    const res = await agent
+      .patch("/api/admin/documents/00000000-0000-0000-0000-000000000000/description")
+      .send({ description: "Anything" });
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /:id/description blocks an unauthenticated request", async () => {
+    const id = await seedReadyDocument(pool, { filename: "a.txt", ext: "txt", buffer: Buffer.from("hi") });
+    const res = await request(app).patch(`/api/admin/documents/${id}/description`).send({ description: "Nope" });
+    expect(res.status).toBe(401);
+  });
+
   describe("GET /:id/preview", () => {
     it("404s for an unknown document", async () => {
       const agent = await loginAsAdmin(app);

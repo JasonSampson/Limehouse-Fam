@@ -83,12 +83,12 @@ function renderCategorySection(categoryName, docs) {
     .map(
       (d) => `
         <tr data-id="${d.id}">
-          <td><a href="/api/admin/documents/${d.id}/preview" target="_blank" class="doc-name-link">${escapeHtml(d.filename)}</a></td>
-          <td class="doc-description-cell">${d.description ? escapeHtml(d.description) : "—"}</td>
+          <td><a href="/api/admin/documents/${d.id}/preview" target="_blank" class="doc-name-link" title="${escapeHtml(d.filename)}">${escapeHtml(d.filename)}</a></td>
+          <td class="doc-description-cell">${renderDescriptionDisplay(d)}</td>
           <td class="doc-created-cell">${renderDocCreatedDisplay(d)}</td>
           <td>${new Date(d.created_at).toLocaleDateString()}</td>
+          <td class="doc-category-cell">${renderCategoryDisplay(d)}</td>
           <td class="actions-cell">
-            <span class="category-slot">${renderCategoryButton(d)}</span>
             <button class="secondary download-btn">Download</button>
             <button class="danger remove-btn">Remove</button>
           </td>
@@ -107,7 +107,7 @@ function renderCategorySection(categoryName, docs) {
       </div>
       <table>
         <thead>
-          <tr><th>Document</th><th>Description</th><th>Doc Created</th><th>Uploaded</th><th></th></tr>
+          <tr><th>Document</th><th>Description</th><th>Doc Created</th><th>Uploaded</th><th>Category</th><th></th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
@@ -115,8 +115,12 @@ function renderCategorySection(categoryName, docs) {
   `;
 }
 
-function renderCategoryButton(doc) {
-  return `<button class="secondary category-btn" data-current="${escapeHtml(doc.category)}">Category</button>`;
+function renderCategoryDisplay(doc) {
+  return `<span class="category-value">${escapeHtml(doc.category)}</span>`;
+}
+
+function renderDescriptionDisplay(doc) {
+  return `<span class="description-value">${doc.description ? escapeHtml(doc.description) : "—"}</span>`;
 }
 
 function formatDocCreatedDate(value) {
@@ -135,19 +139,20 @@ function renderDocCreatedDisplay(doc) {
   return `<span class="doc-created-value">${formatted || "—"}</span>`;
 }
 
-// Clicking "Category" is how you change a document's category — the current
-// category is already obvious from which section the row lives in, so it's
-// an action button, not a permanently-visible control. Clicking it swaps
-// itself for a text input (with datalist autocomplete off the live in-use
-// category list) right in place; committing a new value saves it and the
-// whole list re-renders so the row moves to its new section.
+// Description, Doc Created, and Category all share one interaction: click
+// the displayed value in place, it swaps for an editable control, and it
+// saves and reverts to display automatically (no separate "edit" button for
+// any of them). Category still autocompletes off the live in-use category
+// list; committing a new category saves it and the whole list re-renders so
+// the row moves to its new section.
 function attachRowHandlers(doc) {
   const id = doc.id;
   const row = document.querySelector(`tr[data-id="${id}"]`);
   if (!row) return;
 
-  attachCategoryButtonHandler(row.querySelector(".category-slot"), doc);
+  attachDescriptionHandler(row.querySelector(".doc-description-cell"), doc);
   attachDocCreatedHandler(row.querySelector(".doc-created-cell"), doc);
+  attachCategoryHandler(row.querySelector(".doc-category-cell"), doc);
 
   row.querySelector(".download-btn").addEventListener("click", () => {
     window.location.href = `/api/admin/documents/${id}/download`;
@@ -164,23 +169,25 @@ function attachRowHandlers(doc) {
   });
 }
 
-function attachCategoryButtonHandler(categorySlot, doc) {
-  const categoryBtn = categorySlot.querySelector(".category-btn");
-  categoryBtn.addEventListener("click", () => openCategoryPicker(categorySlot, doc));
+function attachCategoryHandler(cell, doc) {
+  cell.addEventListener("click", () => {
+    // Ignore clicks that land on an already-open input.
+    if (cell.querySelector("input")) return;
+    openCategoryPicker(cell, doc);
+  });
 }
 
-function openCategoryPicker(categorySlot, doc) {
+function openCategoryPicker(cell, doc) {
   const current = doc.category;
-  categorySlot.innerHTML = `<input type="text" class="recategorize-input" list="category-datalist" value="${escapeHtml(current)}">`;
-  const input = categorySlot.querySelector("input");
+  cell.innerHTML = `<input type="text" class="recategorize-input" list="category-datalist" value="${escapeHtml(current)}">`;
+  const input = cell.querySelector("input");
   input.focus();
   input.select();
 
   let settled = false;
 
   function revert() {
-    categorySlot.innerHTML = renderCategoryButton(doc);
-    attachCategoryButtonHandler(categorySlot, doc);
+    cell.innerHTML = renderCategoryDisplay(doc);
   }
 
   async function commit() {
@@ -263,6 +270,61 @@ function openDocCreatedEditor(cell, doc) {
   input.addEventListener("blur", () => {
     if (!settled) revert();
   });
+}
+
+function attachDescriptionHandler(cell, doc) {
+  cell.addEventListener("click", () => {
+    // Ignore clicks that land on an already-open input.
+    if (cell.querySelector("input")) return;
+    openDescriptionEditor(cell, doc);
+  });
+}
+
+function openDescriptionEditor(cell, doc) {
+  const current = doc.description || "";
+  cell.innerHTML = `<input type="text" class="description-input" value="${escapeHtml(current)}">`;
+  const input = cell.querySelector("input");
+  input.focus();
+  input.select();
+
+  let settled = false;
+
+  function revert() {
+    cell.innerHTML = renderDescriptionDisplay(doc);
+  }
+
+  async function commit() {
+    if (settled) return;
+    settled = true;
+    const newValue = input.value.trim();
+    if (newValue === current) {
+      revert();
+      return;
+    }
+    const res = await fetch(`/api/admin/documents/${doc.id}/description`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: newValue }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showError(body.error || "Failed to update description.");
+      revert();
+      return;
+    }
+    loadDocuments();
+  }
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      input.blur();
+    } else if (e.key === "Escape") {
+      settled = true;
+      revert();
+    }
+  });
+  input.addEventListener("blur", commit);
 }
 
 init();

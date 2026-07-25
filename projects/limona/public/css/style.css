@@ -127,15 +127,52 @@ th { color: var(--color-muted); font-weight: 600; }
 
 .category-section { overflow-x: auto; }
 
-.actions-cell { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; white-space: nowrap; }
-.actions-cell .recategorize-input { margin-bottom: 0; width: 160px; }
+/* Fixed column widths applied per-table via nth-child so every category
+   section's table lines up with every other section's table, regardless of
+   that table's own content — this is the fix for the cross-section column
+   misalignment bug (each category renders as its own independent <table>,
+   so table-layout:auto sized each one differently). Description gets the
+   most room since it's the most substantive field; Document is next;
+   Doc Created/Uploaded/Category/actions share the rest compactly. */
+.category-section table { table-layout: fixed; }
+.category-section table th:nth-child(1),
+.category-section table td:nth-child(1) { width: 22%; }
+.category-section table th:nth-child(2),
+.category-section table td:nth-child(2) { width: 26%; }
+.category-section table th:nth-child(3),
+.category-section table td:nth-child(3) { width: 9%; }
+.category-section table th:nth-child(4),
+.category-section table td:nth-child(4) { width: 9%; }
+.category-section table th:nth-child(5),
+.category-section table td:nth-child(5) { width: 10%; }
+.category-section table th:nth-child(6),
+.category-section table td:nth-child(6) { width: 20%; }
+
+.category-section table td { overflow-wrap: break-word; }
+
+/* Document name reads better on one line, even if that means the column
+   scrolls slightly on very long filenames — Jason's preference over having
+   it wrap to a second line. */
+.category-section table td:nth-child(1) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Deliberately not display:flex — a flex display on a <td> breaks
+   table-layout:fixed column sizing in Chromium (the cell collapses to its
+   flex min-content width instead of the assigned column width, so button
+   content silently overflows past the cell). Plain inline-block buttons
+   with a small margin achieve the same compact side-by-side layout. */
+.actions-cell { white-space: nowrap; }
+.actions-cell button { padding: 7px 8px; font-size: 12px; margin-right: 6px; }
+.actions-cell button:last-child { margin-right: 0; }
+.recategorize-input { margin-bottom: 0; width: 100%; }
 
 .doc-name-link { color: var(--color-primary); font-weight: 600; text-decoration: none; }
 .doc-name-link:hover { text-decoration: underline; }
 
-.doc-created-cell { cursor: pointer; }
-.doc-created-cell .doc-created-input { margin-bottom: 0; }
-.doc-created-value { color: var(--color-text); }
+.doc-created-cell, .doc-description-cell, .doc-category-cell { cursor: pointer; }
+.doc-created-cell .doc-created-input,
+.doc-description-cell .description-input,
+.doc-category-cell .recategorize-input { margin-bottom: 0; width: 100%; box-sizing: border-box; }
+.doc-created-value, .description-value, .category-value { color: var(--color-text); }
 
 .page-header-row {
   display: flex;
@@ -393,6 +430,56 @@ a.button-link:hover { background: var(--color-primary-dark); }
   padding: 40px 20px;
   text-align: center;
   color: var(--color-muted);
+}
+
+/* Drag-and-drop file picker tile (used on the document and asset upload
+   pages). A real <input type="file"> stays in the DOM but visually hidden —
+   the tile just proxies clicks/drops to it. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dropzone {
+  border: 2px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 28px 16px;
+  text-align: center;
+  cursor: pointer;
+  margin-bottom: 14px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.dropzone.dropzone-active {
+  border-color: var(--color-primary);
+  background: var(--color-active-bg);
+}
+
+.dropzone-text {
+  display: block;
+  font-size: 14px;
+  color: var(--color-muted);
+}
+
+.dropzone-filenames {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--color-text);
+  font-weight: 600;
+  word-break: break-word;
 }
 
 /* Mobile: sidebar collapses to a top bar + horizontally-scrollable nav so

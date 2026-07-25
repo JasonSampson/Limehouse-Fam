@@ -20,7 +20,7 @@
       <p class="muted">Brand and reference files — logos, templates, calculators, and other files that aren't searched by chat. Just stored here for the team to find and download.</p>
 
       <div class="card">
-        <h2>Upload an asset</h2>
+        <h2>Upload an Asset</h2>
         <label for="upload-description">Description</label>
         <input type="text" id="upload-description" placeholder="e.g. Limehouse Plan pricing calculator" />
         <label for="upload-category">Category</label>
@@ -33,24 +33,23 @@
           <option value="Vendor"></option>
           <option value="Marketing"></option>
         </datalist>
-        <label for="upload-file">File</label>
-        <input type="file" id="upload-file" />
+        <label>File</label>
+        <div class="dropzone" id="upload-dropzone" tabindex="0" role="button" aria-label="Click to choose a file or drag and drop">
+          <span class="dropzone-text">Click to choose a file or drag &amp; drop</span>
+          <span class="dropzone-filenames" id="upload-dropzone-filenames"></span>
+        </div>
+        <input type="file" id="upload-file" class="visually-hidden" />
         <button id="upload-button">Upload</button>
         <div id="upload-status" class="muted" style="margin-top:10px;"></div>
       </div>
 
-      <div class="card">
-        <h2>Asset library</h2>
-        <table id="assets-table">
-          <thead>
-            <tr><th>Filename</th><th>Description</th><th>Category</th><th>Size</th><th>Uploaded</th><th></th></tr>
-          </thead>
-          <tbody id="assets-body"></tbody>
-        </table>
-      </div>
+      <h2>Asset Library</h2>
+      <datalist id="asset-category-datalist"></datalist>
+      <div id="assets-container"></div>
     </div>
   </div>
   <script src="/js/sidebar.js"></script>
+  <script src="/js/dropzone.js"></script>
   <script src="/js/assets.js"></script>
 </body>
 </html>

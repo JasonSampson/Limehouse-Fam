@@ -195,6 +195,30 @@ adminDocumentRoutes.patch("/api/admin/documents/:id/document-created-at", async 
   res.json({ ok: true });
 });
 
+// Unlike upload time (where a description is required), once a document
+// exists an admin can clear its description back out entirely — so, unlike
+// uploadFieldsSchema's description field, this one has no .min(1).
+const descriptionSchema = z.object({ description: z.string() });
+
+// Modeled directly on the category-patch route above — same shape/error
+// handling, just a different column.
+adminDocumentRoutes.patch("/api/admin/documents/:id/description", async (req, res) => {
+  const parsed = descriptionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
+    return;
+  }
+  const result = await getPool().query(
+    "UPDATE documents SET description = $1 WHERE id = $2 RETURNING id",
+    [parsed.data.description, req.params.id]
+  );
+  if (result.rows.length === 0) {
+    res.status(404).json({ error: "Document not found." });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 // "Remove" here means the document stops appearing/being retrievable —
 // marking it superseded-with-no-replacement is simplest and consistent with
 // the "don't hard-delete automatically" rule already used for re-uploads.

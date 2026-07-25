@@ -20,6 +20,15 @@ adminAssetRoutes.get("/api/admin/assets", async (_req, res) => {
   res.json({ assets: result.rows });
 });
 
+// Mirrors GET /api/admin/categories in adminDocumentRoutes.ts, but reads from
+// the assets table — Assets and Document Library have always used separate,
+// independent category sets (different tables/concepts), so this must not be
+// merged with the documents endpoint even though the shape is identical.
+adminAssetRoutes.get("/api/admin/asset-categories", async (_req, res) => {
+  const result = await getPool().query("SELECT DISTINCT category FROM assets ORDER BY category");
+  res.json({ categories: result.rows.map((r) => r.category) });
+});
+
 const uploadFieldsSchema = z.object({
   description: z.string().min(1, "A description is required."),
   category: z.string().min(1, "A category is required."),
@@ -70,6 +79,50 @@ adminAssetRoutes.get("/api/admin/assets/:id/download", async (req, res) => {
     return;
   }
   res.download(absPath, row.filename);
+});
+
+const assetCategorySchema = z.object({ category: z.string().min(1, "A category is required.") });
+
+// Mirrors adminDocumentRoutes.ts's PATCH /:id/category exactly (same shape,
+// same error handling) — an asset must always belong to some category, same
+// as documents, so empty string is rejected here too.
+adminAssetRoutes.patch("/api/admin/assets/:id/category", async (req, res) => {
+  const parsed = assetCategorySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
+    return;
+  }
+  const result = await getPool().query(
+    "UPDATE assets SET category = $1 WHERE id = $2 RETURNING id",
+    [parsed.data.category, req.params.id]
+  );
+  if (result.rows.length === 0) {
+    res.status(404).json({ error: "Asset not found." });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+// Unlike upload time (where a description is required), once an asset exists
+// an admin can clear its description back out entirely — same reasoning as
+// documents' equivalent route, so no .min(1) here.
+const assetDescriptionSchema = z.object({ description: z.string() });
+
+adminAssetRoutes.patch("/api/admin/assets/:id/description", async (req, res) => {
+  const parsed = assetDescriptionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
+    return;
+  }
+  const result = await getPool().query(
+    "UPDATE assets SET description = $1 WHERE id = $2 RETURNING id",
+    [parsed.data.description, req.params.id]
+  );
+  if (result.rows.length === 0) {
+    res.status(404).json({ error: "Asset not found." });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // Unlike documents (soft-delete via 'superseded' status, since retrieval

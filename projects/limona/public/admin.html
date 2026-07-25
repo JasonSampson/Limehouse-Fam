@@ -20,7 +20,7 @@
       <p class="muted">Add documents to the knowledge base so Limona can answer questions about them.</p>
 
       <div class="card">
-        <h2>Upload documents</h2>
+        <h2>Upload Documents</h2>
         <p class="muted">Select one file, or select many at once (ctrl/cmd-click, or select-all in a folder's file picker) to bulk-upload — all files in one batch go into the same category, description, and Doc Created date. Only .pdf, .docx, .xlsx, .csv, .txt, and .md are supported.</p>
         <label for="upload-category">Category</label>
         <input type="text" id="upload-category" list="category-datalist" placeholder="e.g. SOP, Company Info" />
@@ -29,14 +29,19 @@
         <input type="text" id="upload-description" placeholder="What is this document?" required />
         <label for="upload-doc-created-at">Doc Created (optional)</label>
         <input type="date" id="upload-doc-created-at" />
-        <label for="upload-files">File(s)</label>
-        <input type="file" id="upload-files" multiple accept=".pdf,.docx,.xlsx,.csv,.txt,.md" />
+        <label>File(s)</label>
+        <div class="dropzone" id="upload-dropzone" tabindex="0" role="button" aria-label="Click to choose a file or drag and drop">
+          <span class="dropzone-text">Click to choose a file or drag &amp; drop</span>
+          <span class="dropzone-filenames" id="upload-dropzone-filenames"></span>
+        </div>
+        <input type="file" id="upload-files" multiple accept=".pdf,.docx,.xlsx,.csv,.txt,.md" class="visually-hidden" />
         <button id="upload-button">Upload</button>
         <div id="upload-status" class="muted" style="margin-top:10px;"></div>
       </div>
     </div>
   </div>
   <script src="/js/sidebar.js"></script>
+  <script src="/js/dropzone.js"></script>
   <script src="/js/admin.js"></script>
 </body>
 </html>

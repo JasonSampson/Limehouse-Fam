@@ -32,6 +32,12 @@ async function init() {
   await loadCategories();
 }
 
+const uploadDropzone = initDropzone({
+  dropzoneId: "upload-dropzone",
+  inputId: "upload-files",
+  filenamesId: "upload-dropzone-filenames",
+});
+
 // Categories are free-form text now (see adminDocumentRoutes.ts) — the
 // category field here is a text input with autocomplete off the live
 // in-use category list, not a fixed dropdown.
@@ -101,6 +107,7 @@ document.getElementById("upload-button").addEventListener("click", async () => {
       statusEl.textContent = `Done: ${succeeded} ready, ${failed} failed. `;
     }
     document.getElementById("upload-files").value = "";
+    uploadDropzone.updateFilenames();
     statusEl.innerHTML += `<a href="/documents.html">View in Document Library</a>`;
     await loadCategories();
   } catch (err) {

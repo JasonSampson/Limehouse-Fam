@@ -9,6 +9,7 @@ declare global {
       user: {
         userId: number;
         email: string;
+        displayName: string;
         authenticatedAt: number;
         systemRoleKey: string | null;
       };
@@ -47,6 +48,7 @@ export async function requireSession(
   req.user = {
     userId: user.id,
     email: user.email,
+    displayName: user.display_name,
     authenticatedAt: payload.authenticatedAt,
     systemRoleKey: user.system_role_key,
   };

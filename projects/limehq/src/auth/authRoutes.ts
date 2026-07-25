@@ -251,7 +251,7 @@ router.get("/handoff", requireSession, async (req, res, next) => {
       throw new ApiError(503, `Target URL for '${app}' is not configured`);
     }
 
-    const token = await createHandoffToken(req.user.userId, req.user.email);
+    const token = await createHandoffToken(req.user.userId, req.user.email, req.user.displayName);
     // POST the token via a hidden form so it never appears in server logs or
     // the browser's URL bar (BLOCKER 4 — handoff token must not be a query param).
     // targetBase comes from our own env config; token is a JWT we just signed —

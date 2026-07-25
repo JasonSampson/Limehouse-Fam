@@ -10,8 +10,8 @@ function getHandoffKey(): Uint8Array {
   return new TextEncoder().encode(loadEnv().HANDOFF_TOKEN_SECRET);
 }
 
-export async function createHandoffToken(userId: number, email: string): Promise<string> {
-  return new SignJWT({ userId, email })
+export async function createHandoffToken(userId: number, email: string, name: string): Promise<string> {
+  return new SignJWT({ userId, email, name })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${HANDOFF_TTL_SECONDS}s`)
@@ -20,7 +20,7 @@ export async function createHandoffToken(userId: number, email: string): Promise
 
 export async function verifyHandoffToken(
   token: string,
-): Promise<{ userId: number; email: string }> {
+): Promise<{ userId: number; email: string; name: string }> {
   const { payload } = await jwtVerify(token, getHandoffKey());
-  return { userId: payload.userId as number, email: payload.email as string };
+  return { userId: payload.userId as number, email: payload.email as string, name: payload.name as string };
 }

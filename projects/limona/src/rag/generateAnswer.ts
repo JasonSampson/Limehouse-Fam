@@ -57,7 +57,14 @@ export async function generateAnswer(
 
   const contextBlock = chunks
     .map((c, i) => {
-      const sourceType = c.documentCategory === LAW_REFERENCE_CATEGORY ? "General Legal Reference" : "Company Policy";
+      // Case/whitespace-insensitive: category is free text (see
+      // adminDocumentRoutes.ts), so "law", "Law", " Laws " etc. should all
+      // still count — a casing mismatch here would silently disable the
+      // whole prioritization rule for that document.
+      const sourceType =
+        c.documentCategory.trim().toLowerCase() === LAW_REFERENCE_CATEGORY.toLowerCase()
+          ? "General Legal Reference"
+          : "Company Policy";
       return `[Excerpt ${i + 1} — ${sourceType} — from "${c.documentFilename}"${
         c.pageOrSectionLabel ? `, ${c.pageOrSectionLabel}` : ""
       }]\n${c.content}`;

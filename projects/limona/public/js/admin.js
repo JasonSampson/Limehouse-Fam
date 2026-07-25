@@ -53,7 +53,7 @@ async function loadCategories() {
 }
 
 document.getElementById("upload-button").addEventListener("click", async () => {
-  const category = document.getElementById("upload-category").value.trim();
+  let category = document.getElementById("upload-category").value.trim();
   const description = document.getElementById("upload-description").value.trim();
   const documentCreatedAt = document.getElementById("upload-doc-created-at").value || "";
   const files = document.getElementById("upload-files").files;
@@ -70,6 +70,23 @@ document.getElementById("upload-button").addEventListener("click", async () => {
   if (!description) {
     showError("A description is required.");
     return;
+  }
+
+  // "Laws" is a special category: Limona always treats it as general legal
+  // reference material and prioritizes company policy documents over it
+  // when answering (see generateAnswer.ts). A confirmation here catches an
+  // accidental miscategorization before it can quietly change how Limona
+  // answers questions.
+  const normalizedCategory = category.trim().toLowerCase();
+  if (normalizedCategory === "laws" || normalizedCategory === "law") {
+    const confirmed = confirm(
+      'You\'re uploading this as a "Laws" document. Limona always treats this category as general legal reference material (like a state or federal law) and will prefer your company\'s own policies over it when both are relevant.\n\nOnly continue if this really is a law or legal-reference document — not a Limehouse policy, lease, or SOP.'
+    );
+    if (!confirmed) return;
+    // Normalize to the canonical "Laws" spelling/casing so this actually
+    // joins the real category (and gets the safeguard above) instead of
+    // silently creating a near-duplicate category that doesn't.
+    category = "Laws";
   }
 
   statusEl.textContent = `Uploading ${files.length} file(s)...`;

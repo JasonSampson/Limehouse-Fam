@@ -4,6 +4,7 @@ import { requireLogin, requireAdmin } from "../auth/session.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
 import { periodToSnapshotLabel, resolvePeriod, quarterLabelToDateRange, type PeriodKey } from "../kpi/period.js";
 import { logError } from "../lib/logger.js";
+import { mapWithConcurrency } from "../lib/concurrency.js";
 import {
   fetchActiveManagedUnits,
   fetchActiveLeases,
@@ -23,6 +24,7 @@ import {
   nineNineComplianceExplainRows,
   reconciliationAccuracyExplainRows,
   rentProcessingAccuracyExplainRows,
+  summarizeRentProcessingAccuracy,
   type ReconciliationAccuracyInput,
 } from "../kpi/bookkeeperMetrics.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
@@ -237,13 +239,38 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
         return;
       }
       case "Rent Processing Accuracy": {
-        const activeLeases = await fetchActiveLeases();
-        const transactionsByLease = [];
-        for (const lease of activeLeases) {
-          transactionsByLease.push(await fetchLeaseTransactions(String(lease.Id)));
-        }
-        const rows = rentProcessingAccuracyExplainRows(transactionsByLease, from, to);
-        res.json({ kpiName, formula, rows });
+        const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
+        // Concurrency-limited, not fully sequential or fully parallel —
+        // fixed 2026-07-26, per Jason directly ("sure does take a long
+        // time to load"). Awaiting leases one at a time (~215 leases) was
+        // slow; firing all of them at once instead got Buildium to
+        // rate-limit us hard enough that even its own retry-with-backoff
+        // couldn't recover (CONFIRMED LIVE). A fixed cap of 10 in flight
+        // gets most of the speedup without tripping the limit.
+        const transactionsByLease = await mapWithConcurrency(activeLeases, 10, (lease) =>
+          fetchLeaseTransactions(String(lease.Id))
+        );
+        const summary = summarizeRentProcessingAccuracy(transactionsByLease, from, to);
+        const propertyIdByLeaseId = new Map(activeLeases.map((l) => [String(l.Id), String(l.PropertyId)]));
+        const rawRows = rentProcessingAccuracyExplainRows(transactionsByLease, from, to).map((r) => ({
+          ...r,
+          propertyId: propertyIdByLeaseId.get(r.leaseId) ?? "",
+        }));
+        const rows = withUnitNumber(
+          withPropertyAddress(rawRows, propertyAddressById(properties)),
+          unitNumberByLeaseId(activeLeases)
+        );
+        res.json({
+          kpiName,
+          formula,
+          rows,
+          from,
+          to,
+          paymentCount: summary.paymentCount,
+          operationalReversalCount: summary.operationalReversalCount,
+          nsfReversalCount: summary.nsfReversalCount,
+          activeLeaseCount: activeLeases.length,
+        });
         return;
       }
       case "Days on Market": {

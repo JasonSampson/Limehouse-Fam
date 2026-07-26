@@ -1005,10 +1005,19 @@ const buildiumVendorTaxInformationSchema = z.object({
   IncludeIn1099: z.boolean(),
 });
 
+// FirstName/LastName — ADDED 2026-07-26, per Jason directly: CONFIRMED LIVE
+// against real vendor records, Buildium only populates CompanyName for
+// company vendors (IsCompany: true) — an individual vendor (IsCompany:
+// false, e.g. a one-off 1099 referral-fee recipient) has CompanyName as an
+// empty string and their real name under FirstName/LastName instead. Every
+// display of a vendor's name needs to fall back to these, or individual
+// vendors show up blank.
 const buildiumVendorSchema = z.object({
   Id: z.number(),
   IsActive: z.boolean(),
   CompanyName: z.string().nullable(),
+  FirstName: z.string().nullable(),
+  LastName: z.string().nullable(),
   Category: buildiumVendorCategorySchema,
   VendorInsurance: buildiumVendorInsuranceSchema,
   TaxInformation: buildiumVendorTaxInformationSchema,

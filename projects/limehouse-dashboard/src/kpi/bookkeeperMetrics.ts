@@ -109,6 +109,26 @@ export function summarizeReconciliationAccuracy(
 const NSF_MEMO_PATTERN = /nsf|returned|bounced|insufficient|not sufficient|chargeback|declined/i;
 const NSF_FEE_WINDOW_DAYS = 5;
 
+// CONFIRMED LIVE 2026-07-26: Jason reported our count (208) didn't match
+// the vendor's real, unchanged number (203) on a quiet Sunday morning —
+// ruling out "just live data drift," the explanation used for every other
+// small discrepancy so far. Investigated directly: every active lease's
+// Payment transactions in the window included exactly 5 whose entire
+// Journal.Lines posted to GL account 5 ("Security Deposit Liability"),
+// memo literally "Security Deposit" — a deposit isn't rent, and isn't a
+// "payment" this KPI should be scoring at all. Excluding those (and any
+// symmetric all-deposit reversal, for the same reason) brings the count
+// to exactly 203, matching the vendor. Same GL-account-based approach
+// already established for RENT_INCOME_GL_ACCOUNT_ID in rentCollection.ts,
+// not memo-text matching — a transaction is "deposit-only" if it has at
+// least one line and every line hits this account.
+const SECURITY_DEPOSIT_LIABILITY_GL_ACCOUNT_ID = 5;
+
+function isSecurityDepositOnly(t: BuildiumLeaseTransaction): boolean {
+  const lines = t.Journal?.Lines ?? [];
+  return lines.length > 0 && lines.every((l) => l.GLAccount.Id === SECURITY_DEPOSIT_LIABILITY_GL_ACCOUNT_ID);
+}
+
 export interface RentProcessingAccuracySummary {
   accuracyPercent: number | null;
   paymentCount: number;
@@ -134,8 +154,8 @@ export function summarizeRentProcessingAccuracy(
 
   for (const transactions of transactionsByLease) {
     const inPeriod = transactions.filter((t) => inRange(t.Date));
-    const payments = inPeriod.filter((t) => t.TransactionType === "Payment");
-    const reversals = inPeriod.filter((t) => t.TransactionType === "Reversed Payment");
+    const payments = inPeriod.filter((t) => t.TransactionType === "Payment" && !isSecurityDepositOnly(t));
+    const reversals = inPeriod.filter((t) => t.TransactionType === "Reversed Payment" && !isSecurityDepositOnly(t));
     const nsfFeeDates = inPeriod
       .filter((t) => /nsf/i.test(t.Journal?.Memo ?? ""))
       .map((t) => new Date(t.Date).getTime());
@@ -188,15 +208,52 @@ export interface VendorComplianceSummary {
   usedFallbackToAllActive: boolean;
 }
 
+// ADDED 2026-07-26 per Jason directly, confirmed against Buildium's own
+// vendor UI (a vendor's Summary tab, "1099-NEC tax filing" section has a
+// real "Exclude from 1099" checkbox). A vendor with that box checked
+// doesn't require a tax ID or insurance on file at all per Jason, so it
+// shouldn't be counted against Vendor Compliance either way — scoped OUT
+// entirely, not just hidden from the drill-down. TaxInformation.IncludeIn1099
+// is the real API field behind that checkbox (false = "Exclude from 1099"
+// is checked) — same field 1099 Compliance already uses to scope itself
+// down to vendors that require a 1099, which is why that KPI didn't need
+// this same change.
+function excludeMarkedExcludeFrom1099(vendors: BuildiumVendor[]): BuildiumVendor[] {
+  return vendors.filter((v) => v.TaxInformation.IncludeIn1099);
+}
+
+// A vendor's real display name — CompanyName for a company vendor, else
+// FirstName + LastName for an individual (Buildium leaves CompanyName as an
+// empty string for those), else a last-resort id so a row is never blank.
+export function vendorDisplayName(v: BuildiumVendor): string {
+  if (v.CompanyName) return v.CompanyName;
+  const personName = [v.FirstName, v.LastName].filter(Boolean).join(" ").trim();
+  return personName || `Vendor #${v.Id}`;
+}
+
+// CONFIRMED 2026-07-26 per Jason directly: vendors in Buildium's "Contractor
+// - RE Contractor (1099 Work)" category are individuals paid a one-off
+// referral/1099 fee, not maintenance/trade contractors doing ongoing work on
+// a property — they don't carry liability insurance for that kind of work,
+// so Vendor Compliance for this one category only requires a tax ID on
+// file, not current insurance too.
+const NO_INSURANCE_REQUIRED_CATEGORY = "Contractor - RE Contractor (1099 Work)";
+
+function vendorRequiresInsurance(v: BuildiumVendor): boolean {
+  return v.Category.Name !== NO_INSURANCE_REQUIRED_CATEGORY;
+}
+
+function isVendorCompliant(v: BuildiumVendor, today: Date): boolean {
+  if (!v.TaxInformation.TaxPayerId) return false;
+  if (!vendorRequiresInsurance(v)) return true;
+  return !!v.VendorInsurance.ExpirationDate && new Date(v.VendorInsurance.ExpirationDate) > today;
+}
+
 export function summarizeVendorCompliance(vendors: BuildiumVendor[]): VendorComplianceSummary {
-  const { scoped, usedFallback } = scopeMaintenanceVendors(vendors);
+  const { scoped: maintenanceScoped, usedFallback } = scopeMaintenanceVendors(vendors);
+  const scoped = excludeMarkedExcludeFrom1099(maintenanceScoped);
   const today = new Date();
-  const compliant = scoped.filter(
-    (v) =>
-      !!v.TaxInformation.TaxPayerId &&
-      !!v.VendorInsurance.ExpirationDate &&
-      new Date(v.VendorInsurance.ExpirationDate) > today
-  );
+  const compliant = scoped.filter((v) => isVendorCompliant(v, today));
   return {
     compliancePercent: scoped.length > 0 ? roundPercent((compliant.length / scoped.length) * 100) : null,
     compliantCount: compliant.length,
@@ -234,24 +291,40 @@ export interface VendorComplianceExplainRow {
   category: string | null;
   hasTaxPayerId: boolean;
   insuranceExpirationDate: string | null;
+  // insuranceCurrent — carried separately from `compliant` so the frontend
+  // can tell "insurance expired" apart from "insurance was never on file"
+  // apart from "irrelevant because the tax ID is what's actually missing",
+  // using the SAME today-reference this was computed against server-side
+  // (avoids the frontend re-deriving its own "today" and drifting a day
+  // apart from this at a midnight boundary).
+  insuranceCurrent: boolean;
+  // insuranceRequired — false for the "RE Contractor (1099 Work)" category
+  // (see NO_INSURANCE_REQUIRED_CATEGORY above), so the frontend's reason
+  // text doesn't fault a vendor for something this KPI doesn't ask of them.
+  insuranceRequired: boolean;
   compliant: boolean;
 }
 
 export function vendorComplianceExplainRows(vendors: BuildiumVendor[]): VendorComplianceExplainRow[] {
-  const { scoped } = scopeMaintenanceVendors(vendors);
+  const { scoped: maintenanceScoped } = scopeMaintenanceVendors(vendors);
+  const scoped = excludeMarkedExcludeFrom1099(maintenanceScoped);
   const today = new Date();
-  return scoped.map((v) => {
-    const hasTaxPayerId = !!v.TaxInformation.TaxPayerId;
-    const insuranceExpirationDate = v.VendorInsurance.ExpirationDate;
-    const insuranceCurrent = !!insuranceExpirationDate && new Date(insuranceExpirationDate) > today;
-    return {
-      vendorName: v.CompanyName ?? `Vendor #${v.Id}`,
-      category: v.Category.Name,
-      hasTaxPayerId,
-      insuranceExpirationDate,
-      compliant: hasTaxPayerId && insuranceCurrent,
-    };
-  });
+  return scoped
+    .map((v) => {
+      const hasTaxPayerId = !!v.TaxInformation.TaxPayerId;
+      const insuranceExpirationDate = v.VendorInsurance.ExpirationDate;
+      const insuranceCurrent = !!insuranceExpirationDate && new Date(insuranceExpirationDate) > today;
+      return {
+        vendorName: vendorDisplayName(v),
+        category: v.Category.Name,
+        hasTaxPayerId,
+        insuranceExpirationDate,
+        insuranceCurrent,
+        insuranceRequired: vendorRequiresInsurance(v),
+        compliant: isVendorCompliant(v, today),
+      };
+    })
+    .sort((a, b) => a.vendorName.localeCompare(b.vendorName));
 }
 
 export interface NineNineComplianceExplainRow {
@@ -267,7 +340,7 @@ export function nineNineComplianceExplainRows(vendors: BuildiumVendor[]): NineNi
   return scoped
     .filter((v) => v.TaxInformation.IncludeIn1099)
     .map((v) => ({
-      vendorName: v.CompanyName ?? `Vendor #${v.Id}`,
+      vendorName: vendorDisplayName(v),
       category: v.Category.Name,
       includeIn1099: true,
       hasTaxPayerId: !!v.TaxInformation.TaxPayerId,
@@ -363,8 +436,17 @@ export interface RentProcessingAccuracyExplainRow {
   leaseId: string;
   date: string;
   amount: number;
-  classification: "operational reversal" | "NSF (excluded)";
-  memo: string | null;
+  isOperational: boolean;
+  // category — ADDED 2026-07-26, per Jason directly, against a real vendor
+  // screenshot: display-ready text for the drill-down's Category column.
+  // The NSF wording + "(matched NSF fee)" reason is confirmed live; the
+  // "(matched NSF memo)" reason and the operational-reversal wording are
+  // NOT yet confirmed against a screenshot (this account has 0 operational
+  // reversals right now, and every real NSF example seen so far matched
+  // via the fee-proximity rule, not a direct memo match) — built in the
+  // same style as a reasonable default, to be corrected if a real example
+  // ever shows otherwise.
+  category: string;
 }
 
 export function rentProcessingAccuracyExplainRows(
@@ -381,7 +463,7 @@ export function rentProcessingAccuracyExplainRows(
   const rows: RentProcessingAccuracyExplainRow[] = [];
   for (const transactions of transactionsByLease) {
     const inPeriod = transactions.filter((t) => inRange(t.Date));
-    const reversals = inPeriod.filter((t) => t.TransactionType === "Reversed Payment");
+    const reversals = inPeriod.filter((t) => t.TransactionType === "Reversed Payment" && !isSecurityDepositOnly(t));
     const nsfFeeDates = inPeriod
       .filter((t) => /nsf/i.test(t.Journal?.Memo ?? ""))
       .map((t) => new Date(t.Date).getTime());
@@ -393,12 +475,15 @@ export function rentProcessingAccuracyExplainRows(
         (feeTime) => Math.abs(feeTime - reversalTime) <= NSF_FEE_WINDOW_DAYS * 24 * 60 * 60 * 1000
       );
       const isNsf = memoMatchesNsf || nearNsfFee;
+      const category = isNsf
+        ? `NSF / bounced rent — informational (matched NSF ${nearNsfFee ? "fee" : "memo"})`
+        : "Operational reversal — counted against accuracy";
       rows.push({
         leaseId: String(reversal.LeaseId),
         date: reversal.Date,
         amount: reversal.TotalAmount,
-        classification: isNsf ? "NSF (excluded)" : "operational reversal",
-        memo: reversal.Journal?.Memo ?? null,
+        isOperational: !isNsf,
+        category,
       });
     }
   }

@@ -3,8 +3,11 @@ import {
   summarizeReconciliationAccuracy,
   reconciliationAccuracyExplainRows,
   summarizeRentProcessingAccuracy,
+  rentProcessingAccuracyExplainRows,
   scopeMaintenanceVendors,
   summarizeVendorCompliance,
+  vendorComplianceExplainRows,
+  vendorDisplayName,
   summarize1099Compliance,
   type ReconciliationAccuracyInput,
 } from "../../src/kpi/bookkeeperMetrics.js";
@@ -19,6 +22,8 @@ function vendor(overrides: Partial<BuildiumVendor>): BuildiumVendor {
     Id: 1,
     IsActive: true,
     CompanyName: "Test Vendor",
+    FirstName: null,
+    LastName: null,
     Category: { Id: 1, Name: "Contractors - Plumbing" },
     VendorInsurance: { Provider: null, PolicyNumber: null, ExpirationDate: null },
     TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: false },
@@ -237,12 +242,98 @@ describe("summarizeRentProcessingAccuracy", () => {
     expect(result.accuracyPercent).toBeNull();
   });
 
+  // CONFIRMED LIVE 2026-07-26: our real count (208) didn't match the
+  // vendor's real, unchanged count (203) on a quiet Sunday morning with no
+  // new activity -- traced to 5 real "Payment" transactions whose entire
+  // Journal.Lines posted to GL account 5 (Security Deposit Liability), not
+  // rent. A deposit isn't rent and shouldn't count toward this KPI at all.
+  it("excludes a payment whose entire Journal.Lines is a security deposit, not rent", () => {
+    const leaseTransactions = [
+      [
+        txn({ TransactionType: "Payment", Date: "2026-06-05" }),
+        {
+          Id: 2,
+          LeaseId: 1,
+          Date: "2026-06-09",
+          TransactionType: "Payment" as const,
+          TotalAmount: -1650,
+          Journal: { Memo: "Security Deposit", Lines: [{ GLAccount: { Id: 5, Name: "Security Deposit Liability" }, Amount: -1650 }] },
+        },
+      ],
+    ];
+    const result = summarizeRentProcessingAccuracy(leaseTransactions, "2026-06-01", "2026-06-30");
+    expect(result.paymentCount).toBe(1);
+  });
+
+  it("still counts a payment that includes both rent and a non-deposit fee line", () => {
+    const leaseTransactions = [
+      [
+        {
+          Id: 1,
+          LeaseId: 1,
+          Date: "2026-06-05",
+          TransactionType: "Payment" as const,
+          TotalAmount: -1200,
+          Journal: {
+            Memo: "by Jane Doe",
+            Lines: [
+              { GLAccount: { Id: 3, Name: "Rent Income" }, Amount: -1100 },
+              { GLAccount: { Id: 8, Name: "Late Fee Income" }, Amount: -100 },
+            ],
+          },
+        },
+      ],
+    ];
+    const result = summarizeRentProcessingAccuracy(leaseTransactions, "2026-06-01", "2026-06-30");
+    expect(result.paymentCount).toBe(1);
+  });
+
   it("ignores transactions outside the requested date range", () => {
     const leaseTransactions = [
       [txn({ TransactionType: "Payment", Date: "2026-05-15" }), txn({ TransactionType: "Payment", Date: "2026-06-10" })],
     ];
     const result = summarizeRentProcessingAccuracy(leaseTransactions, "2026-06-01", "2026-06-30");
     expect(result.paymentCount).toBe(1);
+  });
+});
+
+describe("rentProcessingAccuracyExplainRows", () => {
+  it("marks an operational reversal as not-NSF, counted against accuracy", () => {
+    const leaseTransactions = [
+      [
+        txn({ LeaseId: 1, TransactionType: "Payment", Date: "2026-06-05" }),
+        txn({ LeaseId: 1, TransactionType: "Reversed Payment", Date: "2026-06-12", TotalAmount: 500, memo: "Processing error, redo" }),
+      ],
+    ];
+    const rows = rentProcessingAccuracyExplainRows(leaseTransactions, "2026-06-01", "2026-06-30");
+    expect(rows).toEqual([
+      { leaseId: "1", date: "2026-06-12", amount: 500, isOperational: true, category: "Operational reversal — counted against accuracy" },
+    ]);
+  });
+
+  it("labels an NSF-fee-matched reversal with the confirmed vendor wording", () => {
+    const leaseTransactions = [
+      [
+        txn({ LeaseId: 1, TransactionType: "Payment", Date: "2026-06-01" }),
+        txn({ LeaseId: 1, TransactionType: "Charge", Date: "2026-06-03", memo: "NSF Fee" }),
+        txn({ LeaseId: 1, TransactionType: "Reversed Payment", Date: "2026-06-04", TotalAmount: 880, memo: "Reversal" }),
+      ],
+    ];
+    const rows = rentProcessingAccuracyExplainRows(leaseTransactions, "2026-06-01", "2026-06-30");
+    expect(rows).toEqual([
+      { leaseId: "1", date: "2026-06-04", amount: 880, isOperational: false, category: "NSF / bounced rent — informational (matched NSF fee)" },
+    ]);
+  });
+
+  it("labels a direct-memo-matched NSF reversal distinctly from a fee-matched one", () => {
+    const leaseTransactions = [
+      [
+        txn({ LeaseId: 1, TransactionType: "Payment", Date: "2026-06-05" }),
+        txn({ LeaseId: 1, TransactionType: "Reversed Payment", Date: "2026-06-06", TotalAmount: 200, memo: "REVERSED - Balance is not sufficient to cover value of transaction." }),
+      ],
+    ];
+    const rows = rentProcessingAccuracyExplainRows(leaseTransactions, "2026-06-01", "2026-06-30");
+    expect(rows[0].category).toBe("NSF / bounced rent — informational (matched NSF memo)");
   });
 });
 
@@ -273,10 +364,10 @@ describe("summarizeVendorCompliance", () => {
     const vendors = [
       vendor({
         Id: 1,
-        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: false },
+        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true },
         VendorInsurance: { Provider: "X", PolicyNumber: "1", ExpirationDate: futureDate.toISOString().slice(0, 10) },
       }),
-      vendor({ Id: 2, TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: false } }),
+      vendor({ Id: 2, TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true } }),
     ];
     const result = summarizeVendorCompliance(vendors);
     expect(result).toMatchObject({ compliantCount: 1, scopedCount: 2, compliancePercent: 50 });
@@ -286,12 +377,118 @@ describe("summarizeVendorCompliance", () => {
     const vendors = [
       vendor({
         Id: 1,
-        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: false },
+        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true },
         VendorInsurance: { Provider: "X", PolicyNumber: "1", ExpirationDate: "2020-01-01" },
       }),
     ];
     const result = summarizeVendorCompliance(vendors);
     expect(result.compliantCount).toBe(0);
+  });
+
+  // ADDED 2026-07-26 per Jason directly: a vendor with Buildium's "Exclude
+  // from 1099" box checked (IncludeIn1099: false) doesn't need a tax ID or
+  // insurance at all, so it must be scoped out of Vendor Compliance
+  // entirely -- not just excluded from the numerator/denominator's
+  // "requiring" set the way 1099 Compliance already does it, but dropped
+  // from scopedCount too.
+  it("excludes a vendor with Exclude from 1099 checked from the scope entirely", () => {
+    const vendors = [
+      vendor({
+        Id: 1,
+        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true },
+        VendorInsurance: { Provider: "X", PolicyNumber: "1", ExpirationDate: "2099-01-01" },
+      }),
+      vendor({ Id: 2, TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: false } }),
+    ];
+    const result = summarizeVendorCompliance(vendors);
+    expect(result).toMatchObject({ compliantCount: 1, scopedCount: 1, compliancePercent: 100 });
+  });
+
+  // ADDED 2026-07-26 per Jason directly: an individual "RE Contractor (1099
+  // Work)" vendor doesn't carry liability insurance for one-off referral
+  // work, so a tax ID alone should make them compliant.
+  it("counts an RE Contractor (1099 Work) vendor compliant on tax ID alone, no insurance needed", () => {
+    const vendors = [
+      vendor({
+        Id: 1,
+        Category: { Id: 71140, Name: "Contractor - RE Contractor (1099 Work)" },
+        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true },
+        VendorInsurance: { Provider: null, PolicyNumber: null, ExpirationDate: null },
+      }),
+    ];
+    const result = summarizeVendorCompliance(vendors);
+    expect(result).toMatchObject({ compliantCount: 1, scopedCount: 1, compliancePercent: 100 });
+  });
+
+  it("still requires a tax ID for an RE Contractor (1099 Work) vendor even without insurance", () => {
+    const vendors = [
+      vendor({
+        Id: 1,
+        Category: { Id: 71140, Name: "Contractor - RE Contractor (1099 Work)" },
+        TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true },
+      }),
+    ];
+    const result = summarizeVendorCompliance(vendors);
+    expect(result.compliantCount).toBe(0);
+  });
+});
+
+describe("vendorDisplayName", () => {
+  it("prefers CompanyName when present", () => {
+    expect(vendorDisplayName(vendor({ CompanyName: "Acme LLC", FirstName: "Jane", LastName: "Doe" }))).toBe("Acme LLC");
+  });
+
+  // CONFIRMED LIVE 2026-07-26: an individual vendor (e.g. a one-off 1099
+  // referral-fee recipient) has CompanyName as an empty string in Buildium,
+  // not null -- must fall back to FirstName/LastName, not just `??`.
+  it("falls back to FirstName + LastName when CompanyName is an empty string", () => {
+    expect(vendorDisplayName(vendor({ CompanyName: "", FirstName: "Jane", LastName: "Doe" }))).toBe("Jane Doe");
+  });
+
+  it("falls back to a Vendor #id label when no name is available at all", () => {
+    expect(vendorDisplayName(vendor({ Id: 42, CompanyName: "", FirstName: null, LastName: null }))).toBe("Vendor #42");
+  });
+});
+
+describe("vendorComplianceExplainRows", () => {
+  it("sorts rows alphabetically by vendor name", () => {
+    const vendors = [
+      vendor({ Id: 1, CompanyName: "Zebra Contractors", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true } }),
+      vendor({ Id: 2, CompanyName: "Atlas Key Shack", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true } }),
+    ];
+    const rows = vendorComplianceExplainRows(vendors);
+    expect(rows.map((r) => r.vendorName)).toEqual(["Atlas Key Shack", "Zebra Contractors"]);
+  });
+
+  it("excludes a vendor with Exclude from 1099 checked", () => {
+    const vendors = [
+      vendor({ Id: 1, CompanyName: "Included Co", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true } }),
+      vendor({ Id: 2, CompanyName: "Excluded Co", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: false } }),
+    ];
+    const rows = vendorComplianceExplainRows(vendors);
+    expect(rows.map((r) => r.vendorName)).toEqual(["Included Co"]);
+  });
+
+  it("reports insuranceCurrent false for an expired policy and true for a future one", () => {
+    const vendors = [
+      vendor({
+        Id: 1,
+        CompanyName: "Expired Co",
+        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true },
+        VendorInsurance: { Provider: "X", PolicyNumber: "1", ExpirationDate: "2020-01-01" },
+      }),
+      vendor({
+        Id: 2,
+        CompanyName: "Current Co",
+        TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true },
+        VendorInsurance: { Provider: "X", PolicyNumber: "1", ExpirationDate: "2099-01-01" },
+      }),
+    ];
+    const rows = vendorComplianceExplainRows(vendors);
+    const expired = rows.find((r) => r.vendorName === "Expired Co");
+    const current = rows.find((r) => r.vendorName === "Current Co");
+    expect(expired?.insuranceCurrent).toBe(false);
+    expect(current?.insuranceCurrent).toBe(true);
   });
 });
 

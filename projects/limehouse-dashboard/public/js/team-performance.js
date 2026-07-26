@@ -145,6 +145,23 @@ function formatMMDDYYYY(isoDate) {
   return `${month}/${day}/${year}`;
 }
 
+// CONFIRMED against a real vendor screenshot (2026-07-26): a plain-English
+// reason ("missing TaxPayerId + no insurance on file", "no insurance on
+// file", "insurance expired MM/DD/YYYY") in place of a flat Yes/No
+// Compliant column. `r.insuranceCurrent` is carried from the backend
+// (computed against the same today-reference as `r.compliant`) rather than
+// re-derived here, so this never disagrees with the row's own compliant flag.
+function vendorComplianceReason(r) {
+  if (r.compliant) return "Compliant";
+  const reasons = [];
+  if (!r.hasTaxPayerId) reasons.push("missing Tax Payer ID");
+  if (r.insuranceRequired) {
+    if (!r.insuranceExpirationDate) reasons.push("no insurance on file");
+    else if (!r.insuranceCurrent) reasons.push(`insurance expired ${formatMMDDYYYY(r.insuranceExpirationDate)}`);
+  }
+  return reasons.join(" + ");
+}
+
 function renderUnlockedView() {
   const content = document.getElementById("page-content");
   const period = tpRolesData.period;
@@ -405,18 +422,18 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Status", render: (r) => (r.onTrack ? "on track" : `<span class="recon-not-reconciled">Not Reconciled</span>`) },
   ],
   "Rent Processing Accuracy": [
-    { label: "Lease", key: "leaseId" },
-    { label: "Date", key: "date" },
+    { label: "Property", render: (r) => r.propertyAddress ?? "—" },
+    { label: "Unit", render: (r) => r.unitNumber ?? "—" },
+    { label: "Reversed Date", render: (r) => formatMMDDYYYY(r.date) },
     { label: "Amount", render: (r) => formatCurrency(r.amount) },
-    { label: "Classification", key: "classification" },
-    { label: "Memo", render: (r) => r.memo ?? "—" },
+    { label: "Category", key: "category" },
   ],
   "Vendor Compliance": [
     { label: "Vendor", key: "vendorName" },
     { label: "Category", render: (r) => r.category ?? "—" },
-    { label: "Tax ID on File", render: (r) => (r.hasTaxPayerId ? "Yes" : "No") },
-    { label: "Insurance Expires", render: (r) => (r.insuranceExpirationDate ? r.insuranceExpirationDate.slice(0, 10) : "—") },
-    { label: "Compliant", render: (r) => (r.compliant ? "Yes" : "No") },
+    { label: "Tax Payer ID", render: (r) => (r.hasTaxPayerId ? "yes" : "no") },
+    { label: "Insurance Expires", render: (r) => formatMMDDYYYY(r.insuranceExpirationDate) },
+    { label: "Status", render: (r) => vendorComplianceReason(r) },
   ],
   "1099 Compliance": [
     { label: "Vendor", key: "vendorName" },
@@ -542,6 +559,20 @@ const KPI_SUBTITLE_BUILDERS = {
     if (expected === 0) return "No completed months in this period yet";
     return `${done}/${expected} months completed -- target ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
   },
+  // CONFIRMED against a real vendor screenshot (2026-07-26): "0 operational
+  // reversals ÷ 203 payments within This month · Jul 1 – Jul 26, 2026 =
+  // 100% clean · 4 NSF/bounced excluded · target 100%" -- window text uses
+  // OUR real quarter-to-date window (same "describe our actual window"
+  // rule as Reconciliation Accuracy above), not the vendor's literal
+  // "This month" wording.
+  "Rent Processing Accuracy": (result, kpi) => {
+    const windowLabel = `${formatQuarterLabel(tpActiveQuarter)} · ${formatDateRange({ from: result.from, to: result.to })}`;
+    // "100% clean", not "100.0%" -- confirmed against a real vendor
+    // screenshot: whole-number accuracy drops the decimal here (unlike
+    // e.g. Property Readiness's confirmed "76.1%", which keeps it).
+    const accuracyText = Number.isInteger(kpi.actualValue) ? `${kpi.actualValue}%` : formatKpiActual(kpi);
+    return `${result.operationalReversalCount} operational reversals ÷ ${result.paymentCount} payments within ${windowLabel} = ${accuracyText} clean · ${result.nsfReversalCount} NSF/bounced excluded · target ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
   // CONFIRMED against a real vendor screenshot (2026-07-20): "76.1% on
   // time (51/67) -- target 100%" -- note the target has NO ">="/"≥"
   // symbol here, a third distinct subtitle style alongside Occupancy's
@@ -560,6 +591,17 @@ const KPI_SUBTITLE_BUILDERS = {
     const within = result.rows.filter((r) => r.within24BusinessHours).length;
     const total = result.rows.length;
     return `Avg ${kpi.actualValue} hours -- ${within}/${total} within 24 biz hours -- target <=${Math.round(kpi.targetValue)}h`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-26): "32 compliant
+  // ÷ 58 maintenance/trade vendors (Category starts with "Contractor") =
+  // 55.2% · target 100%". The real compliant/scoped counts now come from
+  // the drill-down rows themselves (post exclude-from-1099 filter, per
+  // Jason 2026-07-26), so this stays correct even though it changes the
+  // vendor's own screenshot numbers slightly going forward.
+  "Vendor Compliance": (result, kpi) => {
+    const compliant = result.rows.filter((r) => r.compliant).length;
+    const scoped = result.rows.length;
+    return `${compliant} compliant ÷ ${scoped} maintenance/trade vendors (Category starts with "Contractor") = ${formatKpiActual(kpi)} · target ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
   },
 };
 
@@ -598,6 +640,23 @@ const KPI_NOTE_BUILDERS = {
     const zeroBalanceExcludedCount = result.rows.filter((r) => r.excluded && !r.externallyLinked).length;
     const windowLabel = `${formatQuarterLabel(tpActiveQuarter)} · ${formatDateRange({ from: result.from, to: result.to })}`;
     return `Formula: Across active bank accounts, count how many of the ${expectedMonths} completed month(s) inside ${windowLabel} have a finished reconciliation (StatementEndingDate falls in that month, IsFinished=true). Accuracy = done ÷ expected. A partial current month is not yet reconcilable and is not counted. Accounts with ZERO finished reconciliations AND a $0 balance are excluded entirely (nothing to reconcile) — ${zeroBalanceExcludedCount} excluded. Externally-linked (bank-feed) accounts are also excluded entirely, since Buildium's API can't confirm their reconciliation status even though they may genuinely be reconciled — ${externallyLinkedCount} excluded. Source: bank_accounts/reconciliations tables, synced nightly from Buildium /v1/bankaccounts and /v1/bankaccounts/{id}/reconciliations.`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-26), same "describe
+  // our actual window" treatment as Reconciliation Accuracy above.
+  "Rent Processing Accuracy": (result) => {
+    const windowLabel = `${formatQuarterLabel(tpActiveQuarter)} · ${formatDateRange({ from: result.from, to: result.to })}`;
+    const totalReversals = result.operationalReversalCount + result.nsfReversalCount;
+    return `Formula: 1 − (operational ReversePayment count ÷ Payment count) across every active lease, within ${windowLabel}. NSF / bounced / charged-back / returned reversals are tenant-driven (not a processing error) and are EXCLUDED from the accuracy %, but still listed here as informational. A reversal is classified NSF if its memo matches NSF/returned/bounced/insufficient/chargeback/declined OR it is within 5 days of an NSF fee on the same lease. Of ${totalReversals} total reversals: ${result.operationalReversalCount} operational (counted), ${result.nsfReversalCount} NSF (excluded). Source: Buildium /v1/leases/{leaseId}/transactions, TransactionTypeEnum = Payment / ReversePayment. ${result.activeLeaseCount} active leases checked.`;
+  },
+  // Scope/formula wording CONFIRMED against a real vendor screenshot
+  // (2026-07-26). The exclude-from-1099 sentence is OUR OWN addition, not
+  // in that screenshot -- per Jason directly (2026-07-26), a vendor with
+  // Buildium's "Exclude from 1099" box checked (1099-NEC tax filing section
+  // on the vendor's own Summary tab) doesn't need a tax ID or insurance at
+  // all, so it's now scoped out of this KPI entirely, same as the
+  // maintenance-category and active-status scoping already documented here.
+  "Vendor Compliance": () => {
+    return `Scope: maintenance/trade vendors (Category starts with "Contractor"). Buildium's ?statuses=Active filter is unreliable so vendors are re-filtered on each record's own IsActive flag (inactive vendors dropped). Maintenance/trade vendors are identified by the built-in vendor Category field (names starting with "Contractor", e.g. Contractors - Plumbing/HVAC/Electrical/Roofing); non-service expense categories (Restaurants, Gas Stations, Suppliers, Travel, etc.) are excluded. If no maintenance categories are found, the metric falls back to all active vendors. Vendors with "Exclude from 1099" checked in Buildium (TaxInformation.IncludeIn1099 = false) are excluded entirely -- they don't require a tax ID or insurance on file. Formula: scoped vendors where Tax Payer ID is populated AND (VendorInsurance.ExpirationDate > today OR the vendor's Category is "Contractor - RE Contractor (1099 Work)", which doesn't require insurance for this kind of one-off referral work), ÷ total scoped vendors. Source: Buildium /v1/vendors, reading IsActive, Category.Name, TaxInformation.TaxPayerId, TaxInformation.IncludeIn1099 and VendorInsurance.ExpirationDate.`;
   },
 };
 

@@ -193,11 +193,29 @@ function openCategoryPicker(cell, doc) {
   async function commit() {
     if (settled) return;
     settled = true;
-    const newCategory = input.value.trim();
+    let newCategory = input.value.trim();
     if (!newCategory || newCategory === current) {
       revert();
       return;
     }
+
+    // Same safeguard as the upload page (admin.js): "Laws" gets special
+    // treatment in generateAnswer.ts (deprioritized vs. company policy), so
+    // recategorizing a document into it — or a near-miss spelling that
+    // would silently create a duplicate, uncaught category — needs the
+    // same confirm-and-normalize step here too.
+    const normalized = newCategory.toLowerCase();
+    if (normalized === "laws" || normalized === "law") {
+      const confirmed = confirm(
+        'You\'re changing this document\'s category to "Laws". Limona always treats this category as general legal reference material (like a state or federal law) and will prefer your company\'s own policies over it when both are relevant.\n\nOnly continue if this really is a law or legal-reference document — not a Limehouse policy, lease, or SOP.'
+      );
+      if (!confirmed) {
+        revert();
+        return;
+      }
+      newCategory = "Laws";
+    }
+
     const res = await fetch(`/api/admin/documents/${doc.id}/category`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

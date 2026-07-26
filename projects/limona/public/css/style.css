@@ -214,6 +214,9 @@ th { color: var(--color-muted); font-weight: 600; }
 .top-q-promote { margin-top: 12px; padding: 8px 12px; background: #f3f8ef; border: 1px solid #dbe9d3; border-radius: 6px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
 .top-q-promote .promote-btn { flex-shrink: 0; padding: 5px 10px; font-size: 11px; }
 .top-q-promote-done { color: var(--color-primary); font-weight: 600; font-size: 12px; }
+.top-q-manual-promote { display: block; width: 100%; }
+.top-q-manual-promote .top-q-manual-answer-input { width: 100%; box-sizing: border-box; margin: 6px 0; }
+.top-q-manual-promote button { padding: 5px 10px; font-size: 11px; }
 
 .doc-name-link { color: var(--color-primary); font-weight: 600; text-decoration: none; }
 .doc-name-link:hover { text-decoration: underline; }

@@ -244,11 +244,54 @@ async function loadMostCommonQuestions() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        // Questions asked before Limona started saving answer text (see
+        // migration 0014) have nothing to promote from automatically —
+        // fall back to letting the admin write the answer once, instead of
+        // just failing.
+        if (body.needsManualAnswer) {
+          openManualPromoteForm(item, question);
+          return;
+        }
         showError(body.error || "Failed to save this as a Team Knowledge entry.");
         return;
       }
       await loadMostCommonQuestions();
     });
+  });
+}
+
+function openManualPromoteForm(item, question) {
+  const promoteEl = item.querySelector(".top-q-promote");
+  promoteEl.innerHTML = `
+    <div class="top-q-manual-promote">
+      <span class="muted">No saved answer from an earlier ask — write the answer to lock in:</span>
+      <textarea class="top-q-manual-answer-input" rows="3" placeholder="Write the answer staff should get…"></textarea>
+      <div>
+        <button class="secondary save-manual-promote-btn">Save Answer</button>
+        <button class="cancel-manual-promote-btn">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  promoteEl.querySelector(".cancel-manual-promote-btn").addEventListener("click", () => loadMostCommonQuestions());
+
+  promoteEl.querySelector(".save-manual-promote-btn").addEventListener("click", async () => {
+    const answer = promoteEl.querySelector(".top-q-manual-answer-input").value.trim();
+    if (!answer) {
+      showError("An answer is required.");
+      return;
+    }
+    const res = await fetch("/api/admin/reporting/most-common-questions/promote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, answer }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showError(body.error || "Failed to save this as a Team Knowledge entry.");
+      return;
+    }
+    await loadMostCommonQuestions();
   });
 }
 

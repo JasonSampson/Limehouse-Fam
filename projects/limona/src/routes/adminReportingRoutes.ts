@@ -222,6 +222,10 @@ adminReportingRoutes.get("/api/admin/reporting/most-common-questions", async (_r
 
 const promoteCommonQuestionSchema = z.object({
   question: z.string().min(1),
+  // Manual override: rows asked before answer_text existed (migration 0014)
+  // have nothing saved to promote from. The frontend falls back to a "write
+  // the answer" box in that case and resubmits with this filled in.
+  answer: z.string().min(1).optional(),
 });
 
 // "Lock this in" — turns a repeat question Limona's been successfully
@@ -238,17 +242,21 @@ adminReportingRoutes.post("/api/admin/reporting/most-common-questions/promote", 
   }
 
   try {
-    const latest = await getPool().query(
-      `SELECT answer_text FROM chat_queries
-       WHERE question = $1 AND answered = true AND answer_text IS NOT NULL
-       ORDER BY created_at DESC LIMIT 1`,
-      [parsed.data.question]
-    );
-    if (latest.rows.length === 0) {
-      res.status(404).json({ error: "No saved answer found for this question." });
-      return;
+    let answer = parsed.data.answer;
+    if (!answer) {
+      const latest = await getPool().query(
+        `SELECT answer_text FROM chat_queries
+         WHERE question = $1 AND answered = true AND answer_text IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1`,
+        [parsed.data.question]
+      );
+      if (latest.rows.length === 0) {
+        res.status(422).json({ error: "No saved answer found for this question.", needsManualAnswer: true });
+        return;
+      }
+      answer = latest.rows[0].answer_text;
     }
-    await createTeamKnowledgeEntry(parsed.data.question, latest.rows[0].answer_text, req.user!.id, req.user!.name);
+    await createTeamKnowledgeEntry(parsed.data.question, answer!, req.user!.id, req.user!.name);
     res.json({ ok: true });
   } catch (err) {
     logError("Reporting promote-common-question failed", { error: err instanceof Error ? err.message : String(err) });

@@ -8,7 +8,7 @@ import {
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
 } from "./session.js";
-import { getUserWithRole, getEffectivePermissions } from "./permissions.js";
+import { getUserWithRole, getEffectivePermissions, hasPermission } from "./permissions.js";
 import { requireSession } from "./requireSession.js";
 import { createHandoffToken } from "./handoffToken.js";
 import { ApiError } from "../lib/apiError.js";
@@ -235,6 +235,21 @@ const KNOWN_APPS: Record<string, (env: ReturnType<typeof loadEnv>) => string | u
   limona: (env) => env.LIMONA_URL,
 };
 
+// Same permission keys already used by the launcher (server.ts) to decide
+// tile visibility — reused here as the actual access control, not just a
+// cosmetic show/hide. Previously /handoff only checked requireSession (i.e.
+// "is this any logged-in staff member"), so denying someone an app's
+// permission only hid their launcher tile — it never stopped them from
+// requesting /auth/handoff?app=<app> directly and getting a fully valid
+// login token anyway. Owner bypass needs no special-casing here:
+// hasPermission() already returns true unconditionally for
+// system_role_key === "owner".
+const APP_PERMISSION_KEYS: Record<string, string> = {
+  late_rent_notices: "late_rent_notices.notices.view",
+  dashboard: "dashboard.financials.view",
+  limona: "limona.chat.access",
+};
+
 router.get("/handoff", requireSession, async (req, res, next) => {
   try {
     const app = req.query["app"];
@@ -249,6 +264,11 @@ router.get("/handoff", requireSession, async (req, res, next) => {
     const targetBase = KNOWN_APPS[app]!(env);
     if (!targetBase) {
       throw new ApiError(503, `Target URL for '${app}' is not configured`);
+    }
+
+    const allowed = await hasPermission(req.user.userId, APP_PERMISSION_KEYS[app]!);
+    if (!allowed) {
+      throw new ApiError(403, `You don't have access to ${app}.`);
     }
 
     const token = await createHandoffToken(req.user.userId, req.user.email, req.user.displayName);

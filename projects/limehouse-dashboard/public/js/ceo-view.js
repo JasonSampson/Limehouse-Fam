@@ -28,21 +28,147 @@ async function loadCeoView() {
   const content = document.getElementById("page-content");
   content.innerHTML = `<p class="loading-text">Loading CEO View…</p>`;
 
-  const [rolesResult, incomeResult] = await Promise.allSettled([
+  const [rolesResult, incomeResult, balancesResult] = await Promise.allSettled([
     apiGet(`/api/ceo-view/roles?period=${getStoredPeriod()}`),
     apiGet("/api/ceo-view/income"),
+    apiGet("/api/ceo-view/account-balances"),
   ]);
 
   const rolesData = rolesResult.status === "fulfilled" ? rolesResult.value : null;
   const incomeData = incomeResult.status === "fulfilled" ? incomeResult.value : null;
+  const balancesData = balancesResult.status === "fulfilled" ? balancesResult.value : null;
 
   content.innerHTML = `
     <p class="context-line">CEO VIEW · FINANCIAL PERFORMANCE</p>
+    ${renderTopTileRow(balancesData, incomeData)}
     ${renderFinancialCharts(incomeData)}
     ${rolesData ? renderPerformanceByRole(rolesData) : renderRolesCouldNotLoad()}
   `;
 
   wireRoleKpiClicks();
+}
+
+// Pure computation shared by the top tile row and the by-year charts below
+// it — kept in one place so the YTD/last-month numbers can never drift
+// between the two.
+function computeFinancialTileValues(incomeData) {
+  const months = (incomeData && incomeData.months) || [];
+  const currentYear = new Date().getUTCFullYear();
+  const ytdMonths = months.filter((m) => m.month.startsWith(String(currentYear)));
+  const grossIncomeYtd = ytdMonths.reduce((sum, m) => sum + m.grossIncome, 0);
+  const netIncomeYtd = ytdMonths.reduce((sum, m) => sum + m.netIncome, 0);
+  // FIXED 2026-07-06: "RPU — Last Month" means the last FULLY COMPLETED
+  // calendar month, same as every other "last month" tile in this app —
+  // not months[months.length-1], which is always the current,
+  // still-in-progress month.
+  const currentMonthKey = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const completedMonths = months.filter((m) => m.month < currentMonthKey);
+  const lastMonth = completedMonths.length > 0 ? completedMonths[completedMonths.length - 1] : null;
+
+  const coverageNote = incomeData && incomeData.coverage && !incomeData.coverage.fullyCovered
+    ? incomeData.coverage.earliestEntryDate
+      ? `Data only goes back to ${incomeData.coverage.earliestEntryDate} in Buildium — earlier months aren't available.`
+      : "No financial history came back from Buildium for this range yet."
+    : null;
+
+  const unverifiedNote = incomeData && incomeData.unverified
+    ? "These numbers come straight from Buildium's ledger but haven't been double-checked against a live account yet — treat as provisional until confirmed."
+    : null;
+
+  return { months, currentYear, grossIncomeYtd, netIncomeYtd, lastMonth, coverageNote, unverifiedNote };
+}
+
+// Top-row summary tiles — REORGANIZED 2026-07-26, per Jason directly:
+// Account Balances (new), then Gross Income — YTD, Net Income — YTD, RPU —
+// Last Month, left to right in that order. Previously each of the 3
+// income metrics had its own tile stacked directly under its own chart;
+// they're pulled up here into one shared row instead, and the charts below
+// no longer render a tile of their own.
+//
+// UPDATED 2026-07-26, per Jason directly: Account Balances lists every
+// account + balance directly in the tile (no click-through) — built by
+// hand rather than via tileHtml() since it's a list, not one headline
+// number. align-items:start on this row keeps it from stretching the 3
+// simple number tiles beside it to match its taller height (CSS grid's
+// default is to stretch every cell in a row to the tallest one).
+function renderTopTileRow(balancesData, incomeData) {
+  const { months, grossIncomeYtd, netIncomeYtd, lastMonth } = computeFinancialTileValues(incomeData);
+  return `
+    <div class="tile-grid" style="margin-bottom:20px; align-items:start;">
+      ${renderAccountBalancesTile(balancesData)}
+      ${tileHtml({
+        id: "gross-income-ytd",
+        label: "Gross Income — YTD",
+        value: months.length > 0 ? formatCurrency(grossIncomeYtd) : "—",
+        sourceTags: ["BD"],
+        live: months.length > 0,
+      })}
+      ${tileHtml({
+        id: "net-income-ytd",
+        label: "Net Income — YTD",
+        value: months.length > 0 ? formatCurrency(netIncomeYtd) : "—",
+        sourceTags: ["BD"],
+        live: months.length > 0,
+      })}
+      ${tileHtml({
+        id: "rpu-last-month",
+        label: "RPU — Last Month",
+        value: lastMonth && lastMonth.revenuePerUnit !== null ? formatCurrency(lastMonth.revenuePerUnit) : "—",
+        sourceTags: ["BD"],
+        live: !!lastMonth,
+      })}
+    </div>
+  `;
+}
+
+// Shortened display names — ADDED 2026-07-26, per Jason directly (exact
+// mapping he gave). Falls back to the real Buildium account name for
+// anything not on this list, rather than guessing a shortened form for an
+// account we haven't been told how to abbreviate.
+const ACCOUNT_SHORT_NAMES = {
+  "American Express Credit Card": "American Express",
+  "Capital One Credit Card": "Capital One",
+  "Enterprise- Escrow/Trust": "Escrow/Trust",
+  "Enterprise- LHPM": "LHPM",
+  "Enterprise- Operating": "Operating",
+};
+
+function accountBreakdownRow(a) {
+  const label = ACCOUNT_SHORT_NAMES[a.accountName] ?? a.accountName;
+  return `<div class="breakdown-row"><span>${label}</span><span>${formatCurrency(a.balance)}</span></div>`;
+}
+
+function renderAccountBalancesTile(balancesData) {
+  if (!balancesData || balancesData.accounts.length === 0) {
+    const message = balancesData ? "No active accounts" : "—";
+    return `
+      <div class="tile" style="grid-column: span 2; min-width:320px;">
+        <div class="tile-top">
+          <span class="tile-label">Account Balances</span>
+          ${badgeHtml(["BD"], !!balancesData)}
+        </div>
+        <p class="tile-value not-connected">${message}</p>
+      </div>
+    `;
+  }
+
+  // Two columns — per Jason directly: the 3 "Enterprise-" accounts on the
+  // left, the 2 credit card accounts on the right.
+  const enterpriseAccounts = balancesData.accounts.filter((a) => a.accountName.startsWith("Enterprise"));
+  const otherAccounts = balancesData.accounts.filter((a) => !a.accountName.startsWith("Enterprise"));
+
+  return `
+    <div class="tile" style="grid-column: span 2; min-width:320px;">
+      <div class="tile-top">
+        <span class="tile-label">Account Balances</span>
+        ${badgeHtml(["BD"], true)}
+      </div>
+      <div style="display:flex; gap:20px; margin-top:8px;">
+        <div class="breakdown-list account-balances-list" style="flex:1;">${enterpriseAccounts.map(accountBreakdownRow).join("")}</div>
+        <div class="breakdown-list account-balances-list" style="flex:1;">${otherAccounts.map(accountBreakdownRow).join("")}</div>
+      </div>
+    </div>
+  `;
 }
 
 function renderRolesCouldNotLoad() {
@@ -55,9 +181,10 @@ function renderRolesCouldNotLoad() {
 }
 
 // months come back sorted oldest-to-newest (see summarizeMonthlyFinancials
-// in src/kpi/financialSummary.ts). "YTD" tiles use the sum of every month
-// in the current calendar year present in the response; RPU uses the most
-// recent month only, per spec ("RPU — Last Month").
+// in src/kpi/financialSummary.ts). REORGANIZED 2026-07-26: the YTD/last-
+// month tiles that used to sit directly under each chart moved up into
+// the shared top tile row (renderTopTileRow) — this function now renders
+// just the 3 "By Year" charts themselves, in the same order.
 function renderFinancialCharts(incomeData) {
   if (!incomeData) {
     return `
@@ -76,29 +203,7 @@ function renderFinancialCharts(incomeData) {
     `;
   }
 
-  const months = incomeData.months || [];
-  const currentYear = new Date().getUTCFullYear();
-  const ytdMonths = months.filter((m) => m.month.startsWith(String(currentYear)));
-  const grossIncomeYtd = ytdMonths.reduce((sum, m) => sum + m.grossIncome, 0);
-  const netIncomeYtd = ytdMonths.reduce((sum, m) => sum + m.netIncome, 0);
-  // FIXED 2026-07-06: this used to take months[months.length - 1] — the
-  // LAST entry in the array, which is always the current, still-in-progress
-  // month (e.g. just 6 days of July), not a real "last month" figure. "RPU
-  // — Last Month" means the last FULLY COMPLETED calendar month, same as
-  // every other "last month" tile in this app.
-  const currentMonthKey = new Date().toISOString().slice(0, 7); // "YYYY-MM"
-  const completedMonths = months.filter((m) => m.month < currentMonthKey);
-  const lastMonth = completedMonths.length > 0 ? completedMonths[completedMonths.length - 1] : null;
-
-  const coverageNote = incomeData.coverage && !incomeData.coverage.fullyCovered
-    ? incomeData.coverage.earliestEntryDate
-      ? `Data only goes back to ${incomeData.coverage.earliestEntryDate} in Buildium — earlier months aren't available.`
-      : "No financial history came back from Buildium for this range yet."
-    : null;
-
-  const unverifiedNote = incomeData.unverified
-    ? "These numbers come straight from Buildium's ledger but haven't been double-checked against a live account yet — treat as provisional until confirmed."
-    : null;
+  const { months, currentYear, coverageNote, unverifiedNote } = computeFinancialTileValues(incomeData);
 
   return `
     <div class="section">
@@ -108,42 +213,15 @@ function renderFinancialCharts(incomeData) {
         <p class="chart-card-title">Gross Income — By Year</p>
         ${renderYearOverYearChart(months, "grossIncome", currentYear, "gross-income-chart", formatCurrencyShort)}
       </div>
-      <div class="tile-grid" style="margin-bottom:20px;">
-        ${tileHtml({
-          id: "gross-income-ytd",
-          label: "Gross Income — YTD",
-          value: months.length > 0 ? formatCurrency(grossIncomeYtd) : "—",
-          sourceTags: ["BD"],
-          live: months.length > 0,
-        })}
-      </div>
-      <div class="chart-card">
+      <div class="chart-card" style="margin-top:20px;">
         <p class="chart-card-title">Net Income — By Year</p>
         ${renderYearOverYearChart(months, "netIncome", currentYear, "net-income-chart", formatCurrencyShort)}
       </div>
-      <div class="tile-grid" style="margin-bottom:20px;">
-        ${tileHtml({
-          id: "net-income-ytd",
-          label: "Net Income — YTD",
-          value: months.length > 0 ? formatCurrency(netIncomeYtd) : "—",
-          sourceTags: ["BD"],
-          live: months.length > 0,
-        })}
-      </div>
-      <div class="chart-card">
+      <div class="chart-card" style="margin-top:20px;">
         <p class="chart-card-title">Revenue Per Unit — By Year</p>
         ${renderYearOverYearChart(months, "revenuePerUnit", currentYear, "rpu-chart", formatCurrencyShort)}
       </div>
-      <div class="tile-grid" style="margin-bottom:20px;">
-        ${tileHtml({
-          id: "rpu-last-month",
-          label: "RPU — Last Month",
-          value: lastMonth && lastMonth.revenuePerUnit !== null ? formatCurrency(lastMonth.revenuePerUnit) : "—",
-          sourceTags: ["BD"],
-          live: !!lastMonth,
-        })}
-      </div>
-      ${unverifiedNote ? `<p class="tile-sub">${unverifiedNote}</p>` : ""}
+      ${unverifiedNote ? `<p class="tile-sub" style="margin-top:12px;">${unverifiedNote}</p>` : ""}
     </div>
   `;
 }

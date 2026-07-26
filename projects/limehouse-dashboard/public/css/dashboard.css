@@ -670,6 +670,30 @@ main {
   gap: 6px;
 }
 
+/* Account Balances tile (CEO View) — ADDED 2026-07-26, per Jason directly:
+   tighter row spacing than the default .breakdown-list, scoped so the
+   income month-list fallback elsewhere on this page is untouched. */
+.account-balances-list {
+  gap: 1px;
+}
+.account-balances-list .breakdown-row {
+  padding: 3px 0;
+  /* Keep name + balance on one line even in the narrower 2-column layout
+     (fixed 2026-07-26 — "American Express" + its balance was wrapping) —
+     the balance never shrinks/wraps, the name truncates first instead. */
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.account-balances-list .breakdown-row span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-balances-list .breakdown-row span:last-child {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .breakdown-row {
   display: flex;
   justify-content: space-between;

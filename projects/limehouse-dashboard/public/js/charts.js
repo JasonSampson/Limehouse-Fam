@@ -22,6 +22,32 @@ const LH_COLORS = {
   navy: "#1c2b3a",
 };
 
+// Fixed-order categorical palette for the CEO View year-over-year charts —
+// ADDED 2026-07-26, per Jason directly: every past year used to render in
+// the exact same gray, indistinguishable from every other past year. This
+// is Anthropic's dataviz-skill reference palette (validated: worst
+// adjacent CVD ΔE 24.2 under protanopia/deuteranopia, well clear of the
+// >=12 target) — 8 fixed hues, assigned in order, never cycled.
+const YEAR_CHART_PAST_COLORS = ["#2a78d6", "#1baf7a", "#eda100", "#008300", "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"];
+
+// Assigns each year a stable color: the current year always gets
+// LH_COLORS.green (per Jason directly, replacing the earlier blue), and
+// past years get the 8-hue palette above in oldest-to-newest order. Only
+// the most recent 8 PAST years are ever shown — per Jason directly
+// ("we need more colors as the years go by"), rather than ever inventing
+// a 9th categorical hue (the dataviz skill's own rule: a 9th series folds
+// into a bounded window, not a generated color). As a new year becomes
+// current, the oldest past year rolls off the chart instead of the
+// palette running out.
+function assignYearColors(years, currentYear) {
+  const pastYears = years.filter((y) => String(y) !== String(currentYear)).sort();
+  const recentPastYears = pastYears.slice(-YEAR_CHART_PAST_COLORS.length);
+  const colorByYear = new Map();
+  recentPastYears.forEach((y, i) => colorByYear.set(String(y), YEAR_CHART_PAST_COLORS[i]));
+  colorByYear.set(String(currentYear), LH_COLORS.green);
+  return { colorByYear, visibleYears: [...recentPastYears, String(currentYear)] };
+}
+
 // Category color assignment for Property Health and similar "arbitrary
 // list of named categories" charts. Falls back to a rotating palette for
 // any category name we don't have a specific brand color for, so a new
@@ -213,15 +239,11 @@ const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 
 function yearOverYearLineChartHtml({ canvasId, seriesByYear, currentYear, yFormat }) {
   queueMicrotask(() => renderYearOverYearLineChart({ canvasId, seriesByYear, currentYear, yFormat }));
-  const years = Object.keys(seriesByYear).sort();
+  const { colorByYear, visibleYears } = assignYearColors(Object.keys(seriesByYear), currentYear);
   return `
     <div class="chart-legend" style="margin-bottom:8px;">
-      ${years
-        .map((y) => {
-          const isCurrent = String(y) === String(currentYear);
-          const color = isCurrent ? LH_COLORS.blue : "#c9cfb8";
-          return `<span><span class="chart-legend-swatch" style="background:${color};"></span>${y}</span>`;
-        })
+      ${visibleYears
+        .map((y) => `<span><span class="chart-legend-swatch" style="background:${colorByYear.get(y)};"></span>${y}</span>`)
         .join("")}
     </div>
     <div class="chart-canvas-wrap" style="height:240px;"><canvas id="${canvasId}"></canvas></div>
@@ -229,10 +251,10 @@ function yearOverYearLineChartHtml({ canvasId, seriesByYear, currentYear, yForma
 }
 
 function renderYearOverYearLineChart({ canvasId, seriesByYear, currentYear, yFormat }) {
-  const years = Object.keys(seriesByYear).sort();
-  const datasets = years.map((year) => {
+  const { colorByYear, visibleYears } = assignYearColors(Object.keys(seriesByYear), currentYear);
+  const datasets = visibleYears.map((year) => {
     const isCurrent = String(year) === String(currentYear);
-    const color = isCurrent ? LH_COLORS.blue : "#c9cfb8";
+    const color = colorByYear.get(year);
     return {
       label: String(year),
       data: seriesByYear[year],
@@ -240,6 +262,12 @@ function renderYearOverYearLineChart({ canvasId, seriesByYear, currentYear, yFor
       backgroundColor: color,
       borderWidth: isCurrent ? 3 : 1.5,
       pointRadius: isCurrent ? 2 : 0,
+      // pointHoverRadius — ADDED 2026-07-26, per Jason directly, against a
+      // real vendor screenshot: hovering a month shows a marker on every
+      // year's line at that column, not just the current year's. Points
+      // stay invisible otherwise (pointRadius above), only appearing on
+      // hover.
+      pointHoverRadius: 4,
       tension: 0.25,
       fill: false,
       order: isCurrent ? 0 : 1,
@@ -253,9 +281,25 @@ function renderYearOverYearLineChart({ canvasId, seriesByYear, currentYear, yFor
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
+      // interaction: index/intersect:false — ADDED 2026-07-26, per Jason
+      // directly, against a real vendor screenshot: hovering anywhere over
+      // a month now pops up ONE tooltip breaking down every visible year's
+      // value for that month (oldest to newest, matching legend order),
+      // instead of only the single nearest line's value.
+      interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: yFormat ? { label: (ctx) => `${ctx.dataset.label}: ${yFormat(ctx.parsed.y)}` } : undefined },
+        tooltip: {
+          mode: "index",
+          intersect: false,
+          // itemSort — without this, Chart.js sorts tooltip rows by each
+          // dataset's `order` field, which is also (separately) used above
+          // to draw the current year's line on top. That coupling put 2026
+          // first in the tooltip. Sorting by label here instead gives the
+          // vendor's real oldest-to-newest order regardless of draw order.
+          itemSort: (a, b) => a.dataset.label.localeCompare(b.dataset.label),
+          callbacks: yFormat ? { label: (ctx) => `${ctx.dataset.label}: ${yFormat(ctx.parsed.y)}` } : undefined,
+        },
       },
       scales: {
         x: { grid: { display: false } },

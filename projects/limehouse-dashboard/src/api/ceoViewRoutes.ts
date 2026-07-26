@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { getScoredRoles } from "../db/kpiRepository.js";
 import { periodToSnapshotLabel, type PeriodKey } from "../kpi/period.js";
-import { fetchActiveResidentialUnits } from "../buildium/client.js";
+import { fetchActiveResidentialUnits, fetchBankAccounts } from "../buildium/client.js";
 import { revenuePerUnit } from "../kpi/financialSummary.js";
 import { getAllFinancialHistory } from "../db/financialHistory.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
@@ -96,5 +96,25 @@ ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, async (_re
     res.status(502).json({
       error: "Failed to load income data. Try running the financial history sync (POST /api/sync/financial-history).",
     });
+  }
+});
+
+// ============================================================================
+// Account Balances — ADDED 2026-07-26, per Jason directly, for the new CEO
+// View top-row tile. Real active bank accounts + balances, same live
+// Buildium call already used for Reconciliation Accuracy (src/kpi/
+// bookkeeperMetrics.ts) — no new data source, just a different view of it.
+// Alphabetical, matching the confirmed vendor order used there.
+ceoViewRoutes.get("/api/ceo-view/account-balances", requireLogin, requireAdmin, async (_req, res) => {
+  try {
+    const accounts = await fetchBankAccounts();
+    const rows = accounts
+      .filter((a) => a.IsActive)
+      .map((a) => ({ accountName: a.Name ?? `Account #${a.Id}`, balance: a.Balance }))
+      .sort((a, b) => a.accountName.localeCompare(b.accountName));
+    res.json({ accounts: rows, count: rows.length });
+  } catch (err) {
+    logError("GET /api/ceo-view/account-balances failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load bank account balances from Buildium." });
   }
 });

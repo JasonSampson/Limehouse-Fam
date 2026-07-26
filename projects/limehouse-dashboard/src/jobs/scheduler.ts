@@ -6,6 +6,7 @@ import {
   refreshRentEngineLeasingPerformanceCache,
   runTeamPerformanceKpisSync,
 } from "./cacheRefreshJobs.js";
+import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
 import { logError } from "../lib/logger.js";
 
 // In-app scheduler — ADDED 2026-07-18, per Jason directly (relayed from the
@@ -62,10 +63,15 @@ const HOUR = 60 * MINUTE;
 //     reconciliations, the heaviest single job in this file, and a
 //     quarterly business metric doesn't need to be fresher than a few
 //     hours anyway.
-//   - terminated-properties / financial-history are deliberately NOT
-//     scheduled here — unconfirmed as user-facing tiles (per the
-//     investigation), left manual-only until a real tile is found
-//     depending on one going stale.
+//   - financial-history: every 6 hours — ADDED 2026-07-26, per Jason
+//     directly, after confirming CEO View's Gross/Net Income and RPU
+//     tiles are real, used tiles (the table backing them had zero rows —
+//     this sync was manual-only and nobody had ever triggered it). Same
+//     interval as team-performance-kpis since it's a similarly slow,
+//     not-minute-fresh business metric.
+//   - terminated-properties is still deliberately NOT scheduled here —
+//     unconfirmed as a user-facing tile, left manual-only until a real
+//     tile is found depending on it going stale.
 const JOBS: ScheduledJob[] = [
   { name: "rentengine-leasing-performance", fn: refreshRentEngineLeasingPerformanceCache, intervalMs: 8 * MINUTE, initialDelayMs: 0 },
   { name: "renewal-rate", fn: refreshRenewalRateCache, intervalMs: 2 * HOUR, initialDelayMs: 15 * 1000 },
@@ -73,6 +79,7 @@ const JOBS: ScheduledJob[] = [
   { name: "call-activity", fn: refreshCallActivityCache, intervalMs: 2 * HOUR, initialDelayMs: 45 * 1000 },
   { name: "team-performance-kpis", fn: () => runTeamPerformanceKpisSync().then(() => {}), intervalMs: 6 * HOUR, initialDelayMs: 90 * 1000 },
   { name: "security-deposit-withheld", fn: refreshSecurityDepositWithheldCache, intervalMs: 4 * HOUR, initialDelayMs: 60 * 1000 },
+  { name: "financial-history", fn: () => syncFinancialHistory().then(() => {}), intervalMs: 6 * HOUR, initialDelayMs: 120 * 1000 },
 ];
 
 let started = false;

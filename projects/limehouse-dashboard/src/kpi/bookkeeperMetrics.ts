@@ -330,6 +330,7 @@ export function vendorComplianceExplainRows(vendors: BuildiumVendor[]): VendorCo
 export interface NineNineComplianceExplainRow {
   vendorName: string;
   category: string | null;
+  taxPayerIdType: string | null;
   includeIn1099: boolean;
   hasTaxPayerId: boolean;
   compliant: boolean;
@@ -342,10 +343,12 @@ export function nineNineComplianceExplainRows(vendors: BuildiumVendor[]): NineNi
     .map((v) => ({
       vendorName: vendorDisplayName(v),
       category: v.Category.Name,
+      taxPayerIdType: v.TaxInformation.TaxPayerIdType,
       includeIn1099: true,
       hasTaxPayerId: !!v.TaxInformation.TaxPayerId,
       compliant: !!v.TaxInformation.TaxPayerId,
-    }));
+    }))
+    .sort((a, b) => a.vendorName.localeCompare(b.vendorName));
 }
 
 export interface ReconciliationAccuracyExplainRow {

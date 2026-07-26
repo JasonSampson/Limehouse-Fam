@@ -9,6 +9,7 @@ import {
   vendorComplianceExplainRows,
   vendorDisplayName,
   summarize1099Compliance,
+  nineNineComplianceExplainRows,
   type ReconciliationAccuracyInput,
 } from "../../src/kpi/bookkeeperMetrics.js";
 import type { BuildiumBankAccount, BuildiumVendor, BuildiumLeaseTransaction } from "../../src/buildium/client.js";
@@ -501,5 +502,27 @@ describe("summarize1099Compliance", () => {
     ];
     const result = summarize1099Compliance(vendors);
     expect(result).toMatchObject({ compliantCount: 1, requiringCount: 2, compliancePercent: 50 });
+  });
+});
+
+describe("nineNineComplianceExplainRows", () => {
+  it("excludes vendors not flagged IncludeIn1099 and sorts the rest alphabetically", () => {
+    const vendors = [
+      vendor({ Id: 1, CompanyName: "Zebra Contractors", TaxInformation: { TaxPayerIdType: "SSN", TaxPayerId: "123", IncludeIn1099: true } }),
+      vendor({ Id: 2, CompanyName: "Atlas Key Shack", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true } }),
+      vendor({ Id: 3, CompanyName: "Excluded Co", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: false } }),
+    ];
+    const rows = nineNineComplianceExplainRows(vendors);
+    expect(rows.map((r) => r.vendorName)).toEqual(["Atlas Key Shack", "Zebra Contractors"]);
+  });
+
+  it("carries taxPayerIdType through, null when Buildium has none on file", () => {
+    const vendors = [
+      vendor({ Id: 1, CompanyName: "Has Type", TaxInformation: { TaxPayerIdType: "EIN", TaxPayerId: "123", IncludeIn1099: true } }),
+      vendor({ Id: 2, CompanyName: "No Type", TaxInformation: { TaxPayerIdType: null, TaxPayerId: null, IncludeIn1099: true } }),
+    ];
+    const rows = nineNineComplianceExplainRows(vendors);
+    expect(rows.find((r) => r.vendorName === "Has Type")?.taxPayerIdType).toBe("EIN");
+    expect(rows.find((r) => r.vendorName === "No Type")?.taxPayerIdType).toBeNull();
   });
 });

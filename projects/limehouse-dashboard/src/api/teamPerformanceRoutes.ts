@@ -233,7 +233,7 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
           reconInputs.push({ account, reconcilable, reconciliations });
         }
         const rows = reconciliationAccuracyExplainRows(reconInputs, from, to);
-        res.json({ kpiName, formula, rows });
+        res.json({ kpiName, formula, rows, from, to });
         return;
       }
       case "Rent Processing Accuracy": {

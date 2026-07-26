@@ -131,6 +131,20 @@ function formatShortMonthDayYear(iso) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// "2026-03-12" -> "03/12/2026" -- ADDED 2026-07-26, per Jason directly, for
+// Reconciliation Accuracy's Last Reconciled column (his preferred format,
+// not the vendor's own "YYYY-MM-DD"). Plain string slicing, not a Date
+// object -- these are date-only values (StatementEndingDate) with no time
+// component, so parsing through Date risks an off-by-one from timezone
+// conversion.
+function formatMMDDYYYY(isoDate) {
+  if (!isoDate) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(isoDate);
+  if (!match) return "—";
+  const [, year, month, day] = match;
+  return `${month}/${day}/${year}`;
+}
+
 function renderUnlockedView() {
   const content = document.getElementById("page-content");
   const period = tpRolesData.period;
@@ -380,9 +394,15 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Balance", render: (r) => formatCurrencyPrecise(r.balance) },
   ],
   "Reconciliation Accuracy": [
-    { label: "Account", key: "accountName" },
+    { label: "Bank Account", key: "accountName" },
+    { label: "Last Reconciled", render: (r) => (r.lastReconciledDate ? formatMMDDYYYY(r.lastReconciledDate) : "never") },
+    { label: "Months Done", render: (r) => `${r.monthsDone} / ${r.monthsExpected}` },
     { label: "Balance", render: (r) => formatCurrency(r.balance) },
-    { label: "Status", key: "status" },
+    // "on track"/"Not Reconciled" -- per Jason directly 2026-07-26: "on
+    // track" confirmed against a real vendor screenshot; "Not Reconciled"
+    // (red) is our own wording for the not-on-track case, since the
+    // vendor's real wording for that state hasn't been seen yet.
+    { label: "Status", render: (r) => (r.onTrack ? "on track" : `<span class="recon-not-reconciled">Not Reconciled</span>`) },
   ],
   "Rent Processing Accuracy": [
     { label: "Lease", key: "leaseId" },
@@ -509,6 +529,19 @@ const KPI_SUBTITLE_BUILDERS = {
     const median = result.medianDaysOnMarket === null ? "—" : `${Math.round(result.medianDaysOnMarket)}d`;
     return `Avg ${avg} · Median ${median}`;
   },
+  // CONFIRMED against a real vendor screenshot (2026-07-26) for the
+  // zero-data case only: "No completed months in this period yet". The
+  // has-data phrasing below is NOT yet confirmed against a screenshot --
+  // built in the same "X/Y -- target Z%" style used elsewhere as a
+  // reasonable default, to be corrected if a real screenshot ever shows
+  // otherwise.
+  "Reconciliation Accuracy": (result, kpi) => {
+    const scored = result.rows.filter((r) => !r.excluded);
+    const done = scored.reduce((sum, r) => sum + r.monthsDone, 0);
+    const expected = scored.reduce((sum, r) => sum + r.monthsExpected, 0);
+    if (expected === 0) return "No completed months in this period yet";
+    return `${done}/${expected} months completed -- target ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
   // CONFIRMED against a real vendor screenshot (2026-07-20): "76.1% on
   // time (51/67) -- target 100%" -- note the target has NO ">="/"≥"
   // symbol here, a third distinct subtitle style alongside Occupancy's
@@ -548,12 +581,47 @@ function resolveKpiTitle(kpiName, result) {
   return override ?? kpiName;
 }
 
+// Most KPIs' modal Note box is just the static formula text from
+// KPI_EXPLAIN_FORMULAS. Reconciliation Accuracy's real vendor note is
+// dynamic, embedding live-computed numbers -- matched in the vendor's
+// own style (2026-07-26 screenshot: "count how many of the 0 completed
+// month(s) inside This month · Jul 1 – Jul 26, 2026 have a finished
+// reconciliation... 0 excluded... Source: bank_accounts/reconciliations
+// tables..."), but describing OUR real scoring window -- per Jason
+// directly, "describe our actual window" -- since our window is the
+// quarter-to-date, not literally "This month" (those just happen to look
+// identical in July; they'd diverge once August starts).
+const KPI_NOTE_BUILDERS = {
+  "Reconciliation Accuracy": (result) => {
+    const expectedMonths = result.rows[0]?.monthsExpected ?? 0;
+    const externallyLinkedCount = result.rows.filter((r) => r.externallyLinked).length;
+    const zeroBalanceExcludedCount = result.rows.filter((r) => r.excluded && !r.externallyLinked).length;
+    const windowLabel = `${formatQuarterLabel(tpActiveQuarter)} · ${formatDateRange({ from: result.from, to: result.to })}`;
+    return `Formula: Across active bank accounts, count how many of the ${expectedMonths} completed month(s) inside ${windowLabel} have a finished reconciliation (StatementEndingDate falls in that month, IsFinished=true). Accuracy = done ÷ expected. A partial current month is not yet reconcilable and is not counted. Accounts with ZERO finished reconciliations AND a $0 balance are excluded entirely (nothing to reconcile) — ${zeroBalanceExcludedCount} excluded. Externally-linked (bank-feed) accounts are also excluded entirely, since Buildium's API can't confirm their reconciliation status even though they may genuinely be reconciled — ${externallyLinkedCount} excluded. Source: bank_accounts/reconciliations tables, synced nightly from Buildium /v1/bankaccounts and /v1/bankaccounts/{id}/reconciliations.`;
+  },
+};
+
+function buildKpiNote(kpiName, result) {
+  const builder = KPI_NOTE_BUILDERS[kpiName];
+  if (builder) return builder(result);
+  return `Formula: ${result.formula}`;
+}
+
+// Most subtitle builders assume a real actualValue and would show a
+// meaningless "—"-filled string for a "No data" KPI, so buildKpiSubtitle
+// skips them by default. Reconciliation Accuracy is the one confirmed
+// exception (2026-07-26, real vendor screenshot): the vendor shows a
+// subtitle ("No completed months in this period yet") even with zero
+// data, and its builder already handles that case explicitly.
+const SUBTITLE_BUILDERS_ALLOWED_WITHOUT_DATA = new Set(["Reconciliation Accuracy"]);
+
 function buildKpiSubtitle(kpiName, result) {
   const builder = KPI_SUBTITLE_BUILDERS[kpiName];
   if (!builder) return undefined;
   const role = tpRolesData.roles.find((r) => r.roleDisplayName === tpActiveRole);
   const kpi = role?.kpis.find((k) => k.kpiName === kpiName);
-  if (!kpi || !kpi.hasData) return undefined;
+  if (!kpi) return undefined;
+  if (!kpi.hasData && !SUBTITLE_BUILDERS_ALLOWED_WITHOUT_DATA.has(kpiName)) return undefined;
   return builder(result, kpi);
 }
 
@@ -571,7 +639,7 @@ function wireKpiNameClicks() {
         openDrillDownModal({
           title: resolveKpiTitle(kpiName, result),
           subtitle: buildKpiSubtitle(kpiName, result),
-          note: `Formula: ${result.formula}`,
+          note: buildKpiNote(kpiName, result),
           columns,
           rows: result.rows,
           emptyText: "No records behind this KPI for the selected period.",

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   summarizeReconciliationAccuracy,
+  reconciliationAccuracyExplainRows,
   summarizeRentProcessingAccuracy,
   scopeMaintenanceVendors,
   summarizeVendorCompliance,
@@ -85,16 +86,26 @@ describe("summarizeReconciliationAccuracy", () => {
     expect(result.accuracyPercent).toBeNull();
   });
 
-  it("treats a not-reconcilable (externally-linked) account with a nonzero balance as a miss, not excluded", () => {
+  // UPDATED 2026-07-26, per Jason directly: previously this counted as a
+  // miss for every expected month. Now excluded entirely -- Buildium's API
+  // can't confirm an externally-linked account's reconciliation status
+  // even though it may genuinely be reconciled (confirmed live: a real
+  // 409 "Cannot retrieve reconciliation(s) for an externally linked bank
+  // account", while Buildium's own web UI shows real completed
+  // reconciliations for that same account) -- scoring it down every month
+  // forever would be unfair for a gap in our own visibility, not a real
+  // bookkeeping failure.
+  it("excludes a not-reconcilable (externally-linked) account entirely, even with a nonzero balance", () => {
     const input: ReconciliationAccuracyInput = {
       account: bankAccount({ Id: 1, Balance: 200 }),
       reconcilable: false,
       reconciliations: [],
     };
     const result = summarizeReconciliationAccuracy([input], "2026-06-01", "2026-06-30");
-    expect(result.excludedAccountCount).toBe(0);
+    expect(result.excludedAccountCount).toBe(1);
+    expect(result.scoredAccountCount).toBe(0);
     expect(result.done).toBe(0);
-    expect(result.expected).toBe(1);
+    expect(result.expected).toBe(0);
   });
 
   it("ignores inactive accounts entirely", () => {
@@ -106,6 +117,76 @@ describe("summarizeReconciliationAccuracy", () => {
     const result = summarizeReconciliationAccuracy([input], "2026-06-01", "2026-06-30");
     expect(result.expected).toBe(0);
     expect(result.excludedAccountCount).toBe(0);
+  });
+});
+
+describe("reconciliationAccuracyExplainRows", () => {
+  it("reports the most recent finished reconciliation as lastReconciledDate, even outside the period", () => {
+    const input: ReconciliationAccuracyInput = {
+      account: bankAccount({ Id: 1, Name: "Enterprise- Operating", Balance: 1000 }),
+      reconcilable: true,
+      reconciliations: [
+        { Id: 1, StatementEndingDate: "2026-03-31", IsFinished: true },
+        { Id: 2, StatementEndingDate: "2026-06-30", IsFinished: true },
+      ],
+    };
+    const rows = reconciliationAccuracyExplainRows([input], "2026-07-01", "2026-07-05");
+    expect(rows[0].lastReconciledDate).toBe("2026-06-30");
+  });
+
+  it("reports null lastReconciledDate for an account with no finished reconciliation ever", () => {
+    const input: ReconciliationAccuracyInput = {
+      account: bankAccount({ Id: 1, Balance: 1000 }),
+      reconcilable: true,
+      reconciliations: [],
+    };
+    const rows = reconciliationAccuracyExplainRows([input], "2026-07-01", "2026-07-05");
+    expect(rows[0].lastReconciledDate).toBeNull();
+  });
+
+  it("computes monthsDone/monthsExpected per account", () => {
+    const input: ReconciliationAccuracyInput = {
+      account: bankAccount({ Id: 1, Balance: 1000 }),
+      reconcilable: true,
+      reconciliations: [{ Id: 1, StatementEndingDate: "2026-06-30", IsFinished: true }],
+    };
+    const rows = reconciliationAccuracyExplainRows([input], "2026-06-01", "2026-07-05");
+    expect(rows[0].monthsDone).toBe(1);
+    expect(rows[0].monthsExpected).toBe(1); // only June is a fully-completed month in this range
+  });
+
+  it("returns monthsExpected 0 when no month in the range has fully closed", () => {
+    const input: ReconciliationAccuracyInput = {
+      account: bankAccount({ Id: 1, Balance: 1000 }),
+      reconcilable: true,
+      reconciliations: [],
+    };
+    const rows = reconciliationAccuracyExplainRows([input], "2026-07-01", "2026-07-05");
+    expect(rows[0].monthsDone).toBe(0);
+    expect(rows[0].monthsExpected).toBe(0);
+  });
+
+  it("marks an externally-linked account excluded and on track, not a miss", () => {
+    const input: ReconciliationAccuracyInput = {
+      account: bankAccount({ Id: 1, Name: "American Express Credit Card", Balance: -6050.5 }),
+      reconcilable: false,
+      reconciliations: [],
+    };
+    const rows = reconciliationAccuracyExplainRows([input], "2026-06-01", "2026-06-30");
+    expect(rows[0].excluded).toBe(true);
+    expect(rows[0].externallyLinked).toBe(true);
+    expect(rows[0].onTrack).toBe(true);
+  });
+
+  it("does not mark a $0-balance-excluded account as externallyLinked", () => {
+    const input: ReconciliationAccuracyInput = {
+      account: bankAccount({ Id: 1, Balance: 0 }),
+      reconcilable: true,
+      reconciliations: [],
+    };
+    const rows = reconciliationAccuracyExplainRows([input], "2026-06-01", "2026-06-30");
+    expect(rows[0].excluded).toBe(true);
+    expect(rows[0].externallyLinked).toBe(false);
   });
 });
 

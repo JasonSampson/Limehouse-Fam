@@ -10,11 +10,19 @@ function roundPercent(n: number): number {
 // months inside the period have a finished reconciliation. A partial
 // current month is never counted (not yet reconcilable). Accounts with
 // zero finished reconciliations AND a $0 balance are excluded entirely
-// (nothing to reconcile). An account that's NOT reconcilable at all
-// (external-feed accounts, e.g. some credit cards — CONFIRMED LIVE via a
-// real 409 from Buildium) is treated the same as "zero reconciliations":
-// excluded only if its balance is also $0, otherwise counts as a miss for
-// every expected month, same as any other account with no reconciliation.
+// (nothing to reconcile).
+//
+// UPDATED 2026-07-26, per Jason directly: an account that's NOT
+// reconcilable at all via Buildium's API (external-feed/bank-feed-linked
+// accounts, e.g. American Express Credit Card — CONFIRMED LIVE via a real
+// 409 from Buildium: "Cannot retrieve reconciliation(s) for an externally
+// linked bank account") is now excluded from scoring entirely, regardless
+// of balance. Previously such an account counted as a miss for every
+// expected month once one existed — but Buildium's own web UI (a real
+// screenshot Jason showed) confirms these ARE actually being reconciled;
+// we simply have no API access to prove it, so it's unfair to score them
+// down every month forever for a gap in our own visibility, not a real
+// bookkeeping failure.
 export interface ReconciliationAccuracyInput {
   account: BuildiumBankAccount;
   reconcilable: boolean;
@@ -62,6 +70,10 @@ export function summarizeReconciliationAccuracy(
       input.reconciliations.filter((r) => r.IsFinished).map((r) => r.StatementEndingDate.slice(0, 7))
     );
     const hasAnyFinished = finishedMonths.size > 0;
+    if (!input.reconcilable) {
+      excludedAccountCount++;
+      continue;
+    }
     if (!hasAnyFinished && input.account.Balance === 0) {
       excludedAccountCount++;
       continue;
@@ -265,8 +277,23 @@ export function nineNineComplianceExplainRows(vendors: BuildiumVendor[]): NineNi
 
 export interface ReconciliationAccuracyExplainRow {
   accountName: string;
+  lastReconciledDate: string | null;
+  monthsDone: number;
+  monthsExpected: number;
   balance: number;
-  status: string; // "excluded ($0 balance, nothing to reconcile)" | "reconciled" | "not reconciled" | "not reconcilable (external feed)"
+  // statusDetail — the full internal reasoning (used by the Reconciliation
+  // Accuracy Note box to count excluded accounts); NOT what's shown in the
+  // table's Status column. Displayed status is just onTrack/excluded,
+  // per Jason directly 2026-07-26: "Let's do 'on track'... call it when
+  // it's not on track 'Concern'" — a 2-value status, matching the vendor's
+  // confirmed "on track" wording for the good case.
+  statusDetail: string; // "excluded ($0 balance, nothing to reconcile)" | "no completed month yet this period" | "reconciled" | "not reconciled" | "not reconcilable (external feed)"
+  excluded: boolean;
+  // externallyLinked — the specific reason within `excluded`, broken out
+  // as its own field (rather than string-matching statusDetail) so the
+  // Note box can report the two exclusion reasons with separate counts.
+  externallyLinked: boolean;
+  onTrack: boolean;
 }
 
 export function reconciliationAccuracyExplainRows(
@@ -278,24 +305,58 @@ export function reconciliationAccuracyExplainRows(
   return inputs
     .filter((i) => i.account.IsActive)
     .map((input) => {
-      const finishedMonths = new Set(
-        input.reconciliations.filter((r) => r.IsFinished).map((r) => r.StatementEndingDate.slice(0, 7))
-      );
+      const finished = input.reconciliations.filter((r) => r.IsFinished);
+      const finishedMonths = new Set(finished.map((r) => r.StatementEndingDate.slice(0, 7)));
       const hasAnyFinished = finishedMonths.size > 0;
-      let status: string;
-      if (!hasAnyFinished && input.account.Balance === 0) {
-        status = "excluded ($0 balance, nothing to reconcile)";
+      // "Last Reconciled" — ADDED 2026-07-26, per Jason directly, against a
+      // real vendor screenshot: the most recent finished reconciliation's
+      // statement date across the account's whole history, not just the
+      // ones inside this period's expected months.
+      const lastReconciledDate =
+        finished.length > 0 ? finished.map((r) => r.StatementEndingDate).sort().at(-1)! : null;
+      const monthsDone = expectedMonths.filter((m) => finishedMonths.has(m)).length;
+      let statusDetail: string;
+      let excluded = false;
+      let onTrack: boolean;
+      // UPDATED 2026-07-26, per Jason directly: externally-linked accounts
+      // are excluded from scoring entirely now (see the summarize function's
+      // header comment above for why), checked before the $0-balance
+      // exclusion so the reason shown is the real one.
+      if (!input.reconcilable) {
+        statusDetail = "excluded (externally-linked account, can't verify via Buildium's API)";
+        excluded = true;
+        onTrack = true;
+      } else if (!hasAnyFinished && input.account.Balance === 0) {
+        statusDetail = "excluded ($0 balance, nothing to reconcile)";
+        excluded = true;
+        onTrack = true;
       } else if (expectedMonths.length === 0) {
-        status = "no completed month yet this period";
-      } else if (!input.reconcilable) {
-        status = "not reconcilable (externally-linked account)";
+        statusDetail = "no completed month yet this period";
+        onTrack = true;
       } else if (expectedMonths.every((m) => finishedMonths.has(m))) {
-        status = "reconciled";
+        statusDetail = "reconciled";
+        onTrack = true;
       } else {
-        status = "not reconciled";
+        statusDetail = "not reconciled";
+        onTrack = false;
       }
-      return { accountName: input.account.Name ?? `Account #${input.account.Id}`, balance: input.account.Balance, status };
-    });
+      return {
+        accountName: input.account.Name ?? `Account #${input.account.Id}`,
+        lastReconciledDate,
+        monthsDone,
+        monthsExpected: expectedMonths.length,
+        balance: input.account.Balance,
+        statusDetail,
+        excluded,
+        externallyLinked: !input.reconcilable,
+        onTrack,
+      };
+    })
+    // Alphabetical by account name — confirmed against a real vendor
+    // screenshot (2026-07-26): American Express Credit Card, Capital One
+    // Credit Card, Enterprise- Escrow/Trust, Enterprise- LHPM, Enterprise-
+    // Operating is exactly A-Z order, not Buildium's raw account-fetch order.
+    .sort((a, b) => a.accountName.localeCompare(b.accountName));
 }
 
 export interface RentProcessingAccuracyExplainRow {

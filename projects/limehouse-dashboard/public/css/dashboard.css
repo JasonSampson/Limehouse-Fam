@@ -1326,6 +1326,10 @@ table.kpi-table td:not(:first-child) {
 .tp-page .kpi-band-dot.band-good { color: #993c1d; }
 .tp-page .kpi-band-dot.band-red { color: #c0392b; }
 
+/* Reconciliation Accuracy drill-down "Not Reconciled" status -- ADDED
+   2026-07-26, per Jason directly: red font for the not-on-track case. */
+.recon-not-reconciled { color: var(--red); font-weight: 600; }
+
 .empty-state {
   text-align: center;
   padding: 40px 16px;

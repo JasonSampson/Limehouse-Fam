@@ -395,16 +395,16 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
         );
       }
 
-      // Fixed trailing-90-day metric (the vendor's own label reads "(90d)",
-      // not tied to the quarter selector) — deliberately NOT scoped to
-      // periodStart/periodEnd like the KPIs above.
-      const responseWindowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const responseData = await fetchApplicationsWithTasksForResponseTimeliness(responseWindowStart);
+      // CHANGED 2026-07-26, per Jason directly: the "(90d)" trailing window
+      // this used to assume was stale vendor wording — a real screenshot
+      // showed an explicit quarter-to-date range instead, so this now uses
+      // the same periodStart/asOfDate window as the KPIs above.
+      const responseData = await fetchApplicationsWithTasksForResponseTimeliness(periodStart);
       if (responseData.connected && responseData.data) {
         const responseTimeliness = summarizeApplicantResponseTimeliness(
           responseData.data.processes,
           responseData.data.tasksByProcessId,
-          responseWindowStart,
+          periodStart,
           asOfDate
         );
         applicantResponseTimelinessPercent = responseTimeliness.ratePercent;

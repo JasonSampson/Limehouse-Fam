@@ -182,10 +182,22 @@ export interface ApplicationProcessingTimeSummary {
   closedCount: number;
 }
 
-// Application Processing Time — formula confirmed by Jason 2026-07-05:
-// created_at to closed_at, across all closed Applications Process
-// processes in the period. Still-open processes (closed_at null) are not
-// counted — there's no processing time to measure yet.
+// REBUILT 2026-07-26, per Jason directly, correcting the 2026-07-05
+// formula above (kept in git history): CONFIRMED EXACT against a real
+// vendor screenshot (Avg 245.8h, 6 applications) that population requires
+// BOTH created_at AND closed_at to fall within the window -- not just
+// closed_at. Verified live: of 20 real processes closed in the window,
+// the 14 excluded from the vendor's real report were EVERY process
+// created before the window started (real backlog closing out this
+// period); the 6 included were exactly the ones both opened and finished
+// within it. Per-record hours math (created_at to closed_at) was already
+// correct -- confirmed exact, to the tenth of an hour, on all 6 real rows.
+function inWindow(iso: string | null, from: Date, to: Date): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  return d >= from && d <= to;
+}
+
 export function summarizeApplicationProcessingTime(
   processes: LeadSimpleProcess[],
   fromDate: string,
@@ -193,19 +205,15 @@ export function summarizeApplicationProcessingTime(
 ): ApplicationProcessingTimeSummary {
   const from = new Date(fromDate);
   const to = new Date(toDate);
-  const closedInRange = processes.filter((p) => {
-    if (!p.closed_at) return false;
-    const closedAt = new Date(p.closed_at);
-    return closedAt >= from && closedAt <= to;
-  });
-  if (closedInRange.length === 0) {
+  const inRange = processes.filter((p) => inWindow(p.created_at, from, to) && inWindow(p.closed_at, from, to));
+  if (inRange.length === 0) {
     return { averageHours: null, closedCount: 0 };
   }
-  const totalHours = closedInRange.reduce((sum, p) => {
+  const totalHours = inRange.reduce((sum, p) => {
     const hours = (new Date(p.closed_at!).getTime() - new Date(p.created_at).getTime()) / (1000 * 60 * 60);
     return sum + hours;
   }, 0);
-  return { averageHours: roundPercent(totalHours / closedInRange.length), closedCount: closedInRange.length };
+  return { averageHours: roundPercent(totalHours / inRange.length), closedCount: inRange.length };
 }
 
 export interface ApplicationProcessingTimeExplainRow {
@@ -223,11 +231,7 @@ export function applicationProcessingTimeExplainRows(
   const from = new Date(fromDate);
   const to = new Date(toDate);
   return processes
-    .filter((p) => {
-      if (!p.closed_at) return false;
-      const closedAt = new Date(p.closed_at);
-      return closedAt >= from && closedAt <= to;
-    })
+    .filter((p) => inWindow(p.created_at, from, to) && inWindow(p.closed_at, from, to))
     .map((p) => ({
       applicationName: p.name,
       createdAt: p.created_at,
@@ -327,64 +331,84 @@ export interface ApplicantResponseTimelinessSummary {
   ratePercent: number | null;
 }
 
-// CONFIRMED LIVE 2026-07-06 against the vendor's own drill-down data: for
-// each Applications Process, find whichever of its tasks completed FIRST
-// (earliest completed_at, regardless of what the task is), and check
-// whether that happened within 24 hours of the process's created_at.
+// REBUILT 2026-07-26, per Jason directly, replacing the 2026-07-06 formula
+// above (kept in git history, not this comment). CONFIRMED EXACT (to the
+// tenth of an hour) against three real rows from the vendor's own real
+// screenshot (2642 East Ocean View Ave A1: 212.2h; 1439 Simpson Court:
+// 209.3h; 1149 Birks Lane: 429.1h) by pulling the real LeadSimple task
+// records behind each one directly.
 //
-// POPULATION — deliberate, approved divergence from the vendor's own
-// number: the vendor's live "(90d)" report also sweeps in old,
-// already-closed applications (some from 2023) whenever some unrelated
-// administrative task (most commonly a Bookkeeper "Charge Owner Leasing
-// Fee" cleanup task, done months or years after the application closed)
-// happens to be that process's earliest-completed task on record. That
-// inflates "hours to complete" into the hundreds/thousands and drags the
-// score down with backlog noise that has nothing to do with how fast staff
-// respond to a CURRENT applicant. Jason confirmed 2026-07-06: score only
-// applications actually created within the window. Expect this to read
-// higher than the vendor's own snapshot whenever that backlog noise is
-// present — that's the point, not a bug.
+// This is NOT "time from application creation to its first action" (the
+// old formula) — it's: of the tasks that got COMPLETED within the window,
+// take the earliest one per Applications Process, and time THAT ONE TASK
+// from when it was itself created (assigned) to when it was completed.
+// Two consequences that surprised us, both confirmed against real data:
+//   - The timed task is often nowhere near the start of the application —
+//     e.g. Birks Lane's 429.1h was a "Charge Owner Leasing Fee" bookkeeping
+//     task that didn't even exist until the lease was already signed; it's
+//     just the first one whose OWN completion landed inside this window.
+//   - A process only enters the population at all if something on it was
+//     completed within the window — there's no more "created but never
+//     responded to" case to separately count against the rate the way the
+//     old created_at-cohort approach did.
+// Population count still won't be pixel-exact against any single vendor
+// screenshot moment (confirmed live 2026-07-26: ours read 34/67.6% against
+// a screenshot showing 30/60% taken under an hour earlier) — real,
+// continuously-changing live data, same tolerance already accepted for
+// every other live-computed KPI on this dashboard.
 export function summarizeApplicantResponseTimeliness(
   processes: LeadSimpleProcess[],
   tasksByProcessId: Map<string, LeadSimpleTask[]>,
   fromDate: string,
   toDate: string
 ): ApplicantResponseTimelinessSummary {
-  const from = new Date(fromDate);
-  const to = new Date(toDate);
-  const inWindow = processes.filter((p) => {
-    const c = new Date(p.created_at);
-    return c >= from && c <= to;
-  });
-  if (inWindow.length === 0) {
+  const firstInWindow = firstTaskCompletedInWindowByProcess(processes, tasksByProcessId, fromDate, toDate);
+  if (firstInWindow.size === 0) {
     return { withinCount: 0, totalCount: 0, ratePercent: null };
   }
   let withinCount = 0;
-  for (const process of inWindow) {
-    const firstCompleted = firstCompletedTask(tasksByProcessId.get(process.id) ?? []);
-    if (!firstCompleted) continue; // no response yet -- counts against the rate, not toward it
-    const hours = (new Date(firstCompleted.completed_at!).getTime() - new Date(process.created_at).getTime()) / 36e5;
+  for (const task of firstInWindow.values()) {
+    const hours = (new Date(task.completed_at!).getTime() - new Date(task.created_at).getTime()) / 36e5;
     if (hours <= 24) withinCount++;
   }
   return {
     withinCount,
-    totalCount: inWindow.length,
-    ratePercent: roundPercent((withinCount / inWindow.length) * 100),
+    totalCount: firstInWindow.size,
+    ratePercent: roundPercent((withinCount / firstInWindow.size) * 100),
   };
 }
 
-function firstCompletedTask(tasks: LeadSimpleTask[]): LeadSimpleTask | null {
-  const completed = tasks.filter((t) => t.completed_at !== null);
-  if (completed.length === 0) return null;
-  completed.sort((a, b) => new Date(a.completed_at!).getTime() - new Date(b.completed_at!).getTime());
-  return completed[0];
+// For each process, the earliest-completed task whose completed_at itself
+// falls within [fromDate, toDate] — not the earliest task ever, and not
+// filtered by when the PROCESS was created. A process with nothing
+// completed in the window is absent from the result entirely.
+function firstTaskCompletedInWindowByProcess(
+  processes: LeadSimpleProcess[],
+  tasksByProcessId: Map<string, LeadSimpleTask[]>,
+  fromDate: string,
+  toDate: string
+): Map<string, LeadSimpleTask> {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  const result = new Map<string, LeadSimpleTask>();
+  for (const process of processes) {
+    const completedInWindow = (tasksByProcessId.get(process.id) ?? []).filter((t) => {
+      if (!t.completed_at) return false;
+      const c = new Date(t.completed_at);
+      return c >= from && c <= to;
+    });
+    if (completedInWindow.length === 0) continue;
+    completedInWindow.sort((a, b) => new Date(a.completed_at!).getTime() - new Date(b.completed_at!).getTime());
+    result.set(process.id, completedInWindow[0]);
+  }
+  return result;
 }
 
 export interface ApplicantResponseTimelinessExplainRow {
   applicationName: string;
   firstTaskDescription: string | null;
-  hoursToComplete: number | null;
-  within24h: boolean | null;
+  hoursToComplete: number;
+  within24h: boolean;
   assignee: string | null;
 }
 
@@ -394,33 +418,20 @@ export function applicantResponseTimelinessExplainRows(
   fromDate: string,
   toDate: string
 ): ApplicantResponseTimelinessExplainRow[] {
-  const from = new Date(fromDate);
-  const to = new Date(toDate);
-  return processes
-    .filter((p) => {
-      const c = new Date(p.created_at);
-      return c >= from && c <= to;
-    })
-    .map((process) => {
-      const first = firstCompletedTask(tasksByProcessId.get(process.id) ?? []);
-      if (!first) {
-        return {
-          applicationName: process.name,
-          firstTaskDescription: null,
-          hoursToComplete: null,
-          within24h: null,
-          assignee: null,
-        };
-      }
-      const hours = (new Date(first.completed_at!).getTime() - new Date(process.created_at).getTime()) / 36e5;
+  const firstInWindow = firstTaskCompletedInWindowByProcess(processes, tasksByProcessId, fromDate, toDate);
+  const processById = new Map(processes.map((p) => [p.id, p]));
+  return [...firstInWindow.entries()]
+    .map(([processId, task]) => {
+      const hours = (new Date(task.completed_at!).getTime() - new Date(task.created_at).getTime()) / 36e5;
       return {
-        applicationName: process.name,
-        firstTaskDescription: first.description,
+        applicationName: processById.get(processId)?.name ?? "Unknown",
+        firstTaskDescription: task.description,
         hoursToComplete: roundPercent(hours),
         within24h: hours <= 24,
-        assignee: first.assignee?.name ?? null,
+        assignee: task.assignee?.name ?? null,
       };
-    });
+    })
+    .sort((a, b) => a.applicationName.localeCompare(b.applicationName));
 }
 
 export interface LeaseRenewalRateSummary {

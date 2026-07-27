@@ -81,7 +81,6 @@ const SOURCE_BADGE = { buildium: "BD", rent_engine: "RE", lead_simple: "LS" };
 const KPI_NOTE = {
   "Lease Renewal Rate": "trailing 12 mo",
   "Days on Market": "as of today",
-  "Applicant Response Timeliness": "trailing 90d",
 };
 
 // Targets are always clean, round configured numbers (95, 70, 21, 3, ...) —
@@ -436,19 +435,17 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Status", render: (r) => vendorComplianceReason(r) },
   ],
   // CONFIRMED against a real vendor screenshot (2026-07-26): the vendor's
-  // own site has "Tax ID Type" (spaced) alongside "TaxPayerId" (one word)
-  // in the SAME table -- a real inconsistency, matched exactly as observed
-  // rather than forced into one consistent style (same treatment already
-  // applied to Lease Renewal Rate's subtitle punctuation elsewhere in this
-  // file). Vendor Compliance's own "Tax Payer ID" (spaced) was a separate,
-  // explicit request from Jason for THAT drilldown only -- not a rename
-  // that carries over here.
+  // own site originally showed "TaxPayerId" (one word) here, a real
+  // inconsistency with "Tax ID Type" (spaced) in the SAME table. Per Jason
+  // directly (2026-07-27), the label is now spaced out to "Tax Payer ID"
+  // here too, matching Vendor Compliance's column -- a deliberate departure
+  // from the vendor's literal wording, not an oversight.
   "1099 Compliance": [
     { label: "Vendor", key: "vendorName" },
     { label: "Category", render: (r) => r.category ?? "—" },
     { label: "Tax ID Type", render: (r) => r.taxPayerIdType ?? "—" },
-    { label: "TaxPayerId", render: (r) => (r.hasTaxPayerId ? "yes" : "no") },
-    { label: "Status", render: (r) => (r.compliant ? "Compliant" : "missing TaxPayerId") },
+    { label: "Tax Payer ID", render: (r) => (r.hasTaxPayerId ? "yes" : "no") },
+    { label: "Status", render: (r) => (r.compliant ? "Compliant" : "missing Tax Payer ID") },
   ],
   "Days on Market": [
     { label: "Address", render: (r) => r.address ?? "—" },
@@ -458,9 +455,10 @@ const KPI_EXPLAIN_COLUMNS = {
   ],
   "Application Processing Time": [
     { label: "Application", key: "applicationName" },
-    { label: "Created", render: (r) => r.createdAt.slice(0, 10) },
-    { label: "Closed", render: (r) => r.closedAt.slice(0, 10) },
+    { label: "Created", render: (r) => formatShortMonthDayYear(r.createdAt) },
+    { label: "Closed", render: (r) => formatShortMonthDayYear(r.closedAt) },
     { label: "Hours", key: "hours" },
+    { label: "Within 48h", render: (r) => (r.hours <= 48 ? "yes" : "no") },
   ],
   "Applicant Response Timeliness": [
     { label: "Application", key: "applicationName" },
@@ -618,11 +616,30 @@ const KPI_SUBTITLE_BUILDERS = {
   // our own scoring engine's plain ≥100% threshold (a known, documented
   // simplification, see docs/vendor-reference.md) -- written out literally
   // here rather than derived from kpi.targetValue/targetOperator, since our
-  // scoring model can't represent "by Jan" at all.
+  // scoring model can't represent "by Jan" at all. "Tax Payer ID" (spaced)
+  // per Jason directly (2026-07-27), departing from the vendor's literal
+  // one-word wording -- same treatment as the column label above.
   "1099 Compliance": (result, kpi) => {
     const compliant = result.rows.filter((r) => r.compliant).length;
     const requiring = result.rows.length;
-    return `${compliant} with TaxPayerId ÷ ${requiring} flagged IncludeIn1099 = ${formatKpiActual(kpi)} · target 100% by Jan`;
+    return `${compliant} with Tax Payer ID ÷ ${requiring} flagged IncludeIn1099 = ${formatKpiActual(kpi)} · target 100% by Jan`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-26): "60% within
+  // 24h (18/30) -- target >= 95%" -- ">=" WITH a space here, unlike Lease
+  // Renewal Rate's ">=" with no space -- a real, confirmed inconsistency in
+  // the vendor's own site, matched exactly as observed.
+  "Applicant Response Timeliness": (result, kpi) => {
+    const within = result.rows.filter((r) => r.within24h).length;
+    const total = result.rows.length;
+    const accuracyText = Number.isInteger(kpi.actualValue) ? `${kpi.actualValue}%` : formatKpiActual(kpi);
+    return `${accuracyText} within 24h (${within}/${total}) -- target >= ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-26): "Avg 245.8
+  // hours -- 0/6 within 48h -- target <= 48h".
+  "Application Processing Time": (result, kpi) => {
+    const within = result.rows.filter((r) => r.hours <= 48).length;
+    const total = result.rows.length;
+    return `Avg ${kpi.actualValue} hours -- ${within}/${total} within 48h -- target <= ${Math.round(kpi.targetValue)}h`;
   },
 };
 
@@ -636,6 +653,13 @@ const KPI_TITLE_OVERRIDES = {
   "Days on Market": "Days on market",
   "Property Readiness": (result) => `Property Readiness -- Move In Tasks (${result.from} – ${result.to})`,
   "Resident Response Time": (result) => `Resident Response Time -- Asst. Property Manager (${result.from} – ${result.to})`,
+  // CONFIRMED against a real vendor screenshot (2026-07-26): "Applicant
+  // Response Timeliness (2026-07-01 – 2026-07-26)" -- an explicit date
+  // range, replacing the stale "(90d)" assumption this used to be built on.
+  "Applicant Response Timeliness": (result) => `Applicant Response Timeliness (${result.from} – ${result.to})`,
+  // CONFIRMED against a real vendor screenshot (2026-07-26): "Application
+  // Processing Time (2026-07-01 – 2026-07-26)".
+  "Application Processing Time": (result) => `Application Processing Time (${result.from} – ${result.to})`,
 };
 
 function resolveKpiTitle(kpiName, result) {
@@ -679,9 +703,18 @@ const KPI_NOTE_BUILDERS = {
   "Vendor Compliance": () => {
     return `Scope: maintenance/trade vendors (Category starts with "Contractor"). Buildium's ?statuses=Active filter is unreliable so vendors are re-filtered on each record's own IsActive flag (inactive vendors dropped). Maintenance/trade vendors are identified by the built-in vendor Category field (names starting with "Contractor", e.g. Contractors - Plumbing/HVAC/Electrical/Roofing); non-service expense categories (Restaurants, Gas Stations, Suppliers, Travel, etc.) are excluded. If no maintenance categories are found, the metric falls back to all active vendors. Vendors with "Exclude from 1099" checked in Buildium (TaxInformation.IncludeIn1099 = false) are excluded entirely -- they don't require a tax ID or insurance on file. Formula: scoped vendors where Tax Payer ID is populated AND (VendorInsurance.ExpirationDate > today OR the vendor's Category is "Contractor - RE Contractor (1099 Work)", which doesn't require insurance for this kind of one-off referral work), ÷ total scoped vendors. Source: Buildium /v1/vendors, reading IsActive, Category.Name, TaxInformation.TaxPayerId, TaxInformation.IncludeIn1099 and VendorInsurance.ExpirationDate.`;
   },
-  // CONFIRMED against a real vendor screenshot (2026-07-26).
+  // Scope/formula wording CONFIRMED against a real vendor screenshot
+  // (2026-07-26); "Tax Payer ID" (spaced) per Jason directly (2026-07-27).
   "1099 Compliance": () => {
-    return `Scope: maintenance/trade vendors (Category starts with "Contractor"). Formula: scoped vendors where IncludeIn1099 is true AND TaxPayerId is populated, ÷ scoped vendors where IncludeIn1099 is true. Source: Buildium /v1/vendors (IsActive + Category.Name), reading TaxInformation.IncludeIn1099 and TaxInformation.TaxPayerId.`;
+    return `Scope: maintenance/trade vendors (Category starts with "Contractor"). Formula: scoped vendors where IncludeIn1099 is true AND Tax Payer ID is populated, ÷ scoped vendors where IncludeIn1099 is true. Source: Buildium /v1/vendors (IsActive + Category.Name), reading TaxInformation.IncludeIn1099 and TaxInformation.TaxPayerId.`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-26).
+  "Applicant Response Timeliness": () => {
+    return `First completed task per Applications Process. No Leasing Specialist assigned -- showing all assignees.`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-26).
+  "Application Processing Time": () => {
+    return `Applications Process: created_at to closed_at. No Leasing Specialist assigned.`;
   },
 };
 

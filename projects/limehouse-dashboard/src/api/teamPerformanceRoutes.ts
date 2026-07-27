@@ -134,7 +134,7 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   "Vendor Compliance": "Of your active maintenance/trade vendors (Contractors category), the share with both a tax ID on file and current (non-expired) liability insurance.",
   "1099 Compliance": "Of your active maintenance/trade vendors flagged for 1099 reporting, the share that have a tax ID on file.",
   "Days on Market": "True days_on_market from RentEngine's per-unit leasing-performance report (resets when a unit is re-listed).",
-  "Application Processing Time": "Average hours from when an application came in to when it closed out, across every Applications Process that closed this period.",
+  "Application Processing Time": "Average hours from when an application came in to when it closed out, across every Applications Process both created AND closed this period.",
   "Applicant Response Timeliness": "Of every Application that came in over the trailing 90 days, the share where the first task on it got completed within 24 hours. Applications with no completed task yet count against the rate. Note: this counts only applications that arrived in the last 90 days — it deliberately excludes old, already-closed applications whose only recent activity is an unrelated administrative task (e.g. a bookkeeping fee charge), which would otherwise skew the score with stale backlog noise.",
   "Showing Completion Rate": "Showings completed ÷ showings scheduled, across AVAILABLE listings only (RentEngine's own unit status isn't \"Leased\") for the selected period. RentEngine doesn't break showings into accompanied vs. self-guided, so self-showings can't be excluded from either side.",
   "Property Readiness": "Of the tasks in LeadSimple's Move In Process due this period, the share completed by their due date. A task not yet completed counts against the rate. Source: LeadSimple tasks on the 06 Move In Process workflow.",
@@ -300,16 +300,16 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
           return;
         }
         const rows = applicationProcessingTimeExplainRows(applications.data, from, to);
-        res.json({ kpiName, formula, rows });
+        res.json({ kpiName, formula, rows, from, to });
         return;
       }
       case "Applicant Response Timeliness": {
-        // Fixed trailing-90-day window (the vendor's own label reads
-        // "(90d)") — deliberately not tied to the quarter/period selector.
-        const now = new Date();
-        const windowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        const windowEnd = now.toISOString().slice(0, 10);
-        const responseData = await fetchApplicationsWithTasksForResponseTimeliness(windowStart);
+        // CHANGED 2026-07-26, per Jason directly: the "(90d)" trailing
+        // window this used to assume was based on stale vendor wording — a
+        // real screenshot showed an explicit "(2026-07-01 – 2026-07-26)"
+        // range instead, matching this route's own quarter-to-date `from`/
+        // `to` (already resolved above), not a fixed 90-day lookback.
+        const responseData = await fetchApplicationsWithTasksForResponseTimeliness(from);
         if (!responseData.connected || !responseData.data) {
           res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Applicant Response Timeliness." });
           return;
@@ -317,10 +317,10 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
         const rows = applicantResponseTimelinessExplainRows(
           responseData.data.processes,
           responseData.data.tasksByProcessId,
-          windowStart,
-          windowEnd
+          from,
+          to
         );
-        res.json({ kpiName, formula, rows });
+        res.json({ kpiName, formula, rows, from, to });
         return;
       }
       case "Showing Completion Rate": {

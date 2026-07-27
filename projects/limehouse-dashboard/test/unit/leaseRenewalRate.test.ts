@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeLeaseRenewalRate, summarizeApplicationProcessingTime, type LeadSimpleProcess } from "../../src/leadsimple/client.js";
+import { summarizeLeaseRenewalRate, summarizeApplicationProcessingTime, applicationProcessingTimeExplainRows, type LeadSimpleProcess } from "../../src/leadsimple/client.js";
 
 function process(overrides: Partial<LeadSimpleProcess>): LeadSimpleProcess {
   return {
@@ -111,5 +111,32 @@ describe("summarizeApplicationProcessingTime", () => {
     const processes = [process({ created_at: "2026-05-01T00:00:00Z", closed_at: "2026-05-02T00:00:00Z" })];
     const result = summarizeApplicationProcessingTime(processes, "2026-06-01", "2026-06-30");
     expect(result).toEqual({ averageHours: null, closedCount: 0 });
+  });
+
+  // REBUILT 2026-07-26, per Jason directly, confirmed exact against a real
+  // vendor screenshot (Avg 245.8h across 6 real applications): a process
+  // created BEFORE the window but closed inside it (real backlog closing
+  // out this period) must be excluded, even though the old formula counted
+  // it -- population requires created_at AND closed_at both in range.
+  it("excludes a process created before the window even though it closed inside it", () => {
+    const processes = [
+      process({ created_at: "2026-05-15T00:00:00Z", closed_at: "2026-06-10T00:00:00Z" }), // created before window
+      process({ created_at: "2026-06-02T00:00:00Z", closed_at: "2026-06-05T00:00:00Z" }), // both in window, 72h
+    ];
+    const result = summarizeApplicationProcessingTime(processes, "2026-06-01", "2026-06-30");
+    expect(result).toEqual({ averageHours: 72, closedCount: 1 });
+  });
+});
+
+describe("applicationProcessingTimeExplainRows", () => {
+  it("omits a process created before the window even though it closed inside it", () => {
+    const processes = [
+      process({ name: "Old backlog", created_at: "2026-05-15T00:00:00Z", closed_at: "2026-06-10T00:00:00Z" }),
+      process({ name: "Real this period", created_at: "2026-06-02T00:00:00Z", closed_at: "2026-06-05T00:00:00Z" }),
+    ];
+    const rows = applicationProcessingTimeExplainRows(processes, "2026-06-01", "2026-06-30");
+    expect(rows).toEqual([
+      { applicationName: "Real this period", createdAt: "2026-06-02T00:00:00Z", closedAt: "2026-06-05T00:00:00Z", hours: 72 },
+    ]);
   });
 });

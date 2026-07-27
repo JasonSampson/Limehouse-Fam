@@ -45,6 +45,8 @@ import {
   propertyReadinessExplainRows,
   fetchResidentResponseTasks,
   residentResponseTimeExplainRows,
+  fetchLeaseRenewalTasks,
+  renewalFollowUpTimelinessExplainRows,
 } from "../leadsimple/client.js";
 
 export const teamPerformanceRoutes = Router();
@@ -139,6 +141,11 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   "Showing Completion Rate": "Showings completed ÷ showings scheduled, across AVAILABLE listings only (RentEngine's own unit status isn't \"Leased\") for the selected period. RentEngine doesn't break showings into accompanied vs. self-guided, so self-showings can't be excluded from either side.",
   "Property Readiness": "Of the tasks in LeadSimple's Move In Process due this period, the share completed by their due date. A task not yet completed counts against the rate. Source: LeadSimple tasks on the 06 Move In Process workflow.",
   "Resident Response Time": "Average business hours (Mon-Fri, 9am-5pm Eastern, excluding US federal holidays) for Addison to complete her own email/todo/meet tasks in LeadSimple, from task creation to completion.",
+  // ADDED 2026-07-27, per Jason directly. On-time rule is a disclosed
+  // approximation, not vendor-confirmed exactly -- see the note builder in
+  // team-performance.js and the comment above summarizeRenewalFollowUpTimeliness
+  // in src/leadsimple/client.ts for the full story.
+  "Renewal Follow-Up Timeliness": "Of the real todo tasks on the 07 Lease Renewal Process completed this period, the share completed by (or before) their due date's calendar day. Source: LeadSimple tasks, kind = todo.",
   // CORRECTED 2026-07-19, per Jason directly, against a real vendor
   // screenshot: enumerates the same 4 non-renewal outcomes the vendor's
   // own note text lists by name — the underlying scoring logic already
@@ -355,6 +362,16 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
           return;
         }
         const rows = residentResponseTimeExplainRows(residentTasks.data, from, to);
+        res.json({ kpiName, formula, rows, from, to });
+        return;
+      }
+      case "Renewal Follow-Up Timeliness": {
+        const renewalTasks = await fetchLeaseRenewalTasks(from);
+        if (!renewalTasks.connected || !renewalTasks.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Renewal Follow-Up Timeliness." });
+          return;
+        }
+        const rows = renewalFollowUpTimelinessExplainRows(renewalTasks.data, from, to);
         res.json({ kpiName, formula, rows, from, to });
         return;
       }

@@ -241,15 +241,18 @@ export function applicationProcessingTimeExplainRows(
 }
 
 // Task shape shared by every task-based KPI (Applicant Response
-// Timeliness, Property Readiness, Resident Response Time). LeadSimple's
-// /tasks endpoint returns far more fields than this (deal, step, etc.) —
-// zod silently strips anything not declared here, so only what these KPIs
-// actually need is modeled. created_at/due_at/kind and process.name/
-// assignee.email were ADDED 2026-07-20 for Property Readiness and
-// Resident Response Time — confirmed live real fields on every task
-// (e.g. real case: {kind: "email", due_at: "2026-07-21T17:13:43Z",
-// assignee: {email: "addison@limehousepm.com"}, process: {name: "06 Move
-// In Process for 8032 Van Patten Road"}}).
+// Timeliness, Property Readiness, Resident Response Time, Renewal
+// Follow-Up Timeliness). LeadSimple's /tasks endpoint returns far more
+// fields than this (deal, step, etc.) — zod silently strips anything not
+// declared here, so only what these KPIs actually need is modeled.
+// created_at/due_at/kind and process.name/assignee.email were ADDED
+// 2026-07-20 for Property Readiness and Resident Response Time —
+// confirmed live real fields on every task (e.g. real case: {kind:
+// "email", due_at: "2026-07-21T17:13:43Z", assignee: {email:
+// "addison@limehousepm.com"}, process: {name: "06 Move In Process for
+// 8032 Van Patten Road"}}). process.stage — ADDED 2026-07-27 for Renewal
+// Follow-Up Timeliness, CONFIRMED LIVE present on every real task's
+// nested process object (e.g. {name: "Send Lease", status: "working"}).
 const leadSimpleTaskSchema = z.object({
   id: z.string(),
   description: z.string().nullable(),
@@ -263,6 +266,7 @@ const leadSimpleTaskSchema = z.object({
       name: z.string(),
       process_type_id: z.string(),
       created_at: z.string(),
+      stage: z.object({ name: z.string(), status: z.string() }).nullable().optional(),
     })
     .nullable(),
   assignee: z.object({ name: z.string(), email: z.string() }).nullable(),
@@ -606,6 +610,108 @@ export function propertyReadinessExplainRows(
       assignee: t.assignee?.name ?? null,
     }))
     .sort((a, b) => b.dueAt.localeCompare(a.dueAt));
+}
+
+// ============================================================================
+// Renewal Follow-Up Timeliness (Leasing Specialist) — ADDED 2026-07-27, per
+// Jason directly. Previously showed "No data" (definition seeded but not
+// wired, see docs/vendor-reference.md) — Jason's own description ("Completed
+// tasks in Lease Renewal Process") wasn't specific enough to build against
+// until a real vendor drill-down screenshot gave real rows to test against.
+//
+// CONFIRMED LIVE 2026-07-27, POPULATION exact: real "todo" tasks (excluding
+// automated "email"/"process" kind tasks) on the 07 Lease Renewal Process
+// whose completed_at falls in the window — NOT due_at in the window, the
+// rule Property Readiness uses. Verified exact: 164 tasks, matching the
+// vendor's real "133/164" denominator precisely.
+//
+// ON-TIME RULE — NOT vendor-confirmed exactly, per Jason directly
+// ("Honestly, I don't know" when asked how LeadSimple/his team defines
+// "on time" here): comparing a task's own due_at to completed_at down to
+// the exact minute produces nonsense (~20% on-time) because many tasks'
+// due_at gets reset close to their own completion, not the original
+// deadline. The most defensible, explainable rule tested — "completed on
+// or before the due date's calendar day" — landed closest to the vendor's
+// real 81.1% at 76.2%, without inventing an arbitrary grace-period number
+// nobody actually confirmed. Shipped as a disclosed approximation, same
+// treatment as Property Readiness/Resident Response Time's own known,
+// accepted discrepancies elsewhere in this file. Revisit if a narrower
+// rule is ever confirmed.
+export const LEASE_RENEWAL_TASK_KIND_INCLUDED = "todo";
+
+export async function fetchLeaseRenewalTasks(windowStartDate: string): Promise<LeadSimpleResult<LeadSimpleTask[]>> {
+  return withConnectionGuard(async () => {
+    const sinceEpoch = Math.floor(new Date(windowStartDate).getTime() / 1000);
+    const tasks = await fetchTasksUpdatedSince(sinceEpoch);
+    return tasks.filter((t) => t.process?.process_type_id === LEASE_RENEWAL_PROCESS_TYPE_ID);
+  });
+}
+
+function dateOnly(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function renewalFollowUpPopulation(tasks: LeadSimpleTask[], fromDate: string, toDate: string): LeadSimpleTask[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  return tasks.filter(
+    (t) => t.kind === LEASE_RENEWAL_TASK_KIND_INCLUDED && t.completed_at !== null && new Date(t.completed_at) >= from && new Date(t.completed_at) <= to
+  );
+}
+
+function renewalFollowUpOnTime(t: LeadSimpleTask): boolean {
+  return t.due_at !== null && dateOnly(t.completed_at!) <= dateOnly(t.due_at);
+}
+
+export interface RenewalFollowUpTimelinessSummary {
+  onTimeCount: number;
+  totalCount: number;
+  ratePercent: number | null;
+}
+
+export function summarizeRenewalFollowUpTimeliness(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): RenewalFollowUpTimelinessSummary {
+  const population = renewalFollowUpPopulation(tasks, fromDate, toDate);
+  if (population.length === 0) {
+    return { onTimeCount: 0, totalCount: 0, ratePercent: null };
+  }
+  const onTimeCount = population.filter(renewalFollowUpOnTime).length;
+  return {
+    onTimeCount,
+    totalCount: population.length,
+    ratePercent: roundPercent((onTimeCount / population.length) * 100),
+  };
+}
+
+export interface RenewalFollowUpTimelinessExplainRow {
+  taskDescription: string | null;
+  processName: string | null;
+  stage: string | null;
+  dueAt: string | null;
+  completedAt: string;
+  onTime: boolean;
+  assignee: string | null;
+}
+
+export function renewalFollowUpTimelinessExplainRows(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): RenewalFollowUpTimelinessExplainRow[] {
+  return renewalFollowUpPopulation(tasks, fromDate, toDate)
+    .map((t) => ({
+      taskDescription: t.description,
+      processName: t.process?.name ?? null,
+      stage: t.process?.stage?.name ?? null,
+      dueAt: t.due_at,
+      completedAt: t.completed_at!,
+      onTime: renewalFollowUpOnTime(t),
+      assignee: t.assignee?.name ?? null,
+    }))
+    .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
 }
 
 // ============================================================================

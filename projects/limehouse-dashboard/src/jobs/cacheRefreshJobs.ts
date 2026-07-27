@@ -47,6 +47,8 @@ import {
   summarizePropertyReadiness,
   fetchResidentResponseTasks,
   summarizeResidentResponseTime,
+  fetchLeaseRenewalTasks,
+  summarizeRenewalFollowUpTimeliness,
 } from "../leadsimple/client.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
@@ -384,6 +386,7 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
     // Leasing Specialist
     let applicantResponseTimelinessPercent: number | null = null;
     let applicationProcessingTimeHours: number | null = null;
+    let renewalFollowUpTimelinessPercent: number | null = null;
     if (isLeadSimpleConnected()) {
       const applicationsResult = await fetchApplicationProcesses();
       if (applicationsResult.connected && applicationsResult.data) {
@@ -413,6 +416,19 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
           responseTimeliness.ratePercent !== null, responseTimeliness.ratePercent, 95, true, "lead_simple"
         );
       }
+
+      // ADDED 2026-07-27, per Jason directly. On-time rule is a disclosed
+      // approximation -- see summarizeRenewalFollowUpTimeliness's own
+      // comment in src/leadsimple/client.ts for the full story.
+      const renewalTasksResult = await fetchLeaseRenewalTasks(periodStart);
+      if (renewalTasksResult.connected && renewalTasksResult.data) {
+        const renewalFollowUp = summarizeRenewalFollowUpTimeliness(renewalTasksResult.data, periodStart, asOfDate);
+        renewalFollowUpTimelinessPercent = renewalFollowUp.ratePercent;
+        await writeSnapshotForEveryDisplayGroup(
+          "leasing_specialist", "Renewal Follow-Up Timeliness", period, periodStart, periodEnd,
+          renewalFollowUp.ratePercent !== null, renewalFollowUp.ratePercent, 95, true, "lead_simple"
+        );
+      }
     }
 
     const summary = {
@@ -425,6 +441,7 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
       rentProcessingAccuracyPercent: rentProcessingAccuracy.accuracyPercent,
       applicantResponseTimelinessPercent,
       applicationProcessingTimeHours,
+      renewalFollowUpTimelinessPercent,
     };
     await completeSyncRun(syncLogId, bankAccounts.length + vendors.length + activeLeases.length);
     logInfo("Team Performance KPIs sync completed", { syncLogId, ...summary });

@@ -493,6 +493,17 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "On Time", render: (r) => (r.onTime ? "yes" : "no") },
     { label: "Assignee", render: (r) => r.assignee ?? "—" },
   ],
+  // CONFIRMED against a real vendor screenshot (2026-07-27): TASK | PROCESS
+  // | STAGE | DUE | COMPLETED | ON TIME | ASSIGNEE.
+  "Renewal Follow-Up Timeliness": [
+    { label: "Task", render: (r) => r.taskDescription ?? "—" },
+    { label: "Process", render: (r) => r.processName ?? "—" },
+    { label: "Stage", render: (r) => r.stage ?? "—" },
+    { label: "Due", render: (r) => (r.dueAt ? formatShortMonthDayYear(r.dueAt) : "—") },
+    { label: "Completed", render: (r) => formatShortMonthDayYear(r.completedAt) },
+    { label: "On Time", render: (r) => (r.onTime ? "yes" : "no") },
+    { label: "Assignee", render: (r) => r.assignee ?? "—" },
+  ],
   "Resident Response Time": [
     { label: "Task", render: (r) => r.taskDescription ?? "—" },
     { label: "Kind", key: "kind" },
@@ -641,6 +652,17 @@ const KPI_SUBTITLE_BUILDERS = {
     const total = result.rows.length;
     return `Avg ${kpi.actualValue} hours -- ${within}/${total} within 48h -- target <= ${Math.round(kpi.targetValue)}h`;
   },
+  // Vendor's real screenshot (2026-07-27) showed "81.1% on time (133/164)
+  // -- target >= 95%" -- same "target >= X%" (spaced) style confirmed for
+  // Applicant Response Timeliness. Our own on-time rule is a disclosed
+  // approximation (see the note builder below), so this will read a real
+  // number close to, but not pixel-identical to, that screenshot.
+  "Renewal Follow-Up Timeliness": (result, kpi) => {
+    const onTime = result.rows.filter((r) => r.onTime).length;
+    const total = result.rows.length;
+    const accuracyText = Number.isInteger(kpi.actualValue) ? `${kpi.actualValue}%` : formatKpiActual(kpi);
+    return `${accuracyText} on time (${onTime}/${total}) -- target >= ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
 };
 
 // Most KPIs' modal title is just the bare KPI name — a few have their own
@@ -660,6 +682,9 @@ const KPI_TITLE_OVERRIDES = {
   // CONFIRMED against a real vendor screenshot (2026-07-26): "Application
   // Processing Time (2026-07-01 – 2026-07-26)".
   "Application Processing Time": (result) => `Application Processing Time (${result.from} – ${result.to})`,
+  // CONFIRMED against a real vendor screenshot (2026-07-27): "Renewal
+  // Follow-Up Timeliness (2026-07-01 – 2026-07-27)".
+  "Renewal Follow-Up Timeliness": (result) => `Renewal Follow-Up Timeliness (${result.from} – ${result.to})`,
 };
 
 function resolveKpiTitle(kpiName, result) {
@@ -715,6 +740,15 @@ const KPI_NOTE_BUILDERS = {
   // CONFIRMED against a real vendor screenshot (2026-07-26).
   "Application Processing Time": () => {
     return `Applications Process: created_at to closed_at. No Leasing Specialist assigned.`;
+  },
+  // ADDED 2026-07-27, per Jason directly. This KPI previously showed "No
+  // data" -- built now against a real vendor drill-down screenshot, but the
+  // exact "on time" tolerance the vendor's own site uses is NOT confirmed
+  // (Jason: "Honestly, I don't know"). Disclosed here plainly rather than
+  // silently guessed, same treatment as Resident Response Time/Property
+  // Readiness's own known discrepancies elsewhere on this dashboard.
+  "Renewal Follow-Up Timeliness": () => {
+    return `Scope: real "todo" tasks (not automated emails) on the 07 Lease Renewal Process, completed this period -- population is scoped by when the TASK was completed, not when it was due (a different rule than Property Readiness). Formula: on time = completed on or before the due date's calendar day. Note: the exact tolerance the vendor's own site uses for "on time" isn't confirmed -- comparing to the precise minute produced a nonsensical result (many tasks' due times reset close to their own completion), so this uses same-calendar-day as the closest defensible rule found. Expect a real, modest gap from the vendor's own number, not a live-data-drift issue. No Leasing Specialist assigned -- showing all assignees. Source: LeadSimple tasks, kind = todo, process_type = 07 Lease Renewal Process.`;
   },
 };
 

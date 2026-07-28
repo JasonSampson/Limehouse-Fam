@@ -49,6 +49,12 @@ import {
   summarizeResidentResponseTime,
   fetchLeaseRenewalTasks,
   summarizeRenewalFollowUpTimeliness,
+  fetchTaskCompletionTasks,
+  summarizeTaskCompletionRate,
+  fetchWorkflowComplianceData,
+  summarizeWorkflowCompliance,
+  fetchLeasingResponseTasks,
+  summarizeLeasingResponseTime,
 } from "../leadsimple/client.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
@@ -387,6 +393,9 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
     let applicantResponseTimelinessPercent: number | null = null;
     let applicationProcessingTimeHours: number | null = null;
     let renewalFollowUpTimelinessPercent: number | null = null;
+    let taskCompletionRatePercent: number | null = null;
+    let workflowCompliancePercent: number | null = null;
+    let leasingResponseTimeHours: number | null = null;
     if (isLeadSimpleConnected()) {
       const applicationsResult = await fetchApplicationProcesses();
       if (applicationsResult.connected && applicationsResult.data) {
@@ -429,6 +438,50 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
           renewalFollowUp.ratePercent !== null, renewalFollowUp.ratePercent, 95, true, "lead_simple"
         );
       }
+
+      // Administrative Assistant — ADDED 2026-07-27, per Jason directly.
+      // On-time rule is vendor-confirmed exactly; population is a
+      // disclosed approximation -- see summarizeTaskCompletionRate's own
+      // comment in src/leadsimple/client.ts for the full story.
+      const taskCompletionResult = await fetchTaskCompletionTasks(periodStart);
+      if (taskCompletionResult.connected && taskCompletionResult.data) {
+        const taskCompletion = summarizeTaskCompletionRate(taskCompletionResult.data, periodStart, asOfDate);
+        taskCompletionRatePercent = taskCompletion.ratePercent;
+        await writeSnapshotForEveryDisplayGroup(
+          "administrative_assistant", "Task Completion Rate", period, periodStart, periodEnd,
+          taskCompletion.ratePercent !== null, taskCompletion.ratePercent, 95, true, "lead_simple"
+        );
+      }
+
+      // Administrative Assistant — ADDED 2026-07-27, per Jason directly.
+      // Compliance rule is vendor-confirmed exactly; process-type scope is
+      // a disclosed approximation -- see summarizeWorkflowCompliance's own
+      // comment in src/leadsimple/client.ts for the full story.
+      const workflowDataResult = await fetchWorkflowComplianceData(periodStart);
+      if (workflowDataResult.connected && workflowDataResult.data) {
+        const workflowCompliance = summarizeWorkflowCompliance(workflowDataResult.data, periodStart, asOfDate);
+        workflowCompliancePercent = workflowCompliance.ratePercent;
+        await writeSnapshotForEveryDisplayGroup(
+          "administrative_assistant", "Workflow Compliance", period, periodStart, periodEnd,
+          workflowCompliance.ratePercent !== null, workflowCompliance.ratePercent, 100, true, "lead_simple"
+        );
+      }
+
+      // Administrative Assistant — ADDED 2026-07-27, per Jason directly.
+      // Formula is vendor-confirmed exactly (due_at to completed_at,
+      // business hours) -- see summarizeLeasingResponseTime's own comment
+      // in src/leadsimple/client.ts for the full story, including why the
+      // snapshot's own sourceSystem stays "lead_simple" even though the
+      // KPI DEFINITION carries both an RE and LS badge.
+      const leasingResponseResult = await fetchLeasingResponseTasks(periodStart);
+      if (leasingResponseResult.connected && leasingResponseResult.data) {
+        const leasingResponseTime = summarizeLeasingResponseTime(leasingResponseResult.data, periodStart, asOfDate);
+        leasingResponseTimeHours = leasingResponseTime.averageHours;
+        await writeSnapshotForEveryDisplayGroup(
+          "administrative_assistant", "Leasing Response Time", period, periodStart, periodEnd,
+          leasingResponseTime.averageHours !== null, leasingResponseTime.averageHours, 24, false, "lead_simple"
+        );
+      }
     }
 
     const summary = {
@@ -442,6 +495,9 @@ export async function runTeamPerformanceKpisSync(): Promise<Record<string, unkno
       applicantResponseTimelinessPercent,
       applicationProcessingTimeHours,
       renewalFollowUpTimelinessPercent,
+      taskCompletionRatePercent,
+      workflowCompliancePercent,
+      leasingResponseTimeHours,
     };
     await completeSyncRun(syncLogId, bankAccounts.length + vendors.length + activeLeases.length);
     logInfo("Team Performance KPIs sync completed", { syncLogId, ...summary });

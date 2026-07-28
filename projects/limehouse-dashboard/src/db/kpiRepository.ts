@@ -116,7 +116,11 @@ export interface KpiDefinitionRow {
   targetOperator: ">=" | "<=";
   unit: string;
   higherIsBetter: boolean;
-  sourceSystem: string;
+  // WIDENED 2026-07-27, per Jason directly, from a single value to a list —
+  // Leasing Response Time's real vendor screenshot shows BOTH an RE and an
+  // LS badge, since that KPI genuinely draws from both systems. Every other
+  // KPI still carries exactly one element.
+  sourceSystem: string[];
   maxBonusUsd: number;
   sortOrder: number;
 }

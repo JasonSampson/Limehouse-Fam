@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { loadEnv, isLeadSimpleConnected } from "../config/env.js";
 import { logWarn } from "../lib/logger.js";
-import { businessHoursBetween } from "../kpi/businessHours.js";
+import { businessHoursBetween, nyDateOnly } from "../kpi/businessHours.js";
 
 // REBUILT 2026-07-05 against LeadSimple's REAL REST API, confirmed live
 // via docs Jason retrieved himself from https://app.leadsimple.com/api_docs
@@ -29,23 +29,72 @@ function leadSimpleHeaders(): Record<string, string> {
   };
 }
 
+// ADDED 2026-07-28, per Jason directly — first pass mirrored Buildium's
+// client (see buildiumGet in src/buildium/client.ts) exactly, but CONFIRMED
+// LIVE that pass wasn't enough: a real 429 forced deliberately (110 rapid
+// /tasks calls) showed LeadSimple's limit is RECORDS-based, not just
+// request-count (tripped at 2021/2000 records while only 81/100 requests),
+// and the wait time comes back on a LeadSimple-specific header,
+// `x-ratelimit-retry-after` (here: 39 seconds; the response body literally
+// says "please wait 1 minute before retrying") — NOT the standard
+// `Retry-After` header Buildium uses, which this code originally checked
+// for exclusively. That's why the first version of this retry still failed
+// after a real ~20-35s of backoff: it was never reading LeadSimple's real
+// wait time at all, only ever falling back to the same short 500ms-4s
+// schedule that suits Buildium's much smaller burst.
+//
+// Root cause, confirmed end to end: this account's heaviest KPIs paginate
+// through 80-90+ pages of tasks (Workflow Compliance alone also fires 3
+// concurrent process-type pulls on top of that), which reliably exceeds
+// the ~2000-record window within a single KPI's own pagination loop —
+// this was never about "waiting long enough between syncs," it's that one
+// KPI's own pagination can blow the budget by itself, every time it runs.
+const MAX_RATE_LIMIT_RETRIES = 4;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function leadSimpleGet<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, any>): Promise<T> {
   const env = loadEnv();
-  const res = await fetch(`${env.LEADSIMPLE_BASE_URL}${path}`, { headers: leadSimpleHeaders() });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "<no body>");
-    throw new LeadSimpleApiError(`LeadSimple API error ${res.status} on ${path}`, res.status, body);
+
+  let attempt = 0;
+  for (;;) {
+    const res = await fetch(`${env.LEADSIMPLE_BASE_URL}${path}`, { headers: leadSimpleHeaders() });
+
+    if (res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+      // LeadSimple's own header takes priority — it's the real wait time
+      // for THIS account's actual limit (records, not requests). The
+      // standard Retry-After is checked too in case that ever changes, but
+      // every real 429 seen from this API has used the x- header instead.
+      const retryAfterHeader = res.headers.get("x-ratelimit-retry-after") ?? res.headers.get("Retry-After");
+      const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : NaN;
+      // +1s safety margin on top of LeadSimple's own stated wait, so a
+      // retry doesn't land right on the boundary and bounce again on clock
+      // skew. Fallback (no usable header) escalates 2s/4s/8s/16s rather
+      // than Buildium's 500ms-4s — LeadSimple's real window is ~60s, so a
+      // sub-4s fallback was never going to be enough.
+      const backoffMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs + 1000 : 2000 * 2 ** attempt;
+      await sleep(backoffMs);
+      attempt++;
+      continue;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "<no body>");
+      throw new LeadSimpleApiError(`LeadSimple API error ${res.status} on ${path}`, res.status, body);
+    }
+    const json = await res.json();
+    const parsed = schema.safeParse(json);
+    if (!parsed.success) {
+      throw new LeadSimpleApiError(
+        `LeadSimple API response for ${path} did not match expected shape: ${parsed.error.message}`,
+        res.status,
+        JSON.stringify(json)
+      );
+    }
+    return parsed.data;
   }
-  const json = await res.json();
-  const parsed = schema.safeParse(json);
-  if (!parsed.success) {
-    throw new LeadSimpleApiError(
-      `LeadSimple API response for ${path} did not match expected shape: ${parsed.error.message}`,
-      res.status,
-      JSON.stringify(json)
-    );
-  }
-  return parsed.data;
 }
 
 export interface LeadSimpleResult<T> {
@@ -253,10 +302,15 @@ export function applicationProcessingTimeExplainRows(
 // 8032 Van Patten Road"}}). process.stage — ADDED 2026-07-27 for Renewal
 // Follow-Up Timeliness, CONFIRMED LIVE present on every real task's
 // nested process object (e.g. {name: "Send Lease", status: "working"}).
+// skipped — ADDED 2026-07-27 for Workflow Compliance, CONFIRMED LIVE a
+// real boolean field present on every real task payload (e.g. real case:
+// {skipped: false, kind: "todo", completed_at: null}), previously
+// silently stripped since no earlier KPI needed it.
 const leadSimpleTaskSchema = z.object({
   id: z.string(),
   description: z.string().nullable(),
   kind: z.string(),
+  skipped: z.boolean(),
   created_at: z.string(),
   due_at: z.string().nullable(),
   completed_at: z.string().nullable(),
@@ -827,4 +881,370 @@ export function residentResponseTimeExplainRows(
       };
     })
     .sort((a, b) => b.startAt.localeCompare(a.startAt));
+}
+
+// ============================================================================
+// Leasing Response Time (Administrative Assistant) — ADDED 2026-07-27, per
+// Jason directly, against a real vendor drill-down screenshot. CONFIRMED
+// LIVE ODDITY: the vendor's own drilldown modal is titled "Resident
+// Response Time -- Admin Assistant", reusing the exact same drilldown
+// style as the UNRELATED Resident Response Time KPI above (Addison's own
+// communication-task response time, Portfolio Assistant role) -- even
+// though the summary tile itself calls this "Leasing Response Time."
+// Matched literally in the frontend title override; kept as a separate
+// kpi_name everywhere else, since these score two different people on two
+// different roles.
+//
+// FORMULA DIFFERENCE from Resident Response Time, confirmed by the
+// screenshot's own note text: hours are measured from due_at to
+// completed_at (not created_at to completed_at) -- how fast Belinda
+// clears a task relative to when it was due, not relative to when it was
+// assigned. A task completed before its own due date naturally yields 0
+// hours (businessHoursBetween already floors at 0 for end <= start,
+// confirmed against a real example row: due Jul 21, completed Jul 20).
+//
+// Scope: same "communication tasks" kind set as Resident Response Time
+// (email/todo/meet, RESIDENT_RESPONSE_TASK_KINDS above) -- the visible
+// screenshot rows only showed email/todo, but the vendor's own drilldown
+// reuses that exact concept/style, so the same kind set carries over
+// rather than being guessed fresh. Badge is intentionally BOTH rent_engine
+// and lead_simple (per Jason directly) even though every field this
+// formula reads is LeadSimple-native -- the vendor's own site classifies
+// this KPI as spanning both systems.
+export async function fetchLeasingResponseTasks(windowStartDate: string): Promise<LeadSimpleResult<LeadSimpleTask[]>> {
+  return withConnectionGuard(async () => {
+    const sinceEpoch = Math.floor(new Date(windowStartDate).getTime() / 1000);
+    const tasks = await fetchTasksUpdatedSince(sinceEpoch);
+    return tasks.filter(
+      (t) => t.assignee?.email === TASK_COMPLETION_ASSIGNEE_EMAIL && RESIDENT_RESPONSE_TASK_KINDS.has(t.kind)
+    );
+  });
+}
+
+function leasingResponsePopulation(tasks: LeadSimpleTask[], fromDate: string, toDate: string): LeadSimpleTask[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  return tasks.filter((t) => {
+    if (t.completed_at === null || t.due_at === null) return false;
+    const dueAt = new Date(t.due_at);
+    return dueAt >= from && dueAt <= to;
+  });
+}
+
+export interface LeasingResponseTimeSummary {
+  averageHours: number | null;
+  withinCount: number;
+  totalCount: number;
+}
+
+export function summarizeLeasingResponseTime(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): LeasingResponseTimeSummary {
+  const population = leasingResponsePopulation(tasks, fromDate, toDate);
+  if (population.length === 0) {
+    return { averageHours: null, withinCount: 0, totalCount: 0 };
+  }
+  const hoursPerTask = population.map((t) => businessHoursBetween(t.due_at!, t.completed_at!));
+  const withinCount = hoursPerTask.filter((h) => h <= 24).length;
+  const averageHours = hoursPerTask.reduce((sum, h) => sum + h, 0) / hoursPerTask.length;
+  return {
+    averageHours: Math.round(averageHours * 10) / 10,
+    withinCount,
+    totalCount: population.length,
+  };
+}
+
+export interface LeasingResponseTimeExplainRow {
+  taskDescription: string | null;
+  kind: string;
+  startAt: string;
+  completedAt: string;
+  hours: number;
+  within24BusinessHours: boolean;
+}
+
+export function leasingResponseTimeExplainRows(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): LeasingResponseTimeExplainRow[] {
+  return leasingResponsePopulation(tasks, fromDate, toDate)
+    .map((t) => {
+      const hours = businessHoursBetween(t.due_at!, t.completed_at!);
+      return {
+        taskDescription: t.description,
+        kind: t.kind,
+        startAt: t.due_at!,
+        completedAt: t.completed_at!,
+        hours: Math.round(hours * 10) / 10,
+        within24BusinessHours: hours <= 24,
+      };
+    })
+    .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+}
+
+// ============================================================================
+// Task Completion Rate (Administrative Assistant) — ADDED 2026-07-27, per
+// Jason directly, against a real vendor drill-down screenshot.
+//
+// ON-TIME RULE — vendor-CONFIRMED, not guessed (unlike Renewal Follow-Up
+// Timeliness's own approximation above): the vendor's own note text reads
+// "On time = completed on or before the due date's calendar day (ET)."
+// Verified exact against named example rows from the screenshot, e.g.
+// "Update Lease Fields" due 2026-06-30 (ET), completed 2026-07-01 — a real
+// late task, correctly not on time.
+//
+// POPULATION — same kind of residual gap as Renewal Follow-Up Timeliness,
+// disclosed rather than silently guessed: tasks assigned to Belinda
+// (assistant@limehousepm.com), completed within the window. CONFIRMED
+// LIVE that "todo" alone isn't the full population — the vendor's own
+// screenshot shows two blank "(no description)" example rows that are
+// real, verified LeadSimple-automated "process"-kind tasks, not "todo".
+// Every reasonable kind combination tested landed within ~0.3 points of
+// the vendor's real 92.1%, so "todo" + "process" (excluding automated
+// emails and stage-transition markers) was chosen as the closest,
+// simplest-to-explain rule — population came out to 537 vs. the vendor's
+// real 521, close but not exact.
+export const TASK_COMPLETION_ASSIGNEE_EMAIL = "assistant@limehousepm.com";
+const TASK_COMPLETION_TASK_KINDS = new Set(["todo", "process"]);
+
+export async function fetchTaskCompletionTasks(windowStartDate: string): Promise<LeadSimpleResult<LeadSimpleTask[]>> {
+  return withConnectionGuard(async () => {
+    const sinceEpoch = Math.floor(new Date(windowStartDate).getTime() / 1000);
+    const tasks = await fetchTasksUpdatedSince(sinceEpoch);
+    return tasks.filter(
+      (t) => t.assignee?.email === TASK_COMPLETION_ASSIGNEE_EMAIL && TASK_COMPLETION_TASK_KINDS.has(t.kind)
+    );
+  });
+}
+
+function taskCompletionPopulation(tasks: LeadSimpleTask[], fromDate: string, toDate: string): LeadSimpleTask[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  return tasks.filter((t) => t.completed_at !== null && new Date(t.completed_at) >= from && new Date(t.completed_at) <= to);
+}
+
+function taskCompletionOnTime(t: LeadSimpleTask): boolean {
+  return t.due_at !== null && nyDateOnly(t.completed_at!) <= nyDateOnly(t.due_at);
+}
+
+export interface TaskCompletionRateSummary {
+  onTimeCount: number;
+  totalCount: number;
+  ratePercent: number | null;
+}
+
+export function summarizeTaskCompletionRate(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): TaskCompletionRateSummary {
+  const population = taskCompletionPopulation(tasks, fromDate, toDate);
+  if (population.length === 0) {
+    return { onTimeCount: 0, totalCount: 0, ratePercent: null };
+  }
+  const onTimeCount = population.filter(taskCompletionOnTime).length;
+  return {
+    onTimeCount,
+    totalCount: population.length,
+    ratePercent: roundPercent((onTimeCount / population.length) * 100),
+  };
+}
+
+export interface TaskCompletionRateExplainRow {
+  taskDescription: string | null;
+  // "standalone" (not null/"—") matches the vendor's own real wording for
+  // a task with no process, confirmed against the real screenshot.
+  processName: string;
+  dueAt: string | null;
+  completedAt: string;
+  onTime: boolean;
+}
+
+export function taskCompletionRateExplainRows(
+  tasks: LeadSimpleTask[],
+  fromDate: string,
+  toDate: string
+): TaskCompletionRateExplainRow[] {
+  return taskCompletionPopulation(tasks, fromDate, toDate)
+    .map((t) => ({
+      taskDescription: t.description,
+      processName: t.process?.name ?? "standalone",
+      dueAt: t.due_at,
+      completedAt: t.completed_at!,
+      onTime: taskCompletionOnTime(t),
+    }))
+    .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+}
+
+// ============================================================================
+// Workflow Compliance (Administrative Assistant) — ADDED 2026-07-27, per
+// Jason directly, against a real vendor drill-down screenshot: "Processes
+// created in the selected window (fromDate-toDate) with tasks assigned to
+// Belinda. Compliant = all tasks completed on time, none skipped."
+//
+// LATE — reuses the same vendor-confirmed same-calendar-day rule as Task
+// Completion Rate's on-time check (nyDateOnly, ET) rather than a fresh
+// guess, since both KPIs come from the same vendor site and describe the
+// same underlying concept ("completed on time").
+//
+// BUCKETING — confirmed exact against all 9 visible rows on the real
+// screenshot: every one of Belinda's tasks on a process falls into exactly
+// one bucket — skipped (skipped === true), late (not skipped, completed,
+// and completed after its due date's calendar day), incomplete (not
+// skipped, not yet completed), or on-time (everything else, uncounted).
+// Compliant = skippedCount === 0 && lateCount === 0 — incomplete tasks
+// never block compliance on their own (confirmed: row after row on the
+// real screenshot shows a nonzero incomplete count next to a "yes").
+//
+// POPULATION SCOPE, disclosed rather than guessed: the vendor's note text
+// doesn't name which process types count, and the 9 visible rows only
+// ever show three: 05 Applications, 06 Move In, 04 Marketing — the same
+// three process types this codebase already has real IDs for (Belinda's
+// real assigned tasks all live on these). Scoped to exactly those three;
+// if she ever gets tasks on a 4th type (e.g. 07 Lease Renewal), this KPI
+// would undercount until that's confirmed and added.
+//
+// KIND — unlike Task Completion Rate, this KPI's note doesn't call out a
+// kind restriction at all ("tasks assigned to Belinda," full stop), and
+// the real per-process task counts on the screenshot (10-24 per process)
+// are far higher than a todo-only count would produce — so every kind is
+// included here, not filtered to todo/process like Task Completion Rate.
+const WORKFLOW_COMPLIANCE_PROCESS_TYPES: { id: string; label: string }[] = [
+  { id: APPLICATIONS_PROCESS_TYPE_ID, label: "05 Applications Process" },
+  { id: MOVE_IN_PROCESS_TYPE_ID, label: "06 Move In Process" },
+  { id: MARKETING_PROCESS_TYPE_ID, label: "04 Marketing Process" },
+];
+
+interface WorkflowComplianceProcess {
+  process: LeadSimpleProcess;
+  typeLabel: string;
+}
+
+export interface WorkflowComplianceData {
+  processes: WorkflowComplianceProcess[];
+  tasksByProcessId: Map<string, LeadSimpleTask[]>;
+}
+
+export async function fetchWorkflowComplianceData(
+  windowStartDate: string
+): Promise<LeadSimpleResult<WorkflowComplianceData>> {
+  return withConnectionGuard(async () => {
+    const processGroups = await Promise.all(
+      WORKFLOW_COMPLIANCE_PROCESS_TYPES.map(async (t) => {
+        const processes = await fetchAllProcessesForType(t.id);
+        return processes.map((process) => ({ process, typeLabel: t.label }));
+      })
+    );
+    const processes = processGroups.flat();
+    const sinceEpoch = Math.floor(new Date(windowStartDate).getTime() / 1000);
+    const tasks = await fetchTasksUpdatedSince(sinceEpoch);
+    const tasksByProcessId = new Map<string, LeadSimpleTask[]>();
+    for (const t of tasks) {
+      if (t.assignee?.email !== TASK_COMPLETION_ASSIGNEE_EMAIL || !t.process) continue;
+      const pid = t.process.id;
+      if (!tasksByProcessId.has(pid)) tasksByProcessId.set(pid, []);
+      tasksByProcessId.get(pid)!.push(t);
+    }
+    return { processes, tasksByProcessId };
+  });
+}
+
+interface WorkflowComplianceTaskCounts {
+  taskCount: number;
+  skippedCount: number;
+  lateCount: number;
+  incompleteCount: number;
+  compliant: boolean;
+}
+
+function isWorkflowTaskLate(t: LeadSimpleTask): boolean {
+  return !t.skipped && t.completed_at !== null && t.due_at !== null && nyDateOnly(t.completed_at) > nyDateOnly(t.due_at);
+}
+
+function countWorkflowComplianceTasks(tasks: LeadSimpleTask[]): WorkflowComplianceTaskCounts {
+  const skippedCount = tasks.filter((t) => t.skipped).length;
+  const lateCount = tasks.filter(isWorkflowTaskLate).length;
+  const incompleteCount = tasks.filter((t) => !t.skipped && t.completed_at === null).length;
+  return {
+    taskCount: tasks.length,
+    skippedCount,
+    lateCount,
+    incompleteCount,
+    compliant: skippedCount === 0 && lateCount === 0,
+  };
+}
+
+function workflowComplianceEligibleProcesses(
+  data: WorkflowComplianceData,
+  fromDate: string,
+  toDate: string
+): { process: LeadSimpleProcess; typeLabel: string; tasks: LeadSimpleTask[] }[] {
+  const from = new Date(fromDate);
+  const to = new Date(toDate);
+  const result: { process: LeadSimpleProcess; typeLabel: string; tasks: LeadSimpleTask[] }[] = [];
+  for (const { process, typeLabel } of data.processes) {
+    const created = new Date(process.created_at);
+    if (created < from || created > to) continue;
+    const tasks = data.tasksByProcessId.get(process.id);
+    if (!tasks || tasks.length === 0) continue;
+    result.push({ process, typeLabel, tasks });
+  }
+  return result;
+}
+
+export interface WorkflowComplianceSummary {
+  compliantCount: number;
+  totalCount: number;
+  ratePercent: number | null;
+}
+
+export function summarizeWorkflowCompliance(
+  data: WorkflowComplianceData,
+  fromDate: string,
+  toDate: string
+): WorkflowComplianceSummary {
+  const eligible = workflowComplianceEligibleProcesses(data, fromDate, toDate);
+  if (eligible.length === 0) {
+    return { compliantCount: 0, totalCount: 0, ratePercent: null };
+  }
+  const compliantCount = eligible.filter(({ tasks }) => countWorkflowComplianceTasks(tasks).compliant).length;
+  return {
+    compliantCount,
+    totalCount: eligible.length,
+    ratePercent: roundPercent((compliantCount / eligible.length) * 100),
+  };
+}
+
+export interface WorkflowComplianceExplainRow {
+  processName: string;
+  processTypeLabel: string;
+  taskCount: number;
+  skippedCount: number;
+  lateCount: number;
+  incompleteCount: number;
+  compliant: boolean;
+}
+
+export function workflowComplianceExplainRows(
+  data: WorkflowComplianceData,
+  fromDate: string,
+  toDate: string
+): WorkflowComplianceExplainRow[] {
+  return workflowComplianceEligibleProcesses(data, fromDate, toDate)
+    .map(({ process, typeLabel, tasks }) => {
+      const counts = countWorkflowComplianceTasks(tasks);
+      return {
+        processName: process.name,
+        processTypeLabel: typeLabel,
+        taskCount: counts.taskCount,
+        skippedCount: counts.skippedCount,
+        lateCount: counts.lateCount,
+        incompleteCount: counts.incompleteCount,
+        compliant: counts.compliant,
+      };
+    })
+    .sort((a, b) => a.processName.localeCompare(b.processName));
 }

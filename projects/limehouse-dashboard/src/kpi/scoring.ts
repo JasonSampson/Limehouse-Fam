@@ -85,7 +85,12 @@ export interface KpiInput {
   // definition just to render what target/actual/source a score came from.
   targetOperator: ">=" | "<=";
   unit: string;
-  sourceSystem: string;
+  // WIDENED 2026-07-27, per Jason directly, from a single value to a list —
+  // see the comment on KpiDefinitionRow.sourceSystem in
+  // src/db/kpiRepository.ts for why (Leasing Response Time genuinely draws
+  // from both RentEngine and LeadSimple). Pass-through only, same as
+  // before — scoreRole() doesn't use this for any math.
+  sourceSystem: string[];
 }
 
 export interface KpiScoreResult {
@@ -99,7 +104,7 @@ export interface KpiScoreResult {
   targetValue: number;
   targetOperator: ">=" | "<=";
   unit: string;
-  sourceSystem: string;
+  sourceSystem: string[];
 }
 
 export interface RoleScoreResult {

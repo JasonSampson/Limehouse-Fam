@@ -47,6 +47,16 @@ function nyParts(date: Date): NyParts {
   };
 }
 
+// "YYYY-MM-DD" for the given instant's calendar date in America/New_York —
+// ADDED 2026-07-27 for Task Completion Rate (Administrative Assistant),
+// CONFIRMED against the vendor's own note text: "On time = completed on or
+// before the due date's calendar day (ET)." Reuses nyParts so this and
+// businessHoursBetween can never disagree on what "today" means in NY.
+export function nyDateOnly(iso: string): string {
+  const { year, month, day } = nyParts(new Date(iso));
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 // Converts a wall-clock time in America/New_York to the real UTC instant,
 // correctly handling whichever offset (EST -05:00 or EDT -04:00) applies on
 // that date. Works by taking a UTC guess and correcting for the actual

@@ -175,7 +175,7 @@ function renderRolesCouldNotLoad() {
   return `
     <div class="section">
       <p class="section-title">Performance by Role · tap any KPI to see the data behind it</p>
-      ${notConnectedBox("Couldn't load", "Role scorecards didn't come back just now. Try Sync now, or reload the page.")}
+      ${notConnectedBox("Couldn't load", "Role scorecards didn't come back just now. Try Sync Now, or reload the page.")}
     </div>
   `;
 }

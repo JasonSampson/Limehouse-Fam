@@ -10,6 +10,7 @@ function task(overrides: Partial<LeadSimpleTask>): LeadSimpleTask {
     id: "t1",
     description: "Some renewal task",
     kind: "todo",
+    skipped: false,
     created_at: "2026-07-01T00:00:00Z",
     due_at: "2026-07-10T00:00:00Z",
     completed_at: "2026-07-10T00:00:00Z",

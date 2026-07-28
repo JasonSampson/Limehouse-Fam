@@ -38,10 +38,6 @@ describe("isGatedHtmlRequest", () => {
     expect(isGatedHtmlRequest("/index.html")).toBe(true);
   });
 
-  it("lets login.html through", () => {
-    expect(isGatedHtmlRequest("/login.html")).toBe(false);
-  });
-
   it("does not gate non-.html paths", () => {
     expect(isGatedHtmlRequest("/api/some-data")).toBe(false);
     expect(isGatedHtmlRequest("/app.js")).toBe(false);

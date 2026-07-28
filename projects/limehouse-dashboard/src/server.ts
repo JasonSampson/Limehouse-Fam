@@ -32,9 +32,10 @@ app.use(cookieParser());
 
 // Page-level gate, checked BEFORE express.static ever serves an .html file
 // (previously /index.html and every other page returned 200 to anyone with
-// the link — confirmed live, zero access control). CSS/JS/the login page
-// itself/auth routes stay reachable without a session so the login flow and
-// its own page can load.
+// the link — confirmed live, zero access control). CSS/JS/auth routes stay
+// reachable without a session so the page shell can load its assets and the
+// LimeHQ handoff flow (/auth/limehq-callback) can complete. There's no local
+// login page anymore — LimeHQ is the single front door (see authRoutes.ts).
 app.use(async (req, res, next) => {
   // "/" resolves to index.html via express.static's default-document
   // behavior below, so it must be gated the same way an explicit

@@ -8,9 +8,8 @@ function renderHeader(activeTab) {
 
   el.innerHTML = `
     <div class="app-brand">
-      <a href="#" id="limehq-home-link" style="display:inline-flex;align-items:center;gap:0.35rem;text-decoration:none;font-weight:700;font-size:1.4rem;line-height:1;letter-spacing:-0.3px">
-        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="width:22px;height:22px;flex-shrink:0"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="#ffffff"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="26.8" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="13.2" y2="73.2" stroke="#009344" stroke-width="2.5"/><line x1="50" y1="50" x2="86.8" y2="73.2" stroke="#009344" stroke-width="2.5"/><circle cx="50" cy="50" r="5" fill="#009344"/></svg>
-        <span style="color:#74b62e">lime</span><span style="color:#009344">HQ</span>
+      <a href="#" id="limehq-home-link" style="display:inline-flex;align-items:center;text-decoration:none">
+        <img src="/images/limehq-logo.png" alt="LimeHQ" style="height:44px;width:auto;flex-shrink:0;display:block" />
       </a>
       <button class="logout-btn" id="logout-btn">Log out</button>
     </div>
@@ -24,7 +23,7 @@ function renderHeader(activeTab) {
           .map(([val, label]) => `<option value="${val}" ${val === period ? "selected" : ""}>${label}</option>`)
           .join("")}
       </select>
-      <button class="sync-now-btn" id="sync-now-btn">Sync now</button>
+      <button class="sync-now-btn" id="sync-now-btn">Sync Now</button>
     </div>
     <nav class="tabs" id="app-tabs">
       <a href="/index.html" class="${activeTab === "dashboard" ? "active" : ""}">Dashboard</a>
@@ -38,9 +37,10 @@ function renderHeader(activeTab) {
 
   document.getElementById("sync-now-btn").addEventListener("click", async () => {
     const btn = document.getElementById("sync-now-btn");
-    btn.disabled = true;
     const originalText = btn.textContent;
-    btn.textContent = "Syncing…";
+    btn.disabled = true;
+    btn.classList.add("syncing");
+    btn.innerHTML = `<span class="sync-spinner" aria-hidden="true"></span>Syncing…`;
     try {
       await apiPost("/api/sync/now");
       await loadSyncStatus();
@@ -50,6 +50,7 @@ function renderHeader(activeTab) {
       statusEl.textContent = `Sync failed: ${err.message}`;
     } finally {
       btn.disabled = false;
+      btn.classList.remove("syncing");
       btn.textContent = originalText;
     }
   });
@@ -58,7 +59,7 @@ function renderHeader(activeTab) {
     try {
       await apiPost("/auth/logout");
     } finally {
-      window.location.href = "/login.html";
+      window.location.href = "/auth/login";
     }
   });
 
@@ -89,8 +90,9 @@ async function renderAdminOnlyTabs(activeTab) {
     `
     );
   } catch (err) {
-    // Not signed in (shouldn't happen — the server redirects to /login.html
-    // first) or /api/me failed; either way, just leave Dashboard-only nav.
+    // Not signed in (shouldn't happen — the server redirects to LimeHQ's
+    // handoff login first) or /api/me failed; either way, just leave
+    // Dashboard-only nav.
   }
 }
 

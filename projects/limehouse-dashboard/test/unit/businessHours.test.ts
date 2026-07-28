@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { businessHoursBetween } from "../../src/kpi/businessHours.js";
+import { businessHoursBetween, nyDateOnly } from "../../src/kpi/businessHours.js";
 
 describe("businessHoursBetween", () => {
   it("counts a same-day span entirely inside business hours", () => {
@@ -46,5 +46,23 @@ describe("businessHoursBetween — federal holiday observed-date shifting", () =
     // Jan 1, 2027 is a Friday -> holiday as-is. Dec 31, 2026 (Thu) 4pm EST
     // to Jan 4, 2027 (Mon) 10am EST: Thu 1h + Fri(holiday) 0 + weekend 0 + Mon 1h = 2h.
     expect(businessHoursBetween("2026-12-31T21:00:00Z", "2027-01-04T15:00:00Z")).toBeCloseTo(2, 5);
+  });
+});
+
+describe("nyDateOnly", () => {
+  it("returns the calendar date in New York, not UTC, near a day boundary", () => {
+    // 2026-07-13T02:00:00Z is still July 12 in New York (EDT, UTC-4) --
+    // 10pm the prior evening. A naive UTC slice would wrongly say July 13.
+    expect(nyDateOnly("2026-07-13T02:00:00Z")).toBe("2026-07-12");
+  });
+
+  it("matches the UTC date well inside the business day", () => {
+    expect(nyDateOnly("2026-07-13T18:00:00Z")).toBe("2026-07-13");
+  });
+
+  it("follows the real EST/EDT transition automatically", () => {
+    // 2026-11-02 05:00Z is midnight EST (UTC-5, after the Nov 1 fallback) --
+    // still November 1 in New York.
+    expect(nyDateOnly("2026-11-02T04:00:00Z")).toBe("2026-11-01");
   });
 });

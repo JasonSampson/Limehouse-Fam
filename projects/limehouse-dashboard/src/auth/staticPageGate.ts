@@ -26,9 +26,7 @@ export function normalizePath(rawPath: string): string | null {
 }
 
 export function isGatedHtmlRequest(effectivePath: string): boolean {
-  if (!effectivePath.endsWith(".html")) return false;
-  if (effectivePath === "/login.html") return false;
-  return true;
+  return effectivePath.endsWith(".html");
 }
 
 export function isAdminOnlyPage(effectivePath: string): boolean {

@@ -25,6 +25,7 @@ function task(overrides: Partial<LeadSimpleTask>): LeadSimpleTask {
     id: "t1",
     description: "Is this property already leased or in progress?",
     kind: "todo",
+    skipped: false,
     created_at: "2026-06-01T00:00:00Z",
     due_at: null,
     completed_at: null,

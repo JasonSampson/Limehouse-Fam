@@ -314,10 +314,14 @@ function renderRoleDetail(roleDisplayName) {
   // assumed, so a future API change that omits a role degrades to the same
   // empty state instead of a blank/broken tab.
   if (!role || role.kpis.length === 0) {
+    // CORRECTED 2026-07-27, per Jason directly: this shared empty state
+    // covers any zero-KPI role, including Marketing Specialist, which
+    // isn't hired yet -- the old "Hired" wording overstated reality for
+    // an open position. Neither this claims nor rules out hire status.
     detailEl.innerHTML = `
       <div class="empty-state">
-        <strong>Hired — no measurable KPIs defined yet.</strong>
-        Bonus structure to be configured once KPIs are established.
+        <strong>No accountability KPIs configured yet.</strong>
+        Bonus structure to be established once this role's KPIs are defined.
       </div>
     `;
     return;
@@ -357,7 +361,7 @@ function renderRoleDetail(roleDisplayName) {
           <tr>
             <td>
               <span class="kpi-name-link" data-kpi-name="${k.kpiName}">${k.kpiName} ›</span><br>
-              <span class="kpi-badge">${SOURCE_BADGE[k.sourceSystem] ?? k.sourceSystem}</span>${
+              ${k.sourceSystem.map((s) => `<span class="kpi-badge">${SOURCE_BADGE[s] ?? s}</span>`).join("")}${
                 KPI_NOTE[k.kpiName] ? `<span class="kpi-note">${KPI_NOTE[k.kpiName]}</span>` : ""
               }<br>
               <span class="kpi-band-dot band-${k.hasData ? k.band : "none"}">●</span><span class="kpi-band-dot band-${k.hasData ? k.band : "none"}">●</span>
@@ -504,6 +508,29 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "On Time", render: (r) => (r.onTime ? "yes" : "no") },
     { label: "Assignee", render: (r) => r.assignee ?? "—" },
   ],
+  // CONFIRMED against a real vendor screenshot (2026-07-27): TASK | PROCESS
+  // | DUE | COMPLETED | ON TIME -- no Assignee column, since this KPI is
+  // already scoped to one person by definition. `processName` is already
+  // "standalone" (not null) for a process-less task, matching the vendor's
+  // own real wording -- no `?? "—"` fallback needed here.
+  "Task Completion Rate": [
+    { label: "Task", render: (r) => r.taskDescription ?? "(no description)" },
+    { label: "Process", key: "processName" },
+    { label: "Due", render: (r) => (r.dueAt ? formatShortMonthDayYear(r.dueAt) : "—") },
+    { label: "Completed", render: (r) => formatShortMonthDayYear(r.completedAt) },
+    { label: "On Time", render: (r) => (r.onTime ? "yes" : "no") },
+  ],
+  // CONFIRMED against a real vendor screenshot (2026-07-27): PROCESS | TYPE
+  // | TASKS | SKIPPED | LATE | INCOMPLETE | COMPLIANT.
+  "Workflow Compliance": [
+    { label: "Process", key: "processName" },
+    { label: "Type", key: "processTypeLabel" },
+    { label: "Tasks", key: "taskCount" },
+    { label: "Skipped", key: "skippedCount" },
+    { label: "Late", key: "lateCount" },
+    { label: "Incomplete", key: "incompleteCount" },
+    { label: "Compliant", render: (r) => (r.compliant ? "yes" : "no") },
+  ],
   "Resident Response Time": [
     { label: "Task", render: (r) => r.taskDescription ?? "—" },
     { label: "Kind", key: "kind" },
@@ -511,6 +538,19 @@ const KPI_EXPLAIN_COLUMNS = {
     { label: "Completed", render: (r) => (r.completedAt ? formatShortMonthDayYear(r.completedAt) : "open") },
     { label: "Hours", render: (r) => (r.hours === null ? "—" : r.hours) },
     { label: "Within 24h", render: (r) => (r.within24BusinessHours === null ? "—" : r.within24BusinessHours ? "yes" : "no") },
+  ],
+  // CONFIRMED against a real vendor screenshot (2026-07-27): TASK | KIND |
+  // START | COMPLETED | HOURS | WITHIN 24H -- identical shape to Resident
+  // Response Time above (Start here is really due_at, per that KPI's own
+  // formula difference, but the vendor's own column header still just says
+  // "Start" -- matched literally).
+  "Leasing Response Time": [
+    { label: "Task", render: (r) => r.taskDescription ?? "—" },
+    { label: "Kind", key: "kind" },
+    { label: "Start", render: (r) => formatShortMonthDayYear(r.startAt) },
+    { label: "Completed", render: (r) => formatShortMonthDayYear(r.completedAt) },
+    { label: "Hours", key: "hours" },
+    { label: "Within 24h", render: (r) => (r.within24BusinessHours ? "yes" : "no") },
   ],
 };
 
@@ -652,6 +692,16 @@ const KPI_SUBTITLE_BUILDERS = {
     const total = result.rows.length;
     return `Avg ${kpi.actualValue} hours -- ${within}/${total} within 48h -- target <= ${Math.round(kpi.targetValue)}h`;
   },
+  // CONFIRMED against a real vendor screenshot (2026-07-27): "92.1% on time
+  // (480/521) -- target >= 95%". Our own population is a disclosed
+  // approximation (see the note builder below), so the counts will read
+  // real numbers close to, but not pixel-identical to, that screenshot.
+  "Task Completion Rate": (result, kpi) => {
+    const onTime = result.rows.filter((r) => r.onTime).length;
+    const total = result.rows.length;
+    const accuracyText = Number.isInteger(kpi.actualValue) ? `${kpi.actualValue}%` : formatKpiActual(kpi);
+    return `${accuracyText} on time (${onTime}/${total}) -- target >= ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
   // Vendor's real screenshot (2026-07-27) showed "81.1% on time (133/164)
   // -- target >= 95%" -- same "target >= X%" (spaced) style confirmed for
   // Applicant Response Timeliness. Our own on-time rule is a disclosed
@@ -662,6 +712,28 @@ const KPI_SUBTITLE_BUILDERS = {
     const total = result.rows.length;
     const accuracyText = Number.isInteger(kpi.actualValue) ? `${kpi.actualValue}%` : formatKpiActual(kpi);
     return `${accuracyText} on time (${onTime}/${total}) -- target >= ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-27): "36.4%
+  // compliant (12/33) -- target 100%" -- note the vendor's own wording has
+  // no ">=" here, unlike every percent KPI above; matched exactly as
+  // observed. Our own process-type scope is a disclosed approximation (see
+  // the note builder below), so the counts will read real numbers close
+  // to, but not pixel-identical to, that screenshot.
+  "Workflow Compliance": (result, kpi) => {
+    const compliant = result.rows.filter((r) => r.compliant).length;
+    const total = result.rows.length;
+    const accuracyText = Number.isInteger(kpi.actualValue) ? `${kpi.actualValue}%` : formatKpiActual(kpi);
+    return `${accuracyText} compliant (${compliant}/${total}) -- target ${formatKpiValue(kpi.targetValue, kpi.unit)}`;
+  },
+  // CONFIRMED against a real vendor screenshot (2026-07-27): "Avg 8.1 hours
+  // -- 122/133 within 24 biz hours -- target <= 24h" -- note the space
+  // after "<=" here, unlike Resident Response Time's own "target <=24h"
+  // (no space) -- a real, confirmed inconsistency in the vendor's own
+  // site, matched exactly as observed.
+  "Leasing Response Time": (result, kpi) => {
+    const within = result.rows.filter((r) => r.within24BusinessHours).length;
+    const total = result.rows.length;
+    return `Avg ${kpi.actualValue} hours -- ${within}/${total} within 24 biz hours -- target <= ${Math.round(kpi.targetValue)}h`;
   },
 };
 
@@ -685,6 +757,19 @@ const KPI_TITLE_OVERRIDES = {
   // CONFIRMED against a real vendor screenshot (2026-07-27): "Renewal
   // Follow-Up Timeliness (2026-07-01 – 2026-07-27)".
   "Renewal Follow-Up Timeliness": (result) => `Renewal Follow-Up Timeliness (${result.from} – ${result.to})`,
+  // CONFIRMED against a real vendor screenshot (2026-07-27): "Task
+  // Completion Rate -- Administrative Assistant (2026-07-01 – 2026-07-27)".
+  "Task Completion Rate": (result) => `Task Completion Rate -- Administrative Assistant (${result.from} – ${result.to})`,
+  // CONFIRMED against a real vendor screenshot (2026-07-27): "Workflow
+  // Compliance -- Administrative Assistant (2026-07-01 – 2026-07-27)".
+  "Workflow Compliance": (result) => `Workflow Compliance -- Administrative Assistant (${result.from} – ${result.to})`,
+  // CONFIRMED against a real vendor screenshot (2026-07-27): the vendor's
+  // own drilldown modal for this KPI is literally titled "Resident
+  // Response Time -- Admin Assistant" -- NOT "Leasing Response Time," and
+  // "Admin" not "Administrative" -- reusing the exact title style of the
+  // unrelated Portfolio Assistant KPI of that name. Matched exactly as
+  // observed rather than "corrected" to the summary tile's own name.
+  "Leasing Response Time": (result) => `Resident Response Time -- Admin Assistant (${result.from} – ${result.to})`,
 };
 
 function resolveKpiTitle(kpiName, result) {
@@ -749,6 +834,22 @@ const KPI_NOTE_BUILDERS = {
   // Readiness's own known discrepancies elsewhere on this dashboard.
   "Renewal Follow-Up Timeliness": () => {
     return `Scope: real "todo" tasks (not automated emails) on the 07 Lease Renewal Process, completed this period -- population is scoped by when the TASK was completed, not when it was due (a different rule than Property Readiness). Formula: on time = completed on or before the due date's calendar day. Note: the exact tolerance the vendor's own site uses for "on time" isn't confirmed -- comparing to the precise minute produced a nonsensical result (many tasks' due times reset close to their own completion), so this uses same-calendar-day as the closest defensible rule found. Expect a real, modest gap from the vendor's own number, not a live-data-drift issue. No Leasing Specialist assigned -- showing all assignees. Source: LeadSimple tasks, kind = todo, process_type = 07 Lease Renewal Process.`;
+  },
+  // ADDED 2026-07-27, per Jason directly. The "on time" RULE below is
+  // vendor-CONFIRMED word-for-word from their own note text -- unlike
+  // every other approximate KPI on this dashboard, this one isn't a guess.
+  // The POPULATION (which of Belinda's tasks count) is the part that's a
+  // disclosed approximation.
+  "Task Completion Rate": () => {
+    return `Scope: tasks assigned to Belinda (assistant@limehousepm.com), completed this period, kind = "todo" or "process" (real interactive tasks and process-milestone entries; automated emails and stage-transition markers are excluded). Formula (vendor-confirmed exactly): on time = completed on or before the due date's calendar day, Eastern Time. Note: the exact set of task kinds the vendor's own site counts isn't confirmed -- "todo" alone undercounts real examples from their own screenshot (some had no description and were "process"-kind, not "todo"), so this uses todo + process as the closest defensible rule found; expect a real, modest population gap from the vendor's own number, not a live-data-drift issue. Source: LeadSimple tasks, assignee.email = assistant@limehousepm.com.`;
+  },
+  // ADDED 2026-07-27, per Jason directly. The COMPLIANCE RULE below is
+  // vendor-CONFIRMED exactly from their own note text and verified against
+  // all 9 visible rows on the real screenshot. The PROCESS-TYPE SCOPE
+  // (which of Belinda's processes count) is the part that's a disclosed
+  // approximation.
+  "Workflow Compliance": () => {
+    return `Scope: 05 Applications / 06 Move In / 04 Marketing Processes created this period with at least one task assigned to Belinda (assistant@limehousepm.com). Formula (vendor-confirmed exactly): compliant = none of her tasks on the process were skipped and none were completed late (completed after the due date's calendar day, Eastern Time) -- a task that's simply not finished yet doesn't count against her on its own. Note: the vendor's own note text doesn't name which process types count; the real screenshot only ever shows these three (the same three this dashboard already tracks Belinda's real tasks on), so this scopes to exactly those -- if she picks up tasks on a 4th process type (e.g. 07 Lease Renewal), this would undercount until that's confirmed and added. Source: LeadSimple processes and tasks, assignee.email = assistant@limehousepm.com.`;
   },
 };
 

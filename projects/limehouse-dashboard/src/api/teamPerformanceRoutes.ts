@@ -47,6 +47,12 @@ import {
   residentResponseTimeExplainRows,
   fetchLeaseRenewalTasks,
   renewalFollowUpTimelinessExplainRows,
+  fetchTaskCompletionTasks,
+  taskCompletionRateExplainRows,
+  fetchWorkflowComplianceData,
+  workflowComplianceExplainRows,
+  fetchLeasingResponseTasks,
+  leasingResponseTimeExplainRows,
 } from "../leadsimple/client.js";
 
 export const teamPerformanceRoutes = Router();
@@ -146,6 +152,24 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
   // team-performance.js and the comment above summarizeRenewalFollowUpTimeliness
   // in src/leadsimple/client.ts for the full story.
   "Renewal Follow-Up Timeliness": "Of the real todo tasks on the 07 Lease Renewal Process completed this period, the share completed by (or before) their due date's calendar day. Source: LeadSimple tasks, kind = todo.",
+  // ADDED 2026-07-27, per Jason directly. On-time rule is vendor-confirmed
+  // exactly (their own note text); population is a disclosed
+  // approximation -- see the note builder in team-performance.js and the
+  // comment above summarizeTaskCompletionRate in src/leadsimple/client.ts.
+  "Task Completion Rate": "Of the real todo and process-kind tasks assigned to Belinda, completed this period, the share completed on or before the due date's calendar day (Eastern Time). Source: LeadSimple tasks, kind = todo or process.",
+  // ADDED 2026-07-27, per Jason directly, against a real vendor drilldown
+  // screenshot. Compliance rule (skipped=0 and late=0) is confirmed exact
+  // against all 9 visible rows; process-type scope (Applications/Move
+  // In/Marketing only) is a disclosed approximation -- see the note
+  // builder in team-performance.js and the comment above
+  // summarizeWorkflowCompliance in src/leadsimple/client.ts.
+  "Workflow Compliance": "Of the 05 Applications/06 Move In/04 Marketing Processes created this period with at least one task assigned to Belinda, the share where none of her tasks were skipped and none were completed late (an incomplete task doesn't count against her on its own). Source: LeadSimple processes and tasks, assignee.email = assistant@limehousepm.com.",
+  // ADDED 2026-07-27, per Jason directly, against a real vendor drilldown
+  // screenshot (the vendor's own modal is titled "Resident Response Time
+  // -- Admin Assistant", reusing that name/style from the unrelated
+  // Portfolio Assistant KPI -- matched in the frontend title override, not
+  // here). Formula confirmed exact from the screenshot's own note text.
+  "Leasing Response Time": "Average business hours (Mon-Fri, 9am-5pm Eastern, excluding US federal holidays) for Belinda to complete her own email/todo/meet tasks in LeadSimple, measured from each task's due date to its completion (not from when it was assigned). A task finished before its own due date scores 0 hours.",
   // CORRECTED 2026-07-19, per Jason directly, against a real vendor
   // screenshot: enumerates the same 4 non-renewal outcomes the vendor's
   // own note text lists by name — the underlying scoring logic already
@@ -372,6 +396,36 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
           return;
         }
         const rows = renewalFollowUpTimelinessExplainRows(renewalTasks.data, from, to);
+        res.json({ kpiName, formula, rows, from, to });
+        return;
+      }
+      case "Task Completion Rate": {
+        const belindaTasks = await fetchTaskCompletionTasks(from);
+        if (!belindaTasks.connected || !belindaTasks.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Task Completion Rate." });
+          return;
+        }
+        const rows = taskCompletionRateExplainRows(belindaTasks.data, from, to);
+        res.json({ kpiName, formula, rows, from, to });
+        return;
+      }
+      case "Workflow Compliance": {
+        const workflowData = await fetchWorkflowComplianceData(from);
+        if (!workflowData.connected || !workflowData.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Workflow Compliance." });
+          return;
+        }
+        const rows = workflowComplianceExplainRows(workflowData.data, from, to);
+        res.json({ kpiName, formula, rows, from, to });
+        return;
+      }
+      case "Leasing Response Time": {
+        const leasingResponseTasks = await fetchLeasingResponseTasks(from);
+        if (!leasingResponseTasks.connected || !leasingResponseTasks.data) {
+          res.status(502).json({ error: "LeadSimple isn't connected — can't load the data behind Leasing Response Time." });
+          return;
+        }
+        const rows = leasingResponseTimeExplainRows(leasingResponseTasks.data, from, to);
         res.json({ kpiName, formula, rows, from, to });
         return;
       }

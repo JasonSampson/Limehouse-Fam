@@ -13,6 +13,7 @@ function task(overrides: Partial<LeadSimpleTask>): LeadSimpleTask {
     id: "t1",
     description: "Perform Final Zinpector Move In Inspection",
     kind: "todo",
+    skipped: false,
     created_at: "2026-07-13T14:00:00Z", // Monday 10am EDT
     due_at: "2026-07-13T18:00:00Z", // Monday 2pm EDT
     completed_at: null,

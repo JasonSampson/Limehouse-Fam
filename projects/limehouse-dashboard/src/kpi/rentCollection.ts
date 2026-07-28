@@ -113,6 +113,30 @@ export function excludeCurrentInProgressMonth(months: string[], asOf: Date): str
   return months.filter((m) => m !== currentMonth);
 }
 
+// ADDED 2026-07-28, per Jason directly: fetchAllLeases() returns every
+// lease in the account's ENTIRE history (Active + Past + Future), not just
+// ones relevant to a 2-year window — for an account with years of
+// operating history, that's a lot of leases whose transactions would be
+// fetched (one Buildium call each) for nothing, since they'd contribute
+// zero rows to buildDuePerMonth's output anyway (a Past lease that ended
+// long before the window, or a Future lease that hasn't started within
+// it, can never satisfy that function's own from/to bounds for any month
+// in monthsInWindow). This is the SAME overlap test buildDuePerMonth
+// applies per-month, done once per lease instead, so callers can skip the
+// transaction fetch entirely for a lease that could never appear in the
+// result — correctness is unchanged either way, this only trims wasted work.
+export function leaseOverlapsWindow(
+  lease: { LeaseFromDate: string | null; LeaseToDate?: string | null },
+  monthsInWindow: string[]
+): boolean {
+  if (monthsInWindow.length === 0) return false;
+  const windowStart = monthsInWindow[0];
+  const windowEnd = monthsInWindow[monthsInWindow.length - 1];
+  const startsInTimeOrBefore = !lease.LeaseFromDate || lease.LeaseFromDate.slice(0, 7) <= windowEnd;
+  const endsInTimeOrAfter = !lease.LeaseToDate || lease.LeaseToDate.slice(0, 7) >= windowStart;
+  return startsInTimeOrBefore && endsInTimeOrAfter;
+}
+
 // Builds the (lease, month) "due" pairs for summarizeMonthlyCollectionRates'
 // denominator, restricted to months a lease actually existed in.
 //
@@ -127,18 +151,29 @@ export function excludeCurrentInProgressMonth(months: string[], asOf: Date): str
 // if its LeaseFromDate is on or before that month (leases with no
 // LeaseFromDate on record are treated as always-due rather than silently
 // dropped, matching this file's existing "don't guess, don't hide gaps"
-// convention). KNOWN RESIDUAL GAP, not fixed here: this can still MISS
-// leases that were active earlier in the window but have since moved out
-// (only currently-Active leases are ever passed in) — closing that fully
-// would mean also fetching Past leases, a bigger change left as a
-// follow-up rather than folded into this fix.
+// convention).
+//
+// CLOSED 2026-07-28, per Jason directly, for the Rent Collection chart's
+// year-over-year rebuild: last year's calendar months need leases that
+// have SINCE moved out too (only currently-Active leases were ever passed
+// in before), so the caller now passes fetchAllLeases()'s wider set
+// (Active + Past + Future — see src/buildium/client.ts). That introduces a
+// NEW risk this function didn't have to guard against before: a Past
+// lease's LeaseFromDate alone would make it count as "due" in every month
+// through the end of the window, including months AFTER it actually moved
+// out. LeaseToDate now caps the upper end the same way LeaseFromDate caps
+// the lower end — a lease with no LeaseToDate on record (e.g. a real
+// Active lease with no end date) is treated as always-due going forward,
+// same "don't guess, don't hide gaps" treatment as the missing-LeaseFromDate
+// case already got.
 export function buildDuePerMonth(
-  leases: Array<{ Id: number | string; LeaseFromDate: string | null }>,
+  leases: Array<{ Id: number | string; LeaseFromDate: string | null; LeaseToDate?: string | null }>,
   monthsInWindow: string[]
 ): Array<{ leaseId: string; month: string }> {
   return leases.flatMap((lease) =>
     monthsInWindow
       .filter((month) => !lease.LeaseFromDate || lease.LeaseFromDate.slice(0, 7) <= month)
+      .filter((month) => !lease.LeaseToDate || month <= lease.LeaseToDate.slice(0, 7))
       .map((month) => ({ leaseId: String(lease.Id), month }))
   );
 }

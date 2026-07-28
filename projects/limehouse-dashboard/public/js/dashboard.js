@@ -155,7 +155,7 @@ async function loadDashboard() {
 
   content.innerHTML = `
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
-    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
+    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
     ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, completionRate, daysOnMarket })}
@@ -299,6 +299,7 @@ function renderFinancials({
   rentAndDeposit,
   delinquencyAging,
   rentCollection,
+  rentCollectionFull,
   rentCollectionLatest,
   isLatestMonthCurrent,
   todayDayOfMonth,
@@ -395,19 +396,21 @@ function renderFinancials({
       </div>
       <div class="chart-card">
         <div class="chart-card-title-row">
-          <p class="chart-card-title">Rent Collection — 12 Months</p>
+          <p class="chart-card-title">Rent Collection — Year over Year</p>
           ${
-            rentCollection && rentCollection.length > 0
+            rentCollectionFull && rentCollectionFull.length > 0
               ? `<span class="chart-legend">
-                  <span><span class="chart-legend-swatch" style="background:#1e5631;"></span>By 3rd</span>
-                  <span><span class="chart-legend-swatch" style="background:#4a8f5c;"></span>By 10th</span>
+                  <span><span class="chart-legend-swatch" style="background:#1e5631;"></span>This Yr By 3rd</span>
+                  <span><span class="chart-legend-swatch" style="background:#4a8f5c;"></span>Last Yr By 3rd</span>
+                  <span><span class="chart-legend-swatch" style="background:#c8791e;"></span>This Yr By 10th</span>
+                  <span><span class="chart-legend-swatch" style="background:#e8b567;"></span>Last Yr By 10th</span>
                 </span>`
               : ""
           }
         </div>
         <div class="rent-collection-layout">
           <div class="rent-collection-chart-col">
-            ${renderRentCollectionChart(rentCollection)}
+            ${renderRentCollectionChart(rentCollectionFull)}
           </div>
           <div class="rent-collection-side-col">
             ${renderRentCollectionSidePanels(rentCollectionSameMonthLastYear, isLatestMonthCurrent ? rentCollectionLatest : null, rentCollectionYearly)}
@@ -422,28 +425,65 @@ function renderFinancials({
   `;
 }
 
-// Grouped bar chart: % paid by the 3rd and by the 10th for each of the
-// trailing 12 months. Built with Chart.js (see /js/charts.js) rather than
-// the old plain-text breakdown list, per the visual-parity spec.
-function renderRentCollectionChart(rentCollection) {
-  if (!rentCollection) {
+// REBUILT 2026-07-28, per Jason directly: year-over-year, month-by-month
+// comparison instead of a rolling trailing-12-months window — fixed Jan-Dec
+// on the x-axis, this year and last year each plotted for both By 3rd and
+// By 10th (4 series total). Built from `rentCollectionFull`, the WIDE
+// ~2-years-back dataset the sync already produces (see monthsSinceYearsAgo
+// in rentCollection.ts) — no new API data needed, just a different slice of
+// what was already being fetched. The current still-in-progress month is
+// left out of THIS YEAR's series (same "only show complete months" rule the
+// old trailing-window chart already followed) so a partial month never
+// reads as a real final rate; last year's same month is unaffected, since
+// it already fully happened.
+function renderRentCollectionChart(rentCollectionFull) {
+  if (!rentCollectionFull) {
     return notConnectedBox(
       "Couldn't load",
       "The monthly rent-collection numbers didn't come back from Buildium just now — Total Delinquent above may still be live."
     );
   }
-  if (rentCollection.length === 0) {
-    return `<p class="loading-text">No rent collection history yet for the trailing 12 months.</p>`;
+  if (rentCollectionFull.length === 0) {
+    return `<p class="loading-text">No rent collection history yet.</p>`;
   }
+
+  const byMonth = new Map(rentCollectionFull.map((m) => [m.month, m]));
+  const now = new Date();
+  const thisYear = now.getUTCFullYear();
+  const lastYear = thisYear - 1;
+  const currentMonthStr = `${thisYear}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+
+  const monthKeys = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0"));
+  const labels = monthKeys.map((mm) => formatMonthAbbrev(mm));
+
+  const valueFor = (year, mm, field) => {
+    const key = `${year}-${mm}`;
+    if (key === currentMonthStr) return null; // still in progress — no final rate yet
+    const row = byMonth.get(key);
+    return row ? row[field] : null;
+  };
+
   return groupedBarChartHtml({
     canvasId: "rent-collection-chart",
-    labels: rentCollection.map((m) => formatMonthInitial(m.month)),
+    labels,
     series: [
-      { label: "By 3rd", data: rentCollection.map((m) => m.paidByThirdPercent), color: "#1e5631" },
-      { label: "By 10th", data: rentCollection.map((m) => m.paidByTenthPercent), color: "#4a8f5c" },
+      { label: "This Yr By 3rd", data: monthKeys.map((mm) => valueFor(thisYear, mm, "paidByThirdPercent")), color: "#1e5631" },
+      { label: "Last Yr By 3rd", data: monthKeys.map((mm) => valueFor(lastYear, mm, "paidByThirdPercent")), color: "#4a8f5c" },
+      { label: "This Yr By 10th", data: monthKeys.map((mm) => valueFor(thisYear, mm, "paidByTenthPercent")), color: "#c8791e" },
+      { label: "Last Yr By 10th", data: monthKeys.map((mm) => valueFor(lastYear, mm, "paidByTenthPercent")), color: "#e8b567" },
     ],
     yFormat: (v) => `${v}%`,
   });
+}
+
+// Month abbreviation from a "MM" string, independent of any particular
+// year — the fixed Jan-Dec x-axis needs a label that doesn't repeat itself
+// ambiguously the way the old narrow single-letter labels (formatMonthInitial)
+// would (e.g. "J" for both January and June/July), since there's no longer
+// a year suffix anywhere on the axis to disambiguate.
+function formatMonthAbbrev(mm) {
+  const d = new Date(Date.UTC(2000, Number(mm) - 1, 1));
+  return d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
 }
 
 // ADDED 2026-07-09, per Jason directly: small panels to the right of the

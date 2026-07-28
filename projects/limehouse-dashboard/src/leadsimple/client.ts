@@ -2,6 +2,7 @@ import { z } from "zod";
 import { loadEnv, isLeadSimpleConnected } from "../config/env.js";
 import { logWarn } from "../lib/logger.js";
 import { businessHoursBetween, nyDateOnly } from "../kpi/businessHours.js";
+import { leadSimpleLimiter } from "../lib/globalRequestLimiter.js";
 
 // REBUILT 2026-07-05 against LeadSimple's REAL REST API, confirmed live
 // via docs Jason retrieved himself from https://app.leadsimple.com/api_docs
@@ -60,7 +61,10 @@ async function leadSimpleGet<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef,
 
   let attempt = 0;
   for (;;) {
-    const res = await fetch(`${env.LEADSIMPLE_BASE_URL}${path}`, { headers: leadSimpleHeaders() });
+    // Only the actual HTTP attempt goes through the global spacer, not the
+    // backoff sleep below — a retry's own wait is specific to THIS caller
+    // and shouldn't hold up an unrelated caller's turn in the shared queue.
+    const res = await leadSimpleLimiter.run(() => fetch(`${env.LEADSIMPLE_BASE_URL}${path}`, { headers: leadSimpleHeaders() }));
 
     if (res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
       // LeadSimple's own header takes priority — it's the real wait time

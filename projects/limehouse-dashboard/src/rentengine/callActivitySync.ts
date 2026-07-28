@@ -35,16 +35,15 @@ export interface CallActivitySyncResult {
   errors: number;
 }
 
-// Spaces out requests rather than firing them in parallel — same lesson
-// already learned on the Buildium rent-collection sync (a burst of ~230
-// parallel calls there produced real 429s). 30 req/min = 1 request every 2
-// seconds to stay safely under the limit with margin for the two calls
-// (calls + messages) made per prospect.
-const DELAY_BETWEEN_PROSPECTS_MS = 4200; // 2 requests/prospect * ~4.2s = under 30/min with margin
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// REMOVED 2026-07-28, per Jason directly: this job used to space its own
+// requests by hand (DELAY_BETWEEN_PROSPECTS_MS, 4.2s between prospects) to
+// stay under RentEngine's real 30 req/min limit — but that only protected
+// THIS call site. rentEngineGet now routes every RentEngine call in the
+// whole app through one shared global spacer (see
+// src/lib/globalRequestLimiter.ts), so the same protection applies here
+// automatically, AND to every other RentEngine caller that never had any
+// spacing of its own (fetchProspects, fetchUnits, fetchLeasingPerformanceForUnit,
+// etc.) — a real gap this job's own hand-rolled fix never covered.
 
 export async function syncCallActivityForPeriod(
   fromDate: string,
@@ -89,7 +88,6 @@ export async function syncCallActivityForPeriod(
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    await sleep(DELAY_BETWEEN_PROSPECTS_MS);
   }
 
   logInfo("RentEngine call activity sync completed", {

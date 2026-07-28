@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { loadEnv } from "../config/env.js";
+import { buildiumLimiter } from "../lib/globalRequestLimiter.js";
 
 // Adapted from late-rent-notices/src/buildium/client.ts — same proven auth
 // pattern, error handling, and pagination style, confirmed against
@@ -44,7 +45,10 @@ async function buildiumGet<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef, a
 
   let attempt = 0;
   for (;;) {
-    const res = await fetch(`${env.BUILDIUM_BASE_URL}${path}`, { headers: buildiumHeaders() });
+    // Only the actual HTTP attempt goes through the global spacer, not the
+    // backoff sleep below — a retry's own wait is specific to THIS caller
+    // and shouldn't hold up an unrelated caller's turn in the shared queue.
+    const res = await buildiumLimiter.run(() => fetch(`${env.BUILDIUM_BASE_URL}${path}`, { headers: buildiumHeaders() }));
 
     if (res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
       const retryAfterHeader = res.headers.get("Retry-After");

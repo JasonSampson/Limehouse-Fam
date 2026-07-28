@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { loadEnv, isRentEngineConnected } from "../config/env.js";
 import { logWarn } from "../lib/logger.js";
+import { rentEngineLimiter } from "../lib/globalRequestLimiter.js";
 
 // CONFIRMED LIVE 2026-07-03 against Jason's real RentEngine account
 // (account_id 29a7815c-08a9-45df-a13a-f75376c95770). Every endpoint, field
@@ -111,7 +112,10 @@ async function rentEngineGet<T>(path: string, schema: z.ZodType<T, z.ZodTypeDef,
   let lastError: RentEngineApiError | null = null;
 
   for (let attempt = 0; attempt <= RATE_LIMIT_BACKOFFS_MS.length; attempt++) {
-    const res = await fetch(`${env.RENTENGINE_BASE_URL}${path}`, { headers: rentEngineHeaders() });
+    // Only the actual HTTP attempt goes through the global spacer, not the
+    // backoff sleep below — a retry's own wait is specific to THIS caller
+    // and shouldn't hold up an unrelated caller's turn in the shared queue.
+    const res = await rentEngineLimiter.run(() => fetch(`${env.RENTENGINE_BASE_URL}${path}`, { headers: rentEngineHeaders() }));
     if (res.status !== 429) {
       if (!res.ok) {
         const body = await res.text().catch(() => "<no body>");

@@ -17,6 +17,7 @@ import {
   findSameMonthLastYear,
   excludeCurrentInProgressMonth,
   buildDuePerMonth,
+  leaseOverlapsWindow,
   type LeasePaymentForMonth,
   type LeaseBalanceForMonth,
   type MonthlyCollectionRate,
@@ -278,6 +279,50 @@ describe("buildDuePerMonth", () => {
     const leases = [{ Id: 1, LeaseFromDate: "2026-03-31" }]; // last day of March still counts as "existed in March"
     const result = buildDuePerMonth(leases, ["2026-03"]);
     expect(result).toEqual([{ leaseId: "1", month: "2026-03" }]);
+  });
+
+  // ADDED 2026-07-28, per Jason directly, for the Rent Collection chart's
+  // year-over-year rebuild: fetchAllLeases() (now the real caller) includes
+  // Past leases, which have a real LeaseToDate — without this upper bound,
+  // a lease that moved out mid-window would still count as due for every
+  // month after it left.
+  it("only counts a lease as due in months on or before its LeaseToDate", () => {
+    const leases = [
+      { Id: 1, LeaseFromDate: "2026-01-01", LeaseToDate: "2026-02-20" }, // moved out mid-Feb
+      { Id: 2, LeaseFromDate: "2026-01-01", LeaseToDate: null }, // still active, no end date
+    ];
+    const months = ["2026-01", "2026-02", "2026-03", "2026-04"];
+    const result = buildDuePerMonth(leases, months);
+    expect(result.filter((d) => d.leaseId === "1").map((d) => d.month)).toEqual(["2026-01", "2026-02"]);
+    expect(result.filter((d) => d.leaseId === "2").map((d) => d.month)).toEqual(months);
+  });
+
+  it("matches on year-month only, ignoring day-of-month on LeaseToDate", () => {
+    const leases = [{ Id: 1, LeaseFromDate: "2026-01-01", LeaseToDate: "2026-03-01" }]; // moved out on the 1st still counts as "existed in March"
+    const result = buildDuePerMonth(leases, ["2026-03", "2026-04"]);
+    expect(result).toEqual([{ leaseId: "1", month: "2026-03" }]);
+  });
+});
+
+describe("leaseOverlapsWindow", () => {
+  it("keeps a lease whose range overlaps the window", () => {
+    const months = ["2026-01", "2026-02", "2026-03"];
+    expect(leaseOverlapsWindow({ LeaseFromDate: "2025-06-01", LeaseToDate: "2026-02-15" }, months)).toBe(true);
+    expect(leaseOverlapsWindow({ LeaseFromDate: "2026-02-01", LeaseToDate: null }, months)).toBe(true);
+  });
+
+  it("drops a lease that ended before the window starts", () => {
+    const months = ["2026-01", "2026-02", "2026-03"];
+    expect(leaseOverlapsWindow({ LeaseFromDate: "2024-01-01", LeaseToDate: "2025-12-01" }, months)).toBe(false);
+  });
+
+  it("drops a Future lease that hasn't started by the window's end", () => {
+    const months = ["2026-01", "2026-02", "2026-03"];
+    expect(leaseOverlapsWindow({ LeaseFromDate: "2026-04-01", LeaseToDate: null }, months)).toBe(false);
+  });
+
+  it("returns false for an empty window", () => {
+    expect(leaseOverlapsWindow({ LeaseFromDate: null, LeaseToDate: null }, [])).toBe(false);
   });
 });
 

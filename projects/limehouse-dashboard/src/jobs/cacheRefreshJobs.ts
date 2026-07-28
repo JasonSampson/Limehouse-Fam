@@ -18,6 +18,7 @@ import {
   resolveLeaseBalancesPerMonth,
   monthsSinceYearsAgo,
   buildDuePerMonth,
+  leaseOverlapsWindow,
   extractSecurityDepositWithheld,
   summarizeSecurityDepositWithheld,
   securityDepositMoveOutWindow,
@@ -76,12 +77,25 @@ import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepositor
 export async function refreshRentCollectionCache(): Promise<void> {
   const syncLogId = await startSyncRun("buildium", "rent_collection_cache_refresh");
   try {
-    const activeLeases = await fetchActiveLeases();
+    // CHANGED 2026-07-28, per Jason directly, for the Rent Collection
+    // chart's year-over-year rebuild: fetchAllLeases() (Active + Past +
+    // Future) instead of fetchActiveLeases() only, so a lease that has
+    // SINCE moved out still counts as due for the months it was really
+    // active last year — see buildDuePerMonth's own comment in
+    // rentCollection.ts for the matching LeaseToDate upper-bound fix this
+    // required.
+    const allLeases = await fetchAllLeases();
     const monthsInWindow = monthsSinceYearsAgo(new Date(), 2);
-    const duePerMonth = buildDuePerMonth(activeLeases, monthsInWindow);
+    // Trim to leases that can actually appear in the window before the
+    // expensive per-lease transaction fetch below — see leaseOverlapsWindow's
+    // own comment for why this is a pure performance filter, not a
+    // correctness one (buildDuePerMonth would already exclude the same
+    // leases from its output, just after paying for their transactions).
+    const leases = allLeases.filter((l) => leaseOverlapsWindow(l, monthsInWindow));
+    const duePerMonth = buildDuePerMonth(leases, monthsInWindow);
 
     const balancesByLease: ReturnType<typeof resolveLeaseBalancesPerMonth>[] = [];
-    for (const lease of activeLeases) {
+    for (const lease of leases) {
       const transactions = await fetchLeaseTransactions(String(lease.Id));
       balancesByLease.push(resolveLeaseBalancesPerMonth(String(lease.Id), transactions));
     }
@@ -89,8 +103,8 @@ export async function refreshRentCollectionCache(): Promise<void> {
     const rentCollection = summarizeMonthlyCollectionRates(duePerMonth, balancesByLease.flat());
     await upsertCachedMetric("rent_collection_extended", "portfolio", "buildium", rentCollection);
 
-    await completeSyncRun(syncLogId, activeLeases.length);
-    logInfo("Rent collection sync completed", { syncLogId, leaseCount: activeLeases.length });
+    await completeSyncRun(syncLogId, leases.length);
+    logInfo("Rent collection sync completed", { syncLogId, leaseCount: leases.length, totalLeasesInAccount: allLeases.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordCacheRefreshFailure("rent_collection_extended", "portfolio", "buildium", message);

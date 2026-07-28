@@ -295,7 +295,13 @@ main {
   min-height: 92px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  /* Top-anchored, not space-between: the number/sub-text needs to land at
+     the same offset below the label on every tile, whether or not that
+     tile has trailing content (a sparkline, a yoy line). space-between
+     stretched trailing content to the tile's bottom edge, which pushed the
+     number/sub up higher on tiles that had it (e.g. Occupancy) than on
+     tiles that didn't (e.g. Total Delinquent) — confirmed live, per Jason. */
+  justify-content: flex-start;
   position: relative;
 }
 
@@ -316,6 +322,15 @@ main {
   justify-content: space-between;
   align-items: flex-start;
   gap: 6px;
+  /* Reserves space for the longest real label in the app — measured live,
+     the worst cases ("Avg SD Withheld %", "Vacant — Not Rented",
+     "Fixed-Term Leases") wrap to 3 lines at this tile width, not 2 (35px
+     under-reserved for those, which is why Vacant looked misaligned next
+     to Total Units after the label-wrap fix that only accounted for
+     2-line labels like "Total Delinquent"). So the value/sub-text below
+     always starts at the same offset regardless of how many lines a given
+     tile's label wraps to. */
+  min-height: 53px;
 }
 
 .tile-label {
@@ -359,6 +374,21 @@ main {
 
 .tile-value.alert {
   color: var(--red);
+}
+
+/* Wraps value+sub on tiles with a yoy badge (e.g. Total Units) so the
+   badge gets pinned to the tile's bottom edge, matching the hand-rolled
+   Doors Lost / Churn tile's .churn-tile-body flex:1 treatment. Content
+   stays flex-start (not centered) so the number itself lands at the same
+   top offset as every sibling tile in the row — only the unused leftover
+   space (and therefore the badge below it) moves, confirmed live this was
+   the fix needed after centering shifted Total Units out of alignment
+   with Vacant / Avg Days Vacant / Owners next to it. */
+.tile-value-grow {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
 }
 
 .tile-sub {
@@ -540,26 +570,44 @@ main {
 .churn-tile-body {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  /* flex-start, not center: centering vertically balanced the number
+     against the (often taller) year list, but pulled both down below
+     where every other tile's number sits — confirmed live, 80px from the
+     tile top here vs. 72px everywhere else. Top-aligning both matches
+     that shared baseline instead. */
+  align-items: flex-start;
   gap: 10px;
   flex: 1;
 }
 
+/* Grid, not flex: with flex, each row centered independently, so the year
+   and percentage didn't line up into columns when adjacent years' text
+   widths differed (e.g. "2024" next to "12.5%" vs "2023" next to "5.5%")
+   — per Jason directly. display:contents lets each row's own two <span>s
+   become direct grid items here, so column 1 (years) and column 2
+   (percentages) each size to their own widest value and align across
+   every row. */
 .churn-tile-history {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
   justify-content: center;
-  gap: 2px;
   font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
 .churn-tile-year-row {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
+  display: contents;
+}
+
+.churn-tile-year-row span:first-child {
+  text-align: left;
+}
+
+.churn-tile-year-row span:last-child {
+  text-align: right;
 }
 
 @media (max-width: 720px) {

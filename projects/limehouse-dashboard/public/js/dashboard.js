@@ -77,7 +77,7 @@ async function loadDashboard() {
     apiGet("/api/dashboard/renewals"),
     apiGet("/api/dashboard/renewals/monthly"),
     apiGet("/api/dashboard/renewal-rate"),
-    apiGet("/api/dashboard/owners"),
+    apiGet(`/api/dashboard/owners?period=${period}`),
     apiGet("/api/dashboard/financials/rent-and-deposit"),
     apiGet("/api/dashboard/financials/delinquency-aging"),
     apiGet("/api/dashboard/financials/rent-collection"),
@@ -103,7 +103,9 @@ async function loadDashboard() {
   const renewals = unwrap(renewalsResult);
   const renewalsMonthly = unwrap(renewalsMonthlyResult);
   const renewalRate = unwrap(renewalRateResult);
-  const owners = unwrap(ownersResult);
+  const ownersResponse = unwrap(ownersResult);
+  const owners = ownersResponse ? ownersResponse.groups : null;
+  const ownersGainedThisPeriod = ownersResponse ? ownersResponse.gainedThisPeriod : null;
   const rentAndDeposit = unwrap(rentAndDepositResult);
   const delinquencyAging = unwrap(delinquencyAgingResult);
   // /api/dashboard/financials/rent-collection returns { months, yearly,
@@ -156,7 +158,7 @@ async function loadDashboard() {
   content.innerHTML = `
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
     ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
-    ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant })}
+    ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, completionRate, daysOnMarket })}
   `;
@@ -584,18 +586,15 @@ function formatMonthLabel(yyyyMm) {
   return d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 }
 
-// Converts a "YYYY-MM-DD" string to "M/D/YYYY". Plain string splitting
+// Converts a "YYYY-MM-DD" string to "MM/DD/YYYY". Plain string splitting
 // (not `new Date(...).toLocaleDateString()`) so this can't shift the day
 // by a timezone offset — the input is already a calendar date, not a
-// moment in time.
+// moment in time. Zero-padded per Jason directly (2026-07-28) — matches
+// the same mm/dd/yyyy format already used everywhere on Team Performance
+// (see formatMMDDYYYY in team-performance.js).
 function formatMonthDayYear(yyyyMmDd) {
   const [year, month, day] = yyyyMmDd.split("-");
-  return `${Number(month)}/${Number(day)}/${year}`;
-}
-
-function formatDayMonthYear(yyyyMmDd) {
-  const [year, month, day] = yyyyMmDd.split("-");
-  return `${day}/${month}/${year}`;
+  return `${month}/${day}/${year}`;
 }
 
 // mm/dd/yyyy + 12-hour clock (non-military), converted to America/New_York
@@ -603,7 +602,7 @@ function formatDayMonthYear(yyyyMmDd) {
 // correction) — for the Showings Completed drill-down's Date column.
 // CORRECTED 2026-07-19: Jason originally asked for dd/mm/yyyy, then
 // clarified he meant mm/dd/yyyy (US format). Input is a full ISO instant
-// (unlike formatDayMonthYear above, which takes a bare calendar date with
+// (unlike formatMonthDayYear above, which takes a bare calendar date with
 // no time/timezone to convert).
 function formatMonthDayYearTimeEastern(iso) {
   if (!iso) return "—";
@@ -639,7 +638,7 @@ function totalUnitsYoyBadge(totalUnitsYoY) {
   return { direction: totalUnitsYoY.direction, text: `${arrow} ${sign}${totalUnitsYoY.percent}% vs Jan. 1st` };
 }
 
-function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, propertyHealth, doors, avgDaysVacant }) {
+function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant }) {
   return `
     <div class="section">
       <p class="section-title">Occupancy &amp; Doors</p>
@@ -692,7 +691,7 @@ function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, property
                 id: "owners",
                 label: "Owners",
                 value: formatNumber(owners.length),
-                sub: "Gained this period: not connected yet",
+                sub: `Gained this period: ${formatNumber(ownersGainedThisPeriod)}`,
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -738,8 +737,7 @@ function doorsTile({ doors, id, label }) {
       label,
       sourceTags: ["BD"],
       value: doors.doorsAdded.doorsAddedYTD,
-      sub: `Year to date · ${doors.doorsAdded.doorsAdded30Days} in the last 30 days`,
-      pending: "Reflects Buildium's records, which may lag a few days behind a real signing",
+      sub: `YTD · ${doors.doorsAdded.doorsAdded30Days} in the last 30 days`,
       clickable: true,
     });
   }
@@ -797,7 +795,12 @@ function renderOccupancyTrendChart(occupancyHistory) {
         <p class="rc-side-stat-value">—</p>
       </div>`;
 
-  const yearly = occupancyHistory.yearly || [];
+  // The chart above shows every tracked year; this side list is a compact
+  // summary and doesn't need the same depth — capped to the most recent 5
+  // years per Jason directly. occupancyHistory.yearly comes back
+  // newest-first (confirmed live: "Jul 2026" was row 1), so the most
+  // recent 5 is the FIRST 5, not the last 5.
+  const yearly = (occupancyHistory.yearly || []).slice(0, 5);
   const yearlyRowsHtml =
     yearly.length > 0
       ? yearly
@@ -879,7 +882,7 @@ function renderChurnTile(doors) {
       : "";
 
   return `
-    <div class="tile">
+    <div class="tile clickable" data-tile-id="doors-lost">
       <div class="tile-top">
         <span class="tile-label">Doors Lost / Churn</span>
         ${badgeHtml(["BD"], true)}
@@ -1080,7 +1083,7 @@ function renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnM
                 id: "units-on-market",
                 label: "Units on Market",
                 value: formatNumber(unitsOnMarket.unitsOnMarket),
-                sub: `of ${formatNumber(unitsOnMarket.totalUnitsTracked)} RE-tracked units`,
+                sub: `of ${formatNumber(unitsOnMarket.totalUnitsTracked)} tracked units`,
                 sourceTags: ["RE"],
                 live: true,
                 clickable: true,
@@ -1226,8 +1229,8 @@ function leasingFunnelRangeSuffix(leasingFunnel) {
   // reports the ACTUAL requested range rather than a hardcoded "Last 12
   // Months" label, so the chart title never implies more history exists
   // than RentEngine actually has for this account.
-  const from = leasingFunnel.requestedFrom ? leasingFunnel.requestedFrom.slice(0, 10) : null;
-  const to = leasingFunnel.requestedTo ? leasingFunnel.requestedTo.slice(0, 10) : null;
+  const from = leasingFunnel.requestedFrom ? formatMonthDayYear(leasingFunnel.requestedFrom.slice(0, 10)) : null;
+  const to = leasingFunnel.requestedTo ? formatMonthDayYear(leasingFunnel.requestedTo.slice(0, 10)) : null;
   return from && to ? ` — ${from} to ${to}` : "";
 }
 
@@ -1398,8 +1401,8 @@ async function handleTileClick(tileId) {
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
-        { label: "From", render: (r) => (r.fromDate ? formatDayMonthYear(r.fromDate) : "—") },
-        { label: "To", render: (r) => (r.toDate ? formatDayMonthYear(r.toDate) : "—") },
+        { label: "From", render: (r) => (r.fromDate ? formatMonthDayYear(r.fromDate) : "—") },
+        { label: "To", render: (r) => (r.toDate ? formatMonthDayYear(r.toDate) : "—") },
       ],
       emptyText: "No renewals in the trailing 12 months — trigger a Renewal Rate sync first if this looks wrong.",
     });
@@ -1418,8 +1421,8 @@ async function handleTileClick(tileId) {
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Outcome", render: (r) => (r.outcome === "renewed" ? "Renewed" : "Moved Out") },
-        { label: "From", render: (r) => (r.fromDate ? formatDayMonthYear(r.fromDate) : "—") },
-        { label: "To", render: (r) => (r.toDate ? formatDayMonthYear(r.toDate) : "—") },
+        { label: "From", render: (r) => (r.fromDate ? formatMonthDayYear(r.fromDate) : "—") },
+        { label: "To", render: (r) => (r.toDate ? formatMonthDayYear(r.toDate) : "—") },
       ],
       emptyText: "No renewal/move-out activity in the trailing 12 months — trigger a Renewal Rate sync first if this looks wrong.",
     });
@@ -1436,7 +1439,7 @@ async function handleTileClick(tileId) {
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Type", render: (r) => (r.type === "added" ? "Added (est.)" : "Lost (est.)") },
-        { label: "Date", key: "date" },
+        { label: "Date", render: (r) => formatMonthDayYear(r.date) },
       ],
       emptyText: "No door changes in the tracked windows.",
     });
@@ -1453,7 +1456,7 @@ async function handleTileClick(tileId) {
   // snapshots have accumulated for a full year"). Ours is a real, exact
   // figure from day one instead.
   const DOORS_ADDED_NOTE =
-    "For each property, we use Buildium's real management-agreement start date (or the property's earliest lease date, if that's actually earlier — some agreements get re-signed years later without the door ever changing hands). A property counts as \"added\" if that start date falls within this calendar year. This is an exact figure, not an estimate.";
+    "For each property, we use Buildium's real management-agreement start date (or the property's earliest lease date, if that's actually earlier — some agreements get re-signed years later without the door ever changing hands). A property counts as \"added\" if that start date falls within this calendar year. This is an exact figure, not an estimate. Reflects Buildium's records, which may lag a few days behind a real signing.";
 
   if (tileId === "doors-added") {
     const year = new Date().getFullYear();
@@ -1468,6 +1471,28 @@ async function handleTileClick(tileId) {
         { label: "Doors", key: "doors" },
       ],
       emptyText: "No doors added so far this year.",
+    });
+    return;
+  }
+
+  // ADDED 2026-07-28, per Jason directly: same year-to-date window as the
+  // Doors Lost/Churn tile's own count, so this always matches what's shown.
+  const DOORS_LOST_NOTE =
+    "Estimated from the most recent lease end date on each currently-inactive property — Buildium has no real \"date this property was dropped\" field. A property counts as \"lost\" if that estimated date falls within this calendar year. Likely undercounts properties that never had a Buildium lease on file to estimate from.";
+
+  if (tileId === "doors-lost") {
+    const year = new Date().getFullYear();
+    await simpleDrillDown({
+      tileId,
+      title: "Doors lost (year to date, estimated)",
+      subtitle: (rows) => `${rows.length} doors across ${rows.length} properties (since Jan 1, ${year})`,
+      note: DOORS_LOST_NOTE,
+      url: "/api/dashboard/doors-lost/properties",
+      columns: [
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Doors", key: "doors" },
+      ],
+      emptyText: "No doors lost so far this year.",
     });
     return;
   }
@@ -1542,7 +1567,7 @@ async function handleTileClick(tileId) {
       columns: [
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
-        { label: "Move-out", key: "moveOutDate" },
+        { label: "Move-out", render: (r) => formatMonthDayYear(r.moveOutDate) },
         { label: "SD", render: (r) => formatCurrencyPrecise(r.securityDeposit) },
         { label: "Withheld", render: (r) => formatCurrencyPrecise(r.withheld) },
         { label: "%", render: (r) => formatPercent(r.percent) },
@@ -1567,8 +1592,8 @@ async function handleTileClick(tileId) {
       columns: [
         { label: "Owner", key: "name" },
         { label: "Active", render: (r) => (r.active ? "yes" : "no") },
-        { label: "Start", render: (r) => r.start ?? "—" },
-        { label: "End", render: (r) => r.end ?? "—" },
+        { label: "Start", render: (r) => (r.start ? formatMonthDayYear(r.start) : "—") },
+        { label: "End", render: (r) => (r.end ? formatMonthDayYear(r.end) : "—") },
         { label: "Properties", render: (r) => r.properties.join(", ") },
       ],
       emptyText: "No owners found.",
@@ -1712,7 +1737,7 @@ async function handleTileClick(tileId) {
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
-        { label: "Lease End", key: "leaseToDate" },
+        { label: "Lease End", render: (r) => formatMonthDayYear(r.leaseToDate) },
       ],
       emptyText: "No fixed-term leases found.",
     });
@@ -1728,7 +1753,7 @@ async function handleTileClick(tileId) {
         { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
         { label: "Unit", key: "unitNumber" },
         { label: "Tenant", key: "tenantName" },
-        { label: "Since", key: "leaseFromDate" },
+        { label: "Since", render: (r) => formatMonthDayYear(r.leaseFromDate) },
       ],
       emptyText: "No month-to-month leases found.",
     });
@@ -1803,7 +1828,7 @@ async function handleTileClick(tileId) {
         { label: "Name", render: (r) => r.name ?? "—" },
         { label: "Source", key: "source" },
         { label: "Status", key: "status" },
-        { label: "Created", key: "createdAt" },
+        { label: "Created", render: (r) => formatMonthDayYearTimeEastern(r.createdAt) },
       ],
       emptyText: "No new prospects in this period.",
     });
@@ -1832,7 +1857,7 @@ async function handleTileClick(tileId) {
       columns: [
         { label: "Name", render: (r) => r.name ?? "—" },
         { label: "Source", key: "source" },
-        { label: "Created", key: "createdAt" },
+        { label: "Created", render: (r) => formatMonthDayYearTimeEastern(r.createdAt) },
       ],
       emptyText: "No prospects reached this stage in this period.",
     });

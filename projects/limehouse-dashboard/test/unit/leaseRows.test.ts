@@ -133,6 +133,25 @@ describe("unitStatusRows / vacantUnitRows", () => {
     expect(rows.find((r) => r.unitId === "20")?.occupied).toBe(false);
     expect(vacantUnitRows(units, activeLeases).map((r) => r.unitId)).toEqual(["20"]);
   });
+
+  // FIXED 2026-07-28, per Jason directly, real example: 724 Carolina
+  // Avenue — a unit with a signed Future lease (tenant lined up, not
+  // moved in yet) was still showing up as "Vacant — Not Rented." occupied
+  // stays false (no Active lease — Occupancy % is untouched by this), but
+  // vacantUnitRows must exclude it via the new hasFutureLease signal.
+  it("marks a unit with a Future lease as not occupied but excludes it from vacantUnitRows", () => {
+    const units = [unit({ Id: 10, IsUnitOccupied: false })];
+    const futureLeases = [lease({ Id: 1, UnitId: 10, LeaseStatus: "Future" })];
+    const rows = unitStatusRows(units, [], futureLeases);
+    expect(rows[0].occupied).toBe(false);
+    expect(rows[0].hasFutureLease).toBe(true);
+    expect(vacantUnitRows(units, [], futureLeases)).toEqual([]);
+  });
+
+  it("still counts a unit with no Active and no Future lease as vacant", () => {
+    const units = [unit({ Id: 10, IsUnitOccupied: false })];
+    expect(vacantUnitRows(units, [], []).map((r) => r.unitId)).toEqual(["10"]);
+  });
 });
 
 describe("vacantUnitDaysRows / averageDaysVacant", () => {
@@ -176,6 +195,19 @@ describe("vacantUnitDaysRows / averageDaysVacant", () => {
     const asOf = new Date("2026-07-09T00:00:00Z");
     const units = [unit({ Id: 10, IsUnitOccupied: false })];
     const allLeases = [lease({ Id: 1, UnitId: 10, LeaseStatus: "Active", LeaseToDate: "2027-01-01" })];
+    const rows = vacantUnitDaysRows(units, allLeases, asOf);
+    expect(rows.find((r) => r.unitId === "10")).toBeUndefined();
+  });
+
+  // Same fix as vacantUnitRows above, cascaded here since this function
+  // already derives futureLeases from the same allLeases it's given.
+  it("excludes a unit with a signed Future lease, even though its old lease already ended", () => {
+    const asOf = new Date("2026-07-09T00:00:00Z");
+    const units = [unit({ Id: 10, IsUnitOccupied: false })];
+    const allLeases = [
+      lease({ Id: 1, UnitId: 10, LeaseStatus: "Past", LeaseToDate: "2026-06-30" }),
+      lease({ Id: 2, UnitId: 10, LeaseStatus: "Future", LeaseToDate: null }),
+    ];
     const rows = vacantUnitDaysRows(units, allLeases, asOf);
     expect(rows.find((r) => r.unitId === "10")).toBeUndefined();
   });

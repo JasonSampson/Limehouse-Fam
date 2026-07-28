@@ -244,11 +244,16 @@ export async function fetchActiveLeases(): Promise<BuildiumLease[]> {
 // header count comes from fetchActiveLeases() (Active-status only, a
 // separate function with its own still-valid ghost filter), not from
 // here. Future leases are now included unconditionally, same as Past.
+// Extracted 2026-07-28 so callers that specifically need the ghost record
+// itself (see isNotGhostLease's own callers below) can apply this same
+// rule without a second network round-trip through fetchLeasesByStatus.
+export function isNotGhostLease(l: BuildiumLease): boolean {
+  return l.LeaseStatus === "Past" || l.LeaseStatus === "Future" || (l.CurrentTenants !== null && l.CurrentTenants.length > 0);
+}
+
 export async function fetchAllLeases(): Promise<BuildiumLease[]> {
   const leases = await fetchLeasesByStatus(["Active", "Past", "Future"]);
-  return leases.filter(
-    (l) => l.LeaseStatus === "Past" || l.LeaseStatus === "Future" || (l.CurrentTenants && l.CurrentTenants.length > 0)
-  );
+  return leases.filter(isNotGhostLease);
 }
 
 // ADDED 2026-07-12 for the "every past and current tenant" Avg Tenancy

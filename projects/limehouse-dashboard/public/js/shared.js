@@ -133,14 +133,20 @@ function tileHtml(opts) {
       ? sparklineHtml(sparkline.values, sparkline.color)
       : "";
 
+  // A tile with a yoy badge pins that badge to the tile's bottom edge (same
+  // treatment as the hand-rolled Doors Lost/Churn tile's flex:1 body) by
+  // letting the value+sub block grow to fill the space above it, instead of
+  // the badge sitting right under the number.
+  const valueBlockHtml =
+    yoy && !notConnected ? `<div class="tile-value-grow">${valueHtml}${subHtml}</div>` : `${valueHtml}${subHtml}`;
+
   return `
     <div class="${classes.join(" ")}" ${clickable && !notConnected ? `data-tile-id="${id}"` : ""}>
       <div class="tile-top">
         <span class="tile-label">${label}</span>
         ${badgeHtml(sourceTags, live && !notConnected)}
       </div>
-      ${valueHtml}
-      ${subHtml}
+      ${valueBlockHtml}
       ${yoyHtml}
       ${pendingHtml}
       ${sparklineHtmlStr}

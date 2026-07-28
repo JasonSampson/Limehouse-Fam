@@ -122,20 +122,42 @@ export interface UnitStatusRow {
   propertyId: string;
   unitNumber: string | null;
   occupied: boolean;
+  hasFutureLease: boolean;
 }
 
-export function unitStatusRows(units: BuildiumUnit[], activeLeases: BuildiumLease[]): UnitStatusRow[] {
+// futureLeases defaults to [] so existing callers (e.g. Total Units
+// drill-down, Team Performance's own unitStatusRows usage) are unaffected —
+// `occupied` keeps meaning "has a currently-Active lease," unchanged.
+// hasFutureLease is a separate signal only vacantUnitRows acts on below.
+export function unitStatusRows(
+  units: BuildiumUnit[],
+  activeLeases: BuildiumLease[],
+  futureLeases: BuildiumLease[] = []
+): UnitStatusRow[] {
   const occupiedUnitIds = new Set(activeLeases.map((l) => l.UnitId));
+  const futureLeasedUnitIds = new Set(futureLeases.map((l) => l.UnitId));
   return units.map((u) => ({
     unitId: String(u.Id),
     propertyId: String(u.PropertyId),
     unitNumber: u.UnitNumber ?? null,
     occupied: occupiedUnitIds.has(u.Id),
+    hasFutureLease: futureLeasedUnitIds.has(u.Id),
   }));
 }
 
-export function vacantUnitRows(units: BuildiumUnit[], activeLeases: BuildiumLease[]): UnitStatusRow[] {
-  return unitStatusRows(units, activeLeases).filter((r) => !r.occupied);
+// FIXED 2026-07-28, per Jason directly: a unit with a signed Future lease
+// (tenant already lined up, hasn't moved in yet — e.g. 724 Carolina Avenue,
+// see fetchAllLeases' comment) isn't "vacant — not rented" in the sense
+// this tile means: someone with nothing lined up who needs to be marketed.
+// Excluded here, NOT from `occupied` above — Occupancy % and everything
+// else built on "occupied" is untouched; only what counts as truly vacant
+// changes.
+export function vacantUnitRows(
+  units: BuildiumUnit[],
+  activeLeases: BuildiumLease[],
+  futureLeases: BuildiumLease[] = []
+): UnitStatusRow[] {
+  return unitStatusRows(units, activeLeases, futureLeases).filter((r) => !r.occupied && !r.hasFutureLease);
 }
 
 // Avg Days Vacant: for each currently-vacant unit, how many days since its
@@ -158,7 +180,8 @@ export interface VacantUnitDaysRow {
 
 export function vacantUnitDaysRows(units: BuildiumUnit[], allLeases: BuildiumLease[], asOfDate: Date): VacantUnitDaysRow[] {
   const activeLeases = allLeases.filter((l) => l.LeaseStatus === "Active");
-  const vacant = vacantUnitRows(units, activeLeases);
+  const futureLeases = allLeases.filter((l) => l.LeaseStatus === "Future");
+  const vacant = vacantUnitRows(units, activeLeases, futureLeases);
   const leasesByUnit = new Map<number, BuildiumLease[]>();
   for (const l of allLeases) {
     const bucket = leasesByUnit.get(l.UnitId);

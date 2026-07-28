@@ -9,6 +9,7 @@ import {
   summarizeChurnByYear,
   netDoorsRows,
   doorsAddedRows,
+  doorsLostRows,
 } from "../../src/kpi/churn.js";
 import type { BuildiumOwner, BuildiumProperty, BuildiumLease } from "../../src/buildium/client.js";
 
@@ -273,6 +274,43 @@ describe("doorsAddedRows", () => {
   });
 });
 
+describe("doorsLostRows", () => {
+  const asOf = new Date("2026-07-09T00:00:00Z");
+
+  it("includes a property whose estimated loss date falls within this calendar year, doors always 1", () => {
+    const estimates = [{ propertyId: "1", estimatedLossDate: "2026-03-15" }];
+    expect(doorsLostRows(estimates, asOf)).toEqual([{ propertyId: "1", date: "2026-03-15", doors: 1 }]);
+  });
+
+  it("excludes a property whose estimated loss date is from last calendar year", () => {
+    const estimates = [{ propertyId: "1", estimatedLossDate: "2025-12-15" }];
+    expect(doorsLostRows(estimates, asOf)).toEqual([]);
+  });
+
+  it("includes an estimated loss date exactly on Jan 1 of the current year (boundary inclusive)", () => {
+    const estimates = [{ propertyId: "1", estimatedLossDate: "2026-01-01" }];
+    expect(doorsLostRows(estimates, asOf)).toHaveLength(1);
+  });
+
+  it("excludes an estimated loss date in the future — a data gap, not a loss yet (unlike Doors Added, which counts an already-scheduled future start date)", () => {
+    const estimates = [{ propertyId: "1", estimatedLossDate: "2026-07-10" }];
+    expect(doorsLostRows(estimates, asOf)).toEqual([]);
+  });
+
+  it("excludes an estimated loss date in a future calendar year", () => {
+    const estimates = [{ propertyId: "1", estimatedLossDate: "2027-01-01" }];
+    expect(doorsLostRows(estimates, asOf)).toEqual([]);
+  });
+
+  it("sorts rows by date, most recent first", () => {
+    const estimates = [
+      { propertyId: "1", estimatedLossDate: "2026-02-01" },
+      { propertyId: "2", estimatedLossDate: "2026-05-01" },
+    ];
+    expect(doorsLostRows(estimates, asOf).map((r) => r.propertyId)).toEqual(["2", "1"]);
+  });
+});
+
 // Doors Lost (ESTIMATED) — proxy confirmed by Oracle: for a currently
 // IsActive:false property, the most recent LeaseToDate across its leases
 // approximates the loss date. Verified live for the real account: 2 doors
@@ -284,7 +322,7 @@ describe("estimatePropertyLossDates", () => {
       lease({ PropertyId: 1, UnitId: 1, LeaseToDate: "2024-06-01" }),
       lease({ PropertyId: 1, UnitId: 1, LeaseToDate: "2025-01-15" }), // more recent — this one wins
     ];
-    const result = estimatePropertyLossDates(properties, leases);
+    const result = estimatePropertyLossDates(properties, leases, []);
     expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2025-01-15" }]);
   });
 
@@ -294,14 +332,14 @@ describe("estimatePropertyLossDates", () => {
       lease({ PropertyId: 1, LeaseToDate: "2024-06-01" }),
       lease({ PropertyId: 2, LeaseToDate: "2026-01-01" }), // a different property's much-later lease must not leak in
     ];
-    const result = estimatePropertyLossDates(properties, leases);
+    const result = estimatePropertyLossDates(properties, leases, []);
     expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2024-06-01" }]);
   });
 
   it("excludes a property with no lease records at all (the documented undercount) rather than guessing", () => {
     const properties = [inactiveProperty({ Id: 1 }), inactiveProperty({ Id: 2 })];
     const leases = [lease({ PropertyId: 1, LeaseToDate: "2024-06-01" })]; // property 2 has none
-    const result = estimatePropertyLossDates(properties, leases);
+    const result = estimatePropertyLossDates(properties, leases, []);
     expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2024-06-01" }]);
   });
 
@@ -311,12 +349,66 @@ describe("estimatePropertyLossDates", () => {
       lease({ PropertyId: 1, LeaseToDate: null }),
       lease({ PropertyId: 1, LeaseToDate: "2024-03-01" }),
     ];
-    const result = estimatePropertyLossDates(properties, leases);
+    const result = estimatePropertyLossDates(properties, leases, []);
     expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2024-03-01" }]);
   });
 
   it("returns an empty array when there are no inactive properties", () => {
-    expect(estimatePropertyLossDates([], [lease({})])).toEqual([]);
+    expect(estimatePropertyLossDates([], [lease({})], [])).toEqual([]);
+  });
+
+  // FIXED 2026-07-28, real example: "OLD - 481 Rudder Road" — Buildium
+  // created a fresh active property record when the owner re-signed under
+  // his personal name, leaving this old record inactive with its own real
+  // lease history. The door was never lost; excluded by the "OLD - " name
+  // prefix Buildium consistently uses for these (confirmed live: 2 total
+  // in the account).
+  it('excludes a property whose name starts with "OLD - " even though it has a real, qualifying lease', () => {
+    const properties = [inactiveProperty({ Id: 1, Name: "OLD - 481 Rudder Road" }), inactiveProperty({ Id: 2, Name: "254 Independence Street" })];
+    const leases = [
+      lease({ PropertyId: 1, LeaseToDate: "2026-04-30" }),
+      lease({ PropertyId: 2, LeaseToDate: "2026-03-01" }),
+    ];
+    const result = estimatePropertyLossDates(properties, leases, []);
+    expect(result).toEqual([{ propertyId: "2", estimatedLossDate: "2026-03-01" }]);
+  });
+
+  // FIXED 2026-07-28, real example: 3429 West Bonner Drive — Jason fired
+  // the owner 2025-09, but the tenant's lease ran through 2026-03-31, so
+  // the lease-end proxy alone would land 6 months late and in the wrong
+  // year. A real ManagementAgreementEndDate now takes priority.
+  it("prefers a real ManagementAgreementEndDate over the lease-end proxy when the owner has one set", () => {
+    const properties = [inactiveProperty({ Id: 1 })];
+    const leases = [lease({ PropertyId: 1, LeaseToDate: "2026-03-31" })];
+    const owners = [owner({ PropertyIds: [1], ManagementAgreementEndDate: "2025-09-15" })];
+    const result = estimatePropertyLossDates(properties, leases, owners);
+    expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2025-09-15" }]);
+  });
+
+  it("falls back to the lease-end proxy when no owner has a ManagementAgreementEndDate set", () => {
+    const properties = [inactiveProperty({ Id: 1 })];
+    const leases = [lease({ PropertyId: 1, LeaseToDate: "2026-03-31" })];
+    const owners = [owner({ PropertyIds: [1], ManagementAgreementEndDate: null })];
+    const result = estimatePropertyLossDates(properties, leases, owners);
+    expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2026-03-31" }]);
+  });
+
+  it("takes the LATEST end date across co-owners when more than one has one set", () => {
+    const properties = [inactiveProperty({ Id: 1 })];
+    const owners = [
+      owner({ Id: 1, PropertyIds: [1], ManagementAgreementEndDate: "2025-06-01" }),
+      owner({ Id: 2, PropertyIds: [1], ManagementAgreementEndDate: "2025-09-15" }),
+    ];
+    const result = estimatePropertyLossDates(properties, [], owners);
+    expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2025-09-15" }]);
+  });
+
+  it("a ManagementAgreementEndDate on an unrelated property's owner doesn't leak in", () => {
+    const properties = [inactiveProperty({ Id: 1 })];
+    const leases = [lease({ PropertyId: 1, LeaseToDate: "2026-03-31" })];
+    const owners = [owner({ PropertyIds: [2], ManagementAgreementEndDate: "2025-01-01" })];
+    const result = estimatePropertyLossDates(properties, leases, owners);
+    expect(result).toEqual([{ propertyId: "1", estimatedLossDate: "2026-03-31" }]);
   });
 });
 

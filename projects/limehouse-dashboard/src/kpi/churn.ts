@@ -300,7 +300,7 @@ export function doorsAddedRows(properties: PropertyManagementStart[], asOfDate: 
 
 export interface PropertyLossEstimate {
   propertyId: string;
-  estimatedLossDate: string; // "YYYY-MM-DD" — most recent LeaseToDate across the property's leases
+  estimatedLossDate: string; // "YYYY-MM-DD" — real ManagementAgreementEndDate if set, else the most recent LeaseToDate across the property's leases
 }
 
 // `inactiveProperties` should be the FULL raw property list filtered to
@@ -308,10 +308,62 @@ export interface PropertyLossEstimate {
 // that filter would exclude every property this function needs to look
 // at). `allLeases` should span every lease status (Active/Past/Future) —
 // a lease that already ended is exactly the signal this estimate needs.
+//
+// FIXED 2026-07-28, per Jason directly, real example: 1004 Port Side Way —
+// `allLeases` here must be the RAW fetchLeasesByStatus(["Active","Past",
+// "Future"]) result, NOT fetchAllLeases()'s ghost-filtered output. That
+// ghost filter (see isNotGhostLease in buildium/client.ts) exists to keep
+// stale "Active"-labeled leases out of OCCUPANCY math, but this function
+// doesn't care whether a lease is currently real — it only reads
+// LeaseToDate as a historical data point. 1004 Port Side Way's real,
+// completed lease (5/1/2025–5/14/2026, tenant bought the house at lease
+// end) was STILL labeled LeaseStatus="Active" in Buildium with empty
+// CurrentTenants (the tenant's gone) — exactly what isNotGhostLease
+// excludes — so it silently vanished from this estimate with the
+// ghost-filtered input. Confirmed live: with the raw list, this lease
+// resurfaces and the property correctly shows up as a door lost.
+//
+// FIXED 2026-07-28, same day, two more real examples surfaced immediately
+// after the fix above:
+//   1. "OLD - 481 Rudder Road" — when an owner re-signs under a new
+//      name/LLC (here: "Surfinvestor Inc" -> personal name), Buildium
+//      sometimes creates a FRESH property record for continuity and
+//      leaves the old one inactive with its own real lease history. The
+//      door was never actually lost — it's the exact "re-signed, not
+//      re-added" case buildPropertyManagementStarts' own comment already
+//      handles for Doors ADDED, but that protection never covered Doors
+//      LOST. Confirmed live: exactly 2 such records in the account, both
+//      named with an "OLD - " prefix ("OLD - 481 Rudder Road", "OLD -
+//      7744 Castleton Place") — excluded here by that prefix.
+//   2. 3429 West Bonner Drive — a REAL loss (Jason fired the owner
+//      2025-09), but the tenant's lease was still running (through
+//      2026-03-31), so the lease-end proxy put the estimate 6 months late
+//      and in the wrong year entirely. `owners` is now used to prefer each
+//      property's real ManagementAgreementEndDate (the latest across
+//      co-owners, mirroring buildPropertyManagementStarts' earliest-start
+//      logic) when Jason has set one by hand, falling back to the
+//      lease-end proxy — still the only signal available — for the many
+//      historical properties that don't have one (12 of 383 owner records
+//      populated as of this fix).
 export function estimatePropertyLossDates(
   inactiveProperties: BuildiumProperty[],
-  allLeases: BuildiumLease[]
+  allLeases: BuildiumLease[],
+  owners: BuildiumOwner[]
 ): PropertyLossEstimate[] {
+  const realInactiveProperties = inactiveProperties.filter((p) => !p.Name?.startsWith("OLD - "));
+
+  const endDateByProperty = new Map<string, string>();
+  for (const owner of owners) {
+    if (!owner.ManagementAgreementEndDate || !owner.PropertyIds) continue;
+    for (const propertyId of owner.PropertyIds) {
+      const key = String(propertyId);
+      const existing = endDateByProperty.get(key);
+      if (!existing || owner.ManagementAgreementEndDate > existing) {
+        endDateByProperty.set(key, owner.ManagementAgreementEndDate);
+      }
+    }
+  }
+
   const latestLeaseToDateByProperty = new Map<string, string>();
   for (const lease of allLeases) {
     if (!lease.LeaseToDate) continue;
@@ -323,12 +375,12 @@ export function estimatePropertyLossDates(
   }
 
   const estimates: PropertyLossEstimate[] = [];
-  for (const property of inactiveProperties) {
+  for (const property of realInactiveProperties) {
     const key = String(property.Id);
-    const estimatedLossDate = latestLeaseToDateByProperty.get(key);
-    // A property with no lease record at all has no LeaseToDate to derive
-    // a loss date from — this is the documented undercount, not a gap to
-    // paper over with a guess (e.g. "assume today" or "assume the
+    const estimatedLossDate = endDateByProperty.get(key) ?? latestLeaseToDateByProperty.get(key);
+    // A property with no real end date AND no lease record has nothing to
+    // derive a loss date from — this is the documented undercount, not a
+    // gap to paper over with a guess (e.g. "assume today" or "assume the
     // deactivation must have just happened").
     if (estimatedLossDate) {
       estimates.push({ propertyId: key, estimatedLossDate });
@@ -371,6 +423,31 @@ export function summarizeDoorsLostEstimate(
     propertiesUndercounted: totalInactiveProperties - estimates.length,
     doorsLostYTD,
   };
+}
+
+// Doors Lost drill-down rows — ADDED 2026-07-28, per Jason directly: the
+// Doors Lost/Churn tile had no drill-down, so there was no way to see
+// which properties the current year's loss count actually refers to.
+// Same YTD scoping and same "daysAgo < 0 is a data gap, not a loss yet"
+// guard as summarizeDoorsLostEstimate's own doorsLostYTD above, so this
+// list's length always matches that tile number exactly. `doors: 1` per
+// row, same one-door-per-property convention doorsAddedRows already uses.
+export interface DoorsLostRow {
+  propertyId: string;
+  date: string; // "YYYY-MM-DD" — estimatedLossDate
+  doors: number;
+}
+
+export function doorsLostRows(estimates: PropertyLossEstimate[], asOfDate: Date): DoorsLostRow[] {
+  const startOfYear = `${asOfDate.getUTCFullYear()}-01-01`;
+  const today = toDateString(asOfDate);
+  return estimates
+    .filter((e) => {
+      const daysAgo = daysBetween(e.estimatedLossDate, today);
+      return daysAgo >= 0 && e.estimatedLossDate >= startOfYear;
+    })
+    .map((e) => ({ propertyId: e.propertyId, date: e.estimatedLossDate, doors: 1 }))
+    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 // Churn by year — ADDED 2026-07-09, per Jason directly: "churn for the

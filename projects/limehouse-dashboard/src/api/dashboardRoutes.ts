@@ -9,6 +9,8 @@ import {
   fetchAllUnits,
   fetchAllLeases,
   fetchActiveLeases,
+  fetchLeasesByStatus,
+  isNotGhostLease,
   fetchOwners,
   fetchLeaseTransactions,
   fetchPendingApplicants,
@@ -45,6 +47,7 @@ import {
   summarizeChurnByYear,
   netDoorsRows,
   doorsAddedRows,
+  doorsLostRows,
 } from "../kpi/churn.js";
 import {
   rentLeaseRows,
@@ -139,14 +142,14 @@ function resolveDateRangeFromQuery(periodRaw: unknown): { from: string; to: stri
 // Lease, lease-mix, Revenue per Unit, Avg Days Vacant) were NOT changed.
 dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) => {
   try {
-    const [allUnits, activeLeases, excludedPropertyIds] = await Promise.all([
+    const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
-      fetchActiveLeases(),
+      fetchAllLeases(),
       getExcludedPropertyIds(),
     ]);
     const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const trackedUnitIds = new Set(units.map((u) => u.Id));
-    const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
+    const activeLeasesOnTrackedUnits = allLeases.filter((l) => l.LeaseStatus === "Active" && trackedUnitIds.has(l.UnitId));
     const summary = summarizeOccupancy(units.length, activeLeasesOnTrackedUnits);
     // REVERTED 2026-07-09: this used to expose a separate vacantUnitsByFlag
     // (Buildium's own IsUnitOccupied flag) so the Vacant tile could match
@@ -157,8 +160,21 @@ dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) 
     // tile now uses summary.vacantUnits (lease-based, same signal as
     // Occupancy %) instead, per Jason directly — see leaseRows.ts's
     // unitStatusRows comment for the full story.
+    //
+    // FIXED 2026-07-28, per Jason directly: summary.vacantUnits above still
+    // counted units with a signed Future lease (tenant lined up, not moved
+    // in yet — e.g. 724 Carolina Avenue) as vacant, even though the
+    // drill-down's own title already claimed "no future lease." Subtracted
+    // here rather than in summarizeOccupancy itself, so occupiedUnits and
+    // occupancyRatePercent (Active-lease-based, unrelated to this fix)
+    // stay exactly as they were.
+    const futureLeasedUnitIds = new Set(
+      allLeases.filter((l) => l.LeaseStatus === "Future" && trackedUnitIds.has(l.UnitId)).map((l) => l.UnitId)
+    );
+    const occupiedUnitIds = new Set(activeLeasesOnTrackedUnits.map((l) => l.UnitId));
+    const vacantWithoutFutureLease = units.filter((u) => !occupiedUnitIds.has(u.Id) && !futureLeasedUnitIds.has(u.Id)).length;
     const totalUnitsYoY = summarizeTotalUnitsYoY(units.length, new Date());
-    res.json({ ...summary, totalUnitsYoY });
+    res.json({ ...summary, vacantUnits: vacantWithoutFutureLease, totalUnitsYoY });
   } catch (err) {
     logError("GET /api/dashboard/occupancy failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load occupancy data from Buildium." });
@@ -450,15 +466,19 @@ dashboardRoutes.get("/api/dashboard/property-health", requireLogin, async (req, 
 // last 12 months — matches Oracle's numbers exactly.
 dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
   try {
-    const [allProperties, allLeases, owners, managedUnits] = await Promise.all([
+    const [allProperties, rawLeases, owners, managedUnits] = await Promise.all([
       fetchProperties(),
-      fetchAllLeases(),
+      fetchLeasesByStatus(["Active", "Past", "Future"]),
       fetchOwners(),
       fetchActiveManagedUnits(),
     ]);
     const activeProperties = allProperties.filter((p) => p.IsActive === true);
     const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
     const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
+    // Doors Added keeps the ghost-filtered set (unrelated to this fix —
+    // see estimatePropertyLossDates' own comment below for why Doors Lost
+    // specifically needs the raw list instead).
+    const allLeases = rawLeases.filter(isNotGhostLease);
 
     const { properties, flaggedDisagreements } = buildPropertyManagementStarts(owners, activePropertyIds, allLeases);
     const doorsAdded = summarizeDoorsAdded(properties, new Date());
@@ -470,7 +490,7 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
       });
     }
 
-    const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
+    const lossEstimates = estimatePropertyLossDates(inactiveProperties, rawLeases, owners);
     const doorsLostEstimated = summarizeDoorsLostEstimate(lossEstimates, inactiveProperties.length, new Date());
     const churnByYear = summarizeChurnByYear(lossEstimates, new Date());
 
@@ -508,11 +528,22 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
 // missed, then keeps only groups with at least one currently-active
 // member, matching "how many owners am I actively managing for" rather
 // than the vendor site's raw (and here, provably wrong) owner-record count.
-dashboardRoutes.get("/api/dashboard/owners", requireLogin, async (_req, res) => {
+// gainedThisPeriod ADDED 2026-07-28, per Jason directly, replacing the
+// tile's old "not connected yet" placeholder. Buildium has no "date owner
+// added" field — reuses the same ManagementAgreementStartDate signal
+// groupOwners already rolls up per real owner (earliestStart), same
+// pattern as Move-Ins' own period filter (moveInLeaseRows).
+dashboardRoutes.get("/api/dashboard/owners", requireLogin, async (req, res) => {
   try {
     const owners = await fetchOwners();
     const activeGroups = groupOwners(owners).filter((g) => g.active);
-    res.json(activeGroups);
+    const { from, to } = resolveDateRangeFromQuery(req.query.period);
+    const fromDate = from.slice(0, 10);
+    const toDate = to.slice(0, 10);
+    const gainedThisPeriod = activeGroups.filter(
+      (g) => g.earliestStart !== null && g.earliestStart >= fromDate && g.earliestStart <= toDate
+    ).length;
+    res.json({ groups: activeGroups, gainedThisPeriod });
   } catch (err) {
     logError("GET /api/dashboard/owners failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load owners from Buildium." });
@@ -828,16 +859,25 @@ dashboardRoutes.get("/api/dashboard/units", requireLogin, async (_req, res) => {
 // unitStatusRows comment for why (the flag lags real move-outs).
 dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, async (_req, res) => {
   try {
-    const [allUnits, activeLeases, properties, excludedPropertyIds] = await Promise.all([
+    const [allUnits, allLeases, properties, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
-      fetchActiveLeases(),
+      fetchAllLeases(),
       fetchProperties(),
       getExcludedPropertyIds(),
     ]);
     const units = allUnits.filter((u) => !excludedPropertyIds.has(String(u.PropertyId)));
     const trackedUnitIds = new Set(units.map((u) => u.Id));
-    const activeLeasesOnTrackedUnits = activeLeases.filter((l) => trackedUnitIds.has(l.UnitId));
-    res.json(withPropertyAddress(vacantUnitRows(units, activeLeasesOnTrackedUnits), propertyAddressById(properties)));
+    const activeLeasesOnTrackedUnits = allLeases.filter((l) => l.LeaseStatus === "Active" && trackedUnitIds.has(l.UnitId));
+    // FIXED 2026-07-28, per Jason directly — see /api/dashboard/occupancy's
+    // matching comment: a unit with a signed Future lease isn't "vacant —
+    // not rented," so it's excluded here the same way.
+    const futureLeasesOnTrackedUnits = allLeases.filter((l) => l.LeaseStatus === "Future" && trackedUnitIds.has(l.UnitId));
+    res.json(
+      withPropertyAddress(
+        vacantUnitRows(units, activeLeasesOnTrackedUnits, futureLeasesOnTrackedUnits),
+        propertyAddressById(properties)
+      )
+    );
   } catch (err) {
     logError("GET /api/dashboard/units/vacant failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load vacant unit data from Buildium." });
@@ -1068,13 +1108,18 @@ dashboardRoutes.get("/api/dashboard/avg-tenancy/leases", requireLogin, async (_r
 // using mismatched 90-day vs 12-month windows).
 dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, async (_req, res) => {
   try {
-    const [allProperties, allLeases, owners] = await Promise.all([fetchProperties(), fetchAllLeases(), fetchOwners()]);
+    const [allProperties, rawLeases, owners] = await Promise.all([
+      fetchProperties(),
+      fetchLeasesByStatus(["Active", "Past", "Future"]),
+      fetchOwners(),
+    ]);
     const activeProperties = allProperties.filter((p) => p.IsActive === true);
     const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
     const activePropertyIds = new Set(activeProperties.map((p) => String(p.Id)));
+    const allLeases = rawLeases.filter(isNotGhostLease);
 
     const { properties } = buildPropertyManagementStarts(owners, activePropertyIds, allLeases);
-    const lossEstimates = estimatePropertyLossDates(inactiveProperties, allLeases);
+    const lossEstimates = estimatePropertyLossDates(inactiveProperties, rawLeases, owners);
 
     const rows = withPropertyAddress(netDoorsRows(properties, lossEstimates, new Date()), propertyAddressById(allProperties));
     res.json(rows);
@@ -1101,5 +1146,26 @@ dashboardRoutes.get("/api/dashboard/doors-added/properties", requireLogin, async
   } catch (err) {
     logError("GET /api/dashboard/doors-added/properties failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load doors-added data from Buildium." });
+  }
+});
+
+// Doors Lost drill-down — ADDED 2026-07-28, per Jason directly: same
+// year-to-date window as the Doors Lost/Churn tile's own doorsLostYTD /
+// churn badge, so the row count always matches what the tile shows.
+dashboardRoutes.get("/api/dashboard/doors-lost/properties", requireLogin, async (_req, res) => {
+  try {
+    const [allProperties, rawLeases, owners] = await Promise.all([
+      fetchProperties(),
+      fetchLeasesByStatus(["Active", "Past", "Future"]),
+      fetchOwners(),
+    ]);
+    const inactiveProperties = allProperties.filter((p) => p.IsActive === false);
+    const lossEstimates = estimatePropertyLossDates(inactiveProperties, rawLeases, owners);
+
+    const rows = withPropertyAddress(doorsLostRows(lossEstimates, new Date()), propertyAddressById(allProperties));
+    res.json(rows);
+  } catch (err) {
+    logError("GET /api/dashboard/doors-lost/properties failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load doors-lost data from Buildium." });
   }
 });

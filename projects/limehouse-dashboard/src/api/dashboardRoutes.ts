@@ -489,8 +489,8 @@ dashboardRoutes.get("/api/dashboard/properties", requireLogin, async (_req, res)
 // bucket — a terminated property is never listed again, so RentEngine has
 // no record of it at all, not a mislabeled one.
 dashboardRoutes.get("/api/dashboard/property-health", requireLogin, async (req, res) => {
-  const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
+    const { from, to } = resolveDateRangeFromQuery(req.query.period);
     const [shared, excludedPropertyIds] = await Promise.all([
       getOrFetchLeasingPerformanceForAllUnits(from, to),
       getExcludedPropertyIds(),
@@ -1031,8 +1031,8 @@ dashboardRoutes.get("/api/dashboard/lease-mix/month-to-month", requireLogin, asy
 // computable from data already fetched elsewhere — same situation as Avg
 // Days Vacant above, just never wired up.
 dashboardRoutes.get("/api/dashboard/move-ins", requireLogin, async (req, res) => {
-  const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
+    const { from, to } = resolveDateRangeFromQuery(req.query.period);
     const activeLeases = await fetchActiveLeases();
     res.json({ moveIns: moveInLeaseRows(activeLeases, from, to).length });
   } catch (err) {
@@ -1151,8 +1151,8 @@ dashboardRoutes.get("/api/dashboard/apps-per-move-in/list", requireLogin, async 
 });
 
 dashboardRoutes.get("/api/dashboard/move-ins/leases", requireLogin, async (req, res) => {
-  const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
+    const { from, to } = resolveDateRangeFromQuery(req.query.period);
     const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
     res.json(withPropertyAddress(moveInLeaseRows(activeLeases, from, to), propertyAddressById(properties)));
   } catch (err) {

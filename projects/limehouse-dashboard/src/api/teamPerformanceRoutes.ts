@@ -77,17 +77,17 @@ const QUARTER_LABEL_PATTERN = /^\d{4}-Q[1-4]$/;
 // when no explicit quarter is given, so the page still defaults sensibly
 // on first load.
 teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAdmin, async (req, res) => {
-  const quarterParam = req.query.quarter;
-  let snapshotLabel: string;
-  if (typeof quarterParam === "string" && QUARTER_LABEL_PATTERN.test(quarterParam)) {
-    snapshotLabel = quarterParam;
-  } else {
-    const parsed = periodQuerySchema.safeParse(req.query.period);
-    const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
-    snapshotLabel = periodToSnapshotLabel(period);
-  }
-
   try {
+    const quarterParam = req.query.quarter;
+    let snapshotLabel: string;
+    if (typeof quarterParam === "string" && QUARTER_LABEL_PATTERN.test(quarterParam)) {
+      snapshotLabel = quarterParam;
+    } else {
+      const parsed = periodQuerySchema.safeParse(req.query.period);
+      const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
+      snapshotLabel = periodToSnapshotLabel(period);
+    }
+
     const { from, to } = quarterLabelToDateRange(snapshotLabel);
 
     // Quarterly Trend — real history across every quarter of the currently

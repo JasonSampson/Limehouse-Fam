@@ -1,4 +1,14 @@
-import { fetchProspects, fetchUnits, type RentEngineProspect, type RentEngineUnit, type RentEngineResult } from "./client.js";
+import {
+  fetchProspects,
+  fetchUnits,
+  fetchMarketingSourcesReport,
+  fetchShowingsReport,
+  type RentEngineProspect,
+  type RentEngineUnit,
+  type RentEngineResult,
+  type RentEngineMarketingSourceRow,
+  type RentEngineShowingReportRow,
+} from "./client.js";
 import { getCachedMetric, upsertCachedMetric, isCacheFresh } from "../db/metricCache.js";
 
 // Mirrors leasingPerformanceCache.ts's getOrFetchLeasingPerformanceForAllUnits
@@ -71,5 +81,74 @@ export async function getOrFetchUnits(): Promise<RentEngineResult<RentEngineUnit
   })();
 
   inFlightUnitsFetches.set(cacheKey, fetchPromise);
+  return fetchPromise;
+}
+
+// ADDED 2026-07-30, per Hermes's performance review: fetchMarketingSourcesReport
+// and fetchShowingsReport were the only two RentEngine report fetches left
+// uncached — not duplicated within a single page load the way prospects/units
+// were, but both paginate in up to 32-day chunks against the same tight 30
+// req/min budget, so a wide period ("Last year") could still burn a real
+// chunk of it in one burst. Same cache/dedup pattern as above for
+// consistency and extra headroom.
+const inFlightMarketingSourcesFetches = new Map<string, Promise<RentEngineResult<RentEngineMarketingSourceRow[]>>>();
+
+export async function getOrFetchMarketingSourcesReport(
+  fromDate: string,
+  toDate: string
+): Promise<RentEngineResult<RentEngineMarketingSourceRow[]>> {
+  const cacheKey = `marketing_sources_${fromDate}_${toDate}`;
+  const cached = await getCachedMetric(cacheKey, "portfolio");
+  if (cached && cached.value !== null && isCacheFresh(cached)) {
+    return { connected: true, data: cached.value as RentEngineMarketingSourceRow[], error: null };
+  }
+
+  const existing = inFlightMarketingSourcesFetches.get(cacheKey);
+  if (existing) return existing;
+
+  const fetchPromise = (async (): Promise<RentEngineResult<RentEngineMarketingSourceRow[]>> => {
+    try {
+      const result = await fetchMarketingSourcesReport(fromDate, toDate);
+      if (result.connected && result.data) {
+        await upsertCachedMetric(cacheKey, "portfolio", "rent_engine", result.data);
+      }
+      return result;
+    } finally {
+      inFlightMarketingSourcesFetches.delete(cacheKey);
+    }
+  })();
+
+  inFlightMarketingSourcesFetches.set(cacheKey, fetchPromise);
+  return fetchPromise;
+}
+
+const inFlightShowingsFetches = new Map<string, Promise<RentEngineResult<RentEngineShowingReportRow[]>>>();
+
+export async function getOrFetchShowingsReport(
+  fromDate: string,
+  toDate: string
+): Promise<RentEngineResult<RentEngineShowingReportRow[]>> {
+  const cacheKey = `showings_report_${fromDate}_${toDate}`;
+  const cached = await getCachedMetric(cacheKey, "portfolio");
+  if (cached && cached.value !== null && isCacheFresh(cached)) {
+    return { connected: true, data: cached.value as RentEngineShowingReportRow[], error: null };
+  }
+
+  const existing = inFlightShowingsFetches.get(cacheKey);
+  if (existing) return existing;
+
+  const fetchPromise = (async (): Promise<RentEngineResult<RentEngineShowingReportRow[]>> => {
+    try {
+      const result = await fetchShowingsReport(fromDate, toDate);
+      if (result.connected && result.data) {
+        await upsertCachedMetric(cacheKey, "portfolio", "rent_engine", result.data);
+      }
+      return result;
+    } finally {
+      inFlightShowingsFetches.delete(cacheKey);
+    }
+  })();
+
+  inFlightShowingsFetches.set(cacheKey, fetchPromise);
   return fetchPromise;
 }

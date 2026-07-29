@@ -10,13 +10,16 @@ import {
   summarizeMarketingActivityFromReporting,
   summarizeShowingCompletionRate,
   showingCompletionRateExplainRows,
-  fetchMarketingSourcesReport,
-  fetchShowingsReport,
   isShowingCompleted,
   isShowingSelfGuided,
 } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
-import { getOrFetchProspects, getOrFetchUnits } from "../rentengine/sharedFetchCache.js";
+import {
+  getOrFetchProspects,
+  getOrFetchUnits,
+  getOrFetchMarketingSourcesReport,
+  getOrFetchShowingsReport,
+} from "../rentengine/sharedFetchCache.js";
 import { resolveDateRangeFromQuery } from "../kpi/period.js";
 import { logError, logWarn } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
@@ -48,7 +51,7 @@ export const rentEngineRoutes = Router();
 rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const reportResult = await fetchMarketingSourcesReport(from, to);
+    const reportResult = await getOrFetchMarketingSourcesReport(from, to);
 
     if (!reportResult.connected) {
       res.json({ connected: false, sources: [] });
@@ -247,7 +250,7 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
     const [shared, prospectsResult, showingsResult] = await Promise.all([
       getOrFetchLeasingPerformanceForAllUnits(from, to),
       getOrFetchProspects(from, to),
-      fetchShowingsReport(from, to),
+      getOrFetchShowingsReport(from, to),
     ]);
     if (!shared.connected) {
       res.json({
@@ -475,7 +478,7 @@ rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res)
 rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const result = await fetchShowingsReport(from, to);
+    const result = await getOrFetchShowingsReport(from, to);
     if (!result.connected) {
       res.json({ connected: false, showings: [] });
       return;

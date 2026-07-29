@@ -359,18 +359,18 @@ function renderFinancials({
         }
         ${
           !extendedGrace
-            ? couldNotLoadTile({ id: "extended-grace", label: "Extended Grace", sourceTags: ["BD"] })
+            ? couldNotLoadTile({ id: "extended-grace", label: "14 Day", sourceTags: ["BD"] })
             : !extendedGrace.synced
             ? tileHtml({
                 id: "extended-grace",
-                label: "Extended Grace",
+                label: "14 Day",
                 sourceTags: ["BD"],
                 notConnected: true,
                 notConnectedReason: "Not synced yet",
               })
             : tileHtml({
                 id: "extended-grace",
-                label: "Extended Grace",
+                label: "14 Day",
                 value: formatNumber(extendedGrace.count),
                 sub: `${formatNumber(extendedGrace.totalFlaggedLeases)} total since Jul 2026`,
                 sourceTags: ["BD"],
@@ -1615,7 +1615,7 @@ async function handleTileClick(tileId) {
   if (tileId === "extended-grace") {
     await simpleDrillDown({
       tileId,
-      title: "Extended Grace — Full History Since July 2026",
+      title: "14 Day — Full History Since July 2026",
       subtitle: (rows) => `${rows.length} lease${rows.length === 1 ? "" : "s"} flagged, ever`,
       url: "/api/dashboard/financials/extended-grace/list",
       note: EXTENDED_GRACE_NOTE,

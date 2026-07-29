@@ -24,6 +24,11 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("lh:sync-complete", loadCeoView);
 });
 
+// Kept at module scope so the RPU tile's click handler (wireCeoTileClicks)
+// can read the same months data the tile itself was rendered from, instead
+// of re-fetching /api/ceo-view/income a second time just to open a modal.
+let currentIncomeData = null;
+
 async function loadCeoView() {
   const content = document.getElementById("page-content");
   content.innerHTML = `<p class="loading-text">Loading CEO View…</p>`;
@@ -37,6 +42,7 @@ async function loadCeoView() {
   const rolesData = rolesResult.status === "fulfilled" ? rolesResult.value : null;
   const incomeData = incomeResult.status === "fulfilled" ? incomeResult.value : null;
   const balancesData = balancesResult.status === "fulfilled" ? balancesResult.value : null;
+  currentIncomeData = incomeData;
 
   content.innerHTML = `
     <p class="context-line">CEO VIEW · FINANCIAL PERFORMANCE</p>
@@ -46,6 +52,7 @@ async function loadCeoView() {
   `;
 
   wireRoleKpiClicks();
+  wireCeoTileClicks();
 }
 
 // Pure computation shared by the top tile row and the by-year charts below
@@ -65,6 +72,15 @@ function computeFinancialTileValues(incomeData) {
   const completedMonths = months.filter((m) => m.month < currentMonthKey);
   const lastMonth = completedMonths.length > 0 ? completedMonths[completedMonths.length - 1] : null;
 
+  // ADDED 2026-07-29, per Jason directly: the RPU drill-down and the
+  // tile's own "Avg 12 mo" sub-line both need the trailing 12 COMPLETED
+  // months (same "last fully elapsed month" anchor as lastMonth above, not
+  // the current in-progress month) — last12Rpu is that slice, oldest
+  // first, matching every other monthly list in this app.
+  const last12Rpu = completedMonths.slice(-12);
+  const rpuValues = last12Rpu.map((m) => m.revenuePerUnit).filter((v) => typeof v === "number");
+  const avg12MoRpu = rpuValues.length > 0 ? rpuValues.reduce((sum, v) => sum + v, 0) / rpuValues.length : null;
+
   const coverageNote = incomeData && incomeData.coverage && !incomeData.coverage.fullyCovered
     ? incomeData.coverage.earliestEntryDate
       ? `Data only goes back to ${incomeData.coverage.earliestEntryDate} in Buildium — earlier months aren't available.`
@@ -75,7 +91,7 @@ function computeFinancialTileValues(incomeData) {
     ? "These numbers come straight from Buildium's ledger but haven't been double-checked against a live account yet — treat as provisional until confirmed."
     : null;
 
-  return { months, currentYear, grossIncomeYtd, netIncomeYtd, lastMonth, coverageNote, unverifiedNote };
+  return { months, currentYear, grossIncomeYtd, netIncomeYtd, lastMonth, last12Rpu, avg12MoRpu, coverageNote, unverifiedNote };
 }
 
 // Top-row summary tiles — REORGANIZED 2026-07-26, per Jason directly:
@@ -92,7 +108,7 @@ function computeFinancialTileValues(incomeData) {
 // simple number tiles beside it to match its taller height (CSS grid's
 // default is to stretch every cell in a row to the tallest one).
 function renderTopTileRow(balancesData, incomeData) {
-  const { months, grossIncomeYtd, netIncomeYtd, lastMonth } = computeFinancialTileValues(incomeData);
+  const { months, grossIncomeYtd, netIncomeYtd, lastMonth, avg12MoRpu } = computeFinancialTileValues(incomeData);
   return `
     <div class="tile-grid" style="margin-bottom:20px; align-items:start;">
       ${renderAccountBalancesTile(balancesData)}
@@ -110,13 +126,7 @@ function renderTopTileRow(balancesData, incomeData) {
         sourceTags: ["BD"],
         live: months.length > 0,
       })}
-      ${tileHtml({
-        id: "rpu-last-month",
-        label: "RPU — Last Month",
-        value: lastMonth && lastMonth.revenuePerUnit !== null ? formatCurrency(lastMonth.revenuePerUnit) : "—",
-        sourceTags: ["BD"],
-        live: !!lastMonth,
-      })}
+      ${renderRpuTile(lastMonth, avg12MoRpu)}
     </div>
   `;
 }
@@ -167,6 +177,44 @@ function renderAccountBalancesTile(balancesData) {
         <div class="breakdown-list account-balances-list" style="flex:1;">${enterpriseAccounts.map(accountBreakdownRow).join("")}</div>
         <div class="breakdown-list account-balances-list" style="flex:1;">${otherAccounts.map(accountBreakdownRow).join("")}</div>
       </div>
+    </div>
+  `;
+}
+
+// UPDATED 2026-07-29, per Jason directly: the "Avg 12 mo" figure moved off
+// the tile's own tile-sub line (which made this tile taller than Gross
+// Income/Net Income beside it, throwing off the row's alignment) and into
+// the badge column instead. CONFIRMED LIVE this tile is only ~150-190px
+// wide (same auto-fill(minmax(150px,1fr)) grid as every other tile): "BD"
+// + "Avg 12 mo $XXX" + "LIVE" all side by side needed ~126px, leaving so
+// little room for the "RPU — Last Month" label that it wrapped to 4+
+// lines and blew the tile's height out past its neighbors. Fixed as two
+// stacked rows instead (tile-badges-stack) — "BD"/"LIVE" side by side on
+// top (tile-badge-row), the note below — which only needs ~28px of
+// height, still well under the 53px min-height every tile-top already
+// reserves for a 2-line label (see .tile-top's own comment), so this tile
+// ends up the exact same height as Gross Income/Net Income, and "$462"
+// lines up with them again. Same tile-top/tile-value structure tileHtml()
+// produces for its two neighbors, hand-rolled here (like
+// renderAccountBalancesTile above it) only because tileHtml has no slot
+// for a third badge-row item.
+function renderRpuTile(lastMonth, avg12MoRpu) {
+  const clickable = !!lastMonth;
+  const value = lastMonth && lastMonth.revenuePerUnit !== null ? formatCurrency(lastMonth.revenuePerUnit) : "—";
+  const avgHtml = avg12MoRpu !== null ? `<span class="tile-badge-note">Avg 12 mo ${formatCurrency(avg12MoRpu)}</span>` : "";
+  return `
+    <div class="tile${clickable ? " clickable" : ""}" ${clickable ? `data-tile-id="rpu-last-month"` : ""}>
+      <div class="tile-top">
+        <span class="tile-label">RPU — Last Month</span>
+        <span class="tile-badges tile-badges-stack">
+          <span class="tile-badge-row">
+            <span class="badge">BD</span>
+            ${lastMonth ? `<span class="badge live">LIVE</span>` : ""}
+          </span>
+          ${avgHtml}
+        </span>
+      </div>
+      <div class="tile-value">${value}</div>
     </div>
   `;
 }
@@ -437,4 +485,27 @@ function wireRoleKpiClicks() {
       });
     });
   });
+}
+
+// ADDED 2026-07-29, per Jason directly: "RPU — Last Month" drill-down —
+// the trailing 12 completed months, same months the tile's own "Avg 12 mo"
+// sub-line averages. Reuses currentIncomeData (already fetched for the
+// tile itself) rather than a second /api/ceo-view/income call.
+function wireCeoTileClicks() {
+  const rpuTile = document.querySelector('[data-tile-id="rpu-last-month"]');
+  if (rpuTile) {
+    rpuTile.addEventListener("click", () => {
+      const { last12Rpu } = computeFinancialTileValues(currentIncomeData);
+      openDrillDownModal({
+        title: "Revenue Per Unit — Trailing 12 Months",
+        columns: [
+          { label: "Month", render: (m) => formatMonthLabel(m.month) },
+          { label: "Gross Income", render: (m) => formatCurrency(m.grossIncome) },
+          { label: "RPU", render: (m) => (m.revenuePerUnit === null ? "—" : formatCurrency(m.revenuePerUnit)) },
+        ],
+        rows: last12Rpu,
+        emptyText: "No completed months of financial history yet.",
+      });
+    });
+  }
 }

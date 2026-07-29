@@ -109,6 +109,22 @@ export function findExtendedGraceOccurrences(
       continue;
     }
 
+    // FIXED 2026-07-29, real examples: 909 Leisure Square, 127 Repose
+    // Lane, 3533 Bernies Court North — all three are brand-new move-ins
+    // that prepaid their ENTIRE first month AND their next month's rent
+    // in one lump sum at signing (a Buildium "Applied Prepayment" dated
+    // in the move-in month). resolveRentPaymentDates correctly resolves
+    // the next month's charge to that earlier prepayment date, but this
+    // function only ever checked for a resolution date in the SAME month
+    // as the charge — a resolution date in an EARLIER month (paid fully
+    // ahead of time, before the month even started) fell through to the
+    // "still unpaid" branch below by default, even though the tenant's
+    // real balance was already $0. Paid-in-an-earlier-month is not late
+    // by any definition; skip it entirely, same as a same-month payment
+    // that lands before the old law's cutoff.
+    const paidEarly = paidDate !== null && paidDate.slice(0, 7) < month;
+    if (paidEarly) continue;
+
     // Either never resolved at all, or only resolved in a LATER calendar
     // month than the charge (rolled-over back rent) — either way, as of
     // this month's own timeline, still unpaid.

@@ -215,4 +215,20 @@ describe("findExtendedGraceOccurrences — still_unpaid", () => {
     const transactions = [txn({ Id: 1, Date: "2026-07-10", TransactionType: "Charge", glLines: [[RENT_INCOME, "Rent Income", 900]] })];
     expect(findExtendedGraceOccurrences(transactions, "2026-07-10", ASOF_JULY_29)).toEqual([]);
   });
+
+  // FIXED 2026-07-29, real examples flagged by Jason directly: 909 Leisure
+  // Square, 127 Repose Lane, 3533 Bernies Court North. All three are new
+  // move-ins who prepaid their ENTIRE next month's rent at signing, before
+  // that month even started — resolveRentPaymentDates correctly resolves
+  // the charge to that earlier date, but the old logic only recognized a
+  // same-month resolution, so a fully-prepaid charge fell through to
+  // "still_unpaid" even though the real balance was $0 well before the
+  // month began.
+  it("does not flag a charge that was fully prepaid in an earlier month than the charge itself", () => {
+    const transactions = [
+      txn({ Id: 1, Date: "2026-06-18", TransactionType: "Applied Prepayment", glLines: [[RENT_INCOME, "Rent Income", -1495]] }),
+      txn({ Id: 2, Date: "2026-07-01", TransactionType: "Charge", glLines: [[RENT_INCOME, "Rent Income", 1495]] }),
+    ];
+    expect(findExtendedGraceOccurrences(transactions, "2026-06-15", ASOF_JULY_29)).toEqual([]);
+  });
 });

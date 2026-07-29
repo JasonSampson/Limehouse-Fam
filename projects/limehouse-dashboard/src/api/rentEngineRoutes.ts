@@ -1,8 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
 import {
-  fetchProspects,
-  fetchUnits,
   summarizeProspectsBySource,
   summarizeLeasingFunnel,
   leasingFunnelStageRows,
@@ -18,6 +16,7 @@ import {
   isShowingSelfGuided,
 } from "../rentengine/client.js";
 import { getOrFetchLeasingPerformanceForAllUnits } from "../rentengine/leasingPerformanceCache.js";
+import { getOrFetchProspects, getOrFetchUnits } from "../rentengine/sharedFetchCache.js";
 import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
 import { logError, logWarn } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
@@ -73,7 +72,7 @@ rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, async 
   // Fallback: the reporting endpoint failed, try the older raw-prospect
   // approach rather than showing nothing.
   logWarn("Marketing sources report failed, falling back to raw prospect grouping", { error: reportResult.error });
-  const result = await fetchProspects(from, to);
+  const result = await getOrFetchProspects(from, to);
   if (result.error || !result.data) {
     logError("GET /api/rentengine/prospects-by-source failed", { error: result.error });
     res.status(502).json({ error: "Failed to load prospect data from RentEngine.", detail: result.error });
@@ -95,7 +94,7 @@ rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, async 
 // shorter window while still labeling it "12 months."
 rentEngineRoutes.get("/api/rentengine/leasing-funnel", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
-  const result = await fetchProspects(from, to);
+  const result = await getOrFetchProspects(from, to);
 
   if (!result.connected) {
     res.json({ connected: false, funnel: null });
@@ -132,7 +131,7 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, async
     res.status(400).json({ error: "Invalid or missing stage query param." });
     return;
   }
-  const result = await fetchProspects(from, to);
+  const result = await getOrFetchProspects(from, to);
   if (!result.connected) {
     res.json({ connected: false, prospects: [] });
     return;
@@ -165,7 +164,7 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, async
 // /api/rentengine/completion-rate — see that route's comment below for why
 // it was split out of marketing-activity.
 rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_req, res) => {
-  const result = await fetchUnits();
+  const result = await getOrFetchUnits();
 
   if (!result.connected) {
     res.json({ connected: false, unitsOnMarket: null, totalUnitsTracked: null });
@@ -234,7 +233,7 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
   try {
     const [shared, prospectsResult, showingsResult] = await Promise.all([
       getOrFetchLeasingPerformanceForAllUnits(from, to),
-      fetchProspects(from, to),
+      getOrFetchProspects(from, to),
       fetchShowingsReport(from, to),
     ]);
     if (!shared.connected) {
@@ -332,7 +331,7 @@ rentEngineRoutes.get("/api/rentengine/days-on-market", requireLogin, async (req,
 rentEngineRoutes.get("/api/rentengine/completion-rate", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
     if (!shared.connected || !unitsResult.connected) {
       res.json({ connected: false, showingsScheduled: null, showingsCompleted: null, ratePercent: null });
       return;
@@ -365,13 +364,13 @@ rentEngineRoutes.get("/api/rentengine/completion-rate", requireLogin, async (req
 
 // Completion Rate drill-down — same on-market-for-showing scoping as the
 // summary above, via showingCompletionRateExplainRows, joined with
-// address/status from fetchUnits() (same join pattern as the Units on
+// address/status from getOrFetchUnits() (same join pattern as the Units on
 // Market / Days on Market drill-downs). Matches the vendor's exact
 // columns: Address, Status, Scheduled, Completed, Rate.
 rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
     if (!shared.connected || !unitsResult.connected) {
       res.json({ connected: false, units: [] });
       return;
@@ -418,7 +417,7 @@ rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, asyn
 // grouping by source.
 rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
-  const result = await fetchProspects(from, to);
+  const result = await getOrFetchProspects(from, to);
   if (!result.connected) {
     res.json({ connected: false, prospects: [] });
     return;
@@ -495,14 +494,14 @@ rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) 
 // all units," the SAME per-unit source the tile's own number already
 // uses (summarizeMarketingActivityFromReporting below), just shown one
 // row per unit instead of summed. Rebuilt to match: same shared cache as
-// the tile (no extra RentEngine calls), joined with fetchUnits() for
+// the tile (no extra RentEngine calls), joined with getOrFetchUnits() for
 // status (same join pattern as the Completion Rate / Days on Market
 // drill-downs), address instead of the vendor's bare unit number per
 // Jason directly, sorted by call count descending to match the vendor.
 rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
     if (!shared.connected) {
       res.json({ connected: false, units: [] });
       return;
@@ -550,7 +549,7 @@ rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => 
 rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
     if (!shared.connected) {
       res.json({ connected: false, units: [] });
       return;
@@ -594,12 +593,12 @@ rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, async (req,
 //
 // address/status — ADDED 2026-07-13, per Jason directly, to match the
 // vendor's own drill-down (Address/Status/Health/Days columns; ours only
-// ever showed a bare unit_id). Joined in from fetchUnits() (already fetched
+// ever showed a bare unit_id). Joined in from getOrFetchUnits() (already fetched
 // elsewhere on this dashboard) by unit id — no extra RentEngine calls.
 rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
     if (!shared.connected) {
       res.json({ connected: false, units: [] });
       return;
@@ -635,13 +634,13 @@ rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, 
 // actually show N rows. This is scoped to real on-market units, using the
 // SAME isUnitOnMarket predicate as the tile's own summarizeUnitsOnMarket
 // count (src/rentengine/client.ts) so the two can never disagree. Base
-// list built from fetchUnits() (not the leasing-performance rows) so a
+// list built from getOrFetchUnits() (not the leasing-performance rows) so a
 // brand-new listing that hasn't shown up in a reporting window yet still
 // appears here with "—" days rather than being silently missing.
 rentEngineRoutes.get("/api/rentengine/units/on-market", requireLogin, async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
-    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), fetchUnits()]);
+    const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
     if (!unitsResult.connected) {
       res.json({ connected: false, units: [] });
       return;

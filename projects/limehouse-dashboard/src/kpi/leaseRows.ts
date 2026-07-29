@@ -1,5 +1,6 @@
 import type { BuildiumLease, BuildiumUnit } from "../buildium/client.js";
 import type { LeaseDepositWithheld, MoveOutWindow } from "./rentCollection.js";
+import type { ExtendedGraceOccurrence } from "./extendedNoticeTracking.js";
 
 // Shared row-shaping helpers for Dashboard tab drill-downs. Kept as pure
 // functions over plain lease/unit arrays (no fetching, no Date.now() other
@@ -369,4 +370,30 @@ export function securityDepositWithheldRows(
   }
 
   return rows.sort((a, b) => b.percent - a.percent);
+}
+
+// Extended Grace drill-down — ADDED 2026-07-29, per Jason directly: shows
+// the FULL history since the law changed, grouped by lease, not just the
+// currently-selected period — the point is spotting a tenant who did this
+// in July, then September, then October, then January, not just this
+// month in isolation. Sorted repeat-offenders-first (most occurrences at
+// the top) so a multi-month pattern is immediately visible.
+export interface ExtendedGraceLeaseRow extends LeaseRow {
+  occurrences: ExtendedGraceOccurrence[]; // oldest first
+  occurrenceCount: number;
+}
+
+export function extendedGraceLeaseRows(
+  leases: BuildiumLease[],
+  occurrencesByLeaseId: Map<string, ExtendedGraceOccurrence[]>
+): ExtendedGraceLeaseRow[] {
+  const rows: ExtendedGraceLeaseRow[] = [];
+
+  for (const lease of leases) {
+    const occurrences = occurrencesByLeaseId.get(String(lease.Id));
+    if (!occurrences || occurrences.length === 0) continue;
+    rows.push({ ...baseRow(lease), occurrences, occurrenceCount: occurrences.length });
+  }
+
+  return rows.sort((a, b) => b.occurrenceCount - a.occurrenceCount || a.propertyId.localeCompare(b.propertyId));
 }

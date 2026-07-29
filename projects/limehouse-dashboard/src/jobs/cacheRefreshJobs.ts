@@ -24,6 +24,7 @@ import {
   securityDepositMoveOutWindow,
 } from "../kpi/rentCollection.js";
 import { securityDepositWithheldRows, renewalRateRows } from "../kpi/leaseRows.js";
+import { findExtendedGraceOccurrences } from "../kpi/extendedNoticeTracking.js";
 import { syncCallActivityForPeriod } from "../rentengine/callActivitySync.js";
 import { resolvePeriod, periodToSnapshotLabel } from "../kpi/period.js";
 import { logError, logInfo } from "../lib/logger.js";
@@ -177,6 +178,43 @@ export async function refreshRenewalRateCache(): Promise<void> {
     await recordCacheRefreshFailure("renewal_rate", "portfolio", "buildium", message);
     await failSyncRun(syncLogId, message);
     logError("Renewal rate sync failed", { syncLogId, error: message });
+    throw err;
+  }
+}
+
+// Extended Grace (Financials section) — ADDED 2026-07-29, per Jason
+// directly. Needs each active lease's FULL transaction history to find
+// every month since the notice-law change where rent landed inside the
+// "extra grace" gap — same one-fetchLeaseTransactions-call-per-lease cost
+// as Rent Collection above, so this cannot run live on page load either.
+// See src/kpi/extendedNoticeTracking.ts for the actual day-math and NSF
+// exclusion. Scoped to currently-active leases only, same accepted
+// limitation Rent Collection's own comment documents — a lease that has
+// since moved out drops out of this tracker too, not retroactively kept.
+export async function refreshExtendedGraceCache(): Promise<void> {
+  const syncLogId = await startSyncRun("buildium", "extended_grace_cache_refresh");
+  try {
+    const activeLeases = await fetchActiveLeases();
+    const groups: { leaseId: string; occurrences: ReturnType<typeof findExtendedGraceOccurrences> }[] = [];
+
+    const asOfDate = new Date();
+    for (const lease of activeLeases) {
+      const transactions = await fetchLeaseTransactions(String(lease.Id));
+      const occurrences = findExtendedGraceOccurrences(transactions, lease.LeaseFromDate, asOfDate);
+      if (occurrences.length > 0) {
+        groups.push({ leaseId: String(lease.Id), occurrences });
+      }
+    }
+
+    await upsertCachedMetric("extended_grace_late_payers", "portfolio", "buildium", { groups });
+
+    await completeSyncRun(syncLogId, activeLeases.length);
+    logInfo("Extended grace sync completed", { syncLogId, leaseCount: activeLeases.length, flaggedLeaseCount: groups.length });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("extended_grace_late_payers", "portfolio", "buildium", message);
+    await failSyncRun(syncLogId, message);
+    logError("Extended grace sync failed", { syncLogId, error: message });
     throw err;
   }
 }

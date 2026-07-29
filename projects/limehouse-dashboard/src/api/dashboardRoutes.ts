@@ -49,6 +49,7 @@ import {
   doorsAddedRows,
   doorsLostRows,
 } from "../kpi/churn.js";
+import type { ExtendedGraceOccurrence } from "../kpi/extendedNoticeTracking.js";
 import {
   rentLeaseRows,
   fixedTermLeaseRows,
@@ -60,6 +61,7 @@ import {
   vacantUnitDaysRows,
   averageDaysVacant,
   monthlyRenewalCounts,
+  extendedGraceLeaseRows,
   type RenewalRateRow,
   type SecurityDepositWithheldRow,
 } from "../kpi/leaseRows.js";
@@ -358,6 +360,57 @@ dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, async (_
   } catch (err) {
     logError("GET /api/dashboard/renewal-rate/leases failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load cached renewal rate lease data." });
+  }
+});
+
+// Extended Grace (Financials section) — ADDED 2026-07-29, per Jason
+// directly. See src/kpi/extendedNoticeTracking.ts for the full derivation
+// (the notice-law day math and the NSF exclusion). Reads a cache
+// populated by POST /api/sync/extended-grace, same reasoning as Renewal
+// Rate above (one Buildium transaction fetch per active lease). The tile
+// count is scoped to the currently-selected period (same period dropdown
+// every other flow tile on this dashboard uses) — a lease counts if ANY
+// of its flagged months falls inside the selected range.
+dashboardRoutes.get("/api/dashboard/financials/extended-grace", requireLogin, async (req, res) => {
+  try {
+    const cached = await getCachedMetric("extended_grace_late_payers", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json({ synced: false });
+      return;
+    }
+    const { groups } = cached.value as { groups: { leaseId: string; occurrences: ExtendedGraceOccurrence[] }[] };
+    const { from, to } = resolveDateRangeFromQuery(req.query.period);
+    const fromMonth = from.slice(0, 7);
+    const toMonth = to.slice(0, 7);
+    const count = groups.filter((g) => g.occurrences.some((o) => o.month >= fromMonth && o.month <= toMonth)).length;
+    res.json({ synced: true, count, totalFlaggedLeases: groups.length, stale: !isCacheFresh(cached), cachedAt: cached.fetchedAt });
+  } catch (err) {
+    logError("GET /api/dashboard/financials/extended-grace failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load cached extended grace data." });
+  }
+});
+
+// Extended Grace drill-down — ADDED 2026-07-29, per Jason directly:
+// deliberately NOT scoped to the selected period like the tile above —
+// this always shows the FULL history since the law changed, grouped by
+// lease, so a repeat offender (flagged in July, then September, then
+// January) shows up as one row listing every occurrence instead of
+// scattered across separate month-by-month views.
+dashboardRoutes.get("/api/dashboard/financials/extended-grace/list", requireLogin, async (_req, res) => {
+  try {
+    const cached = await getCachedMetric("extended_grace_late_payers", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json([]);
+      return;
+    }
+    const { groups } = cached.value as { groups: { leaseId: string; occurrences: ExtendedGraceOccurrence[] }[] };
+    const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
+    const occurrencesByLeaseId = new Map(groups.map((g) => [g.leaseId, g.occurrences]));
+    const rows = extendedGraceLeaseRows(activeLeases, occurrencesByLeaseId);
+    res.json(withPropertyAddress(rows, propertyAddressById(properties)));
+  } catch (err) {
+    logError("GET /api/dashboard/financials/extended-grace/list failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load cached extended grace lease data." });
   }
 });
 

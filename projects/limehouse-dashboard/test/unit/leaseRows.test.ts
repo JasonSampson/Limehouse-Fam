@@ -12,7 +12,9 @@ import {
   renewalRateRows,
   monthlyRenewalCounts,
   securityDepositWithheldRows,
+  extendedGraceLeaseRows,
 } from "../../src/kpi/leaseRows.js";
+import type { ExtendedGraceOccurrence } from "../../src/kpi/extendedNoticeTracking.js";
 import type { BuildiumLease, BuildiumUnit } from "../../src/buildium/client.js";
 import type { LeaseDepositWithheld, MoveOutWindow } from "../../src/kpi/rentCollection.js";
 
@@ -384,5 +386,43 @@ describe("securityDepositWithheldRows", () => {
     const withheldByLeaseId = new Map([withheld("1", 35), withheld("2", 2450)]); // 1.2% vs 100%
     const rows = securityDepositWithheldRows(leases, withheldByLeaseId, window);
     expect(rows.map((r) => r.leaseId)).toEqual(["2", "1"]);
+  });
+});
+
+describe("extendedGraceLeaseRows", () => {
+  function occ(month: string, paidDay: number): ExtendedGraceOccurrence {
+    return { month, status: "paid_late", paidDay };
+  }
+
+  it("includes only leases present in the occurrences map", () => {
+    const leases = [lease({ Id: 1 }), lease({ Id: 2 })];
+    const occurrencesByLeaseId = new Map([["1", [occ("2026-07", 12)]]]);
+    const rows = extendedGraceLeaseRows(leases, occurrencesByLeaseId);
+    expect(rows.map((r) => r.leaseId)).toEqual(["1"]);
+  });
+
+  it("carries occurrenceCount and the full occurrence list through", () => {
+    const leases = [lease({ Id: 1 })];
+    const occurrences = [occ("2026-07", 12), occ("2026-09", 10)];
+    const occurrencesByLeaseId = new Map([["1", occurrences]]);
+    const rows = extendedGraceLeaseRows(leases, occurrencesByLeaseId);
+    expect(rows[0].occurrenceCount).toBe(2);
+    expect(rows[0].occurrences).toEqual(occurrences);
+  });
+
+  it("sorts repeat offenders first (most occurrences at the top)", () => {
+    const leases = [lease({ Id: 1, PropertyId: 100 }), lease({ Id: 2, PropertyId: 200 })];
+    const occurrencesByLeaseId = new Map([
+      ["1", [occ("2026-07", 12)]],
+      ["2", [occ("2026-07", 12), occ("2026-09", 10), occ("2026-10", 15)]],
+    ]);
+    const rows = extendedGraceLeaseRows(leases, occurrencesByLeaseId);
+    expect(rows.map((r) => r.leaseId)).toEqual(["2", "1"]);
+  });
+
+  it("excludes a lease with an empty occurrences array", () => {
+    const leases = [lease({ Id: 1 })];
+    const occurrencesByLeaseId = new Map([["1", []]]);
+    expect(extendedGraceLeaseRows(leases, occurrencesByLeaseId)).toEqual([]);
   });
 });

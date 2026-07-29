@@ -68,6 +68,7 @@ async function loadDashboard() {
     moveInsResult,
     avgDaysVacantResult,
     appsSubmittedResult,
+    extendedGraceResult,
   ] = await Promise.allSettled([
     apiGet(`/api/dashboard/period-info?period=${period}`),
     apiGet("/api/dashboard/occupancy"),
@@ -93,6 +94,7 @@ async function loadDashboard() {
     apiGet(`/api/dashboard/move-ins?period=${period}`),
     apiGet("/api/dashboard/avg-days-vacant"),
     apiGet("/api/dashboard/apps-submitted"),
+    apiGet(`/api/dashboard/financials/extended-grace?period=${period}`),
   ]);
 
   const periodInfo = unwrap(periodInfoResult);
@@ -148,6 +150,7 @@ async function loadDashboard() {
   const moveIns = unwrap(moveInsResult);
   const avgDaysVacant = unwrap(avgDaysVacantResult);
   const appsSubmitted = unwrap(appsSubmittedResult);
+  const extendedGrace = unwrap(extendedGraceResult);
 
   contextLine.textContent = periodInfo
     ? `${PERIOD_LABELS[period].toUpperCase()} · ${formatDateRange(
@@ -157,7 +160,7 @@ async function loadDashboard() {
 
   content.innerHTML = `
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
-    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear })}
+    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear, extendedGrace })}
     ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, completionRate, daysOnMarket })}
@@ -307,6 +310,7 @@ function renderFinancials({
   todayDayOfMonth,
   rentCollectionYearly,
   rentCollectionSameMonthLastYear,
+  extendedGrace,
 }) {
   // "Rent By 3rd" / "Rent By 10th" tiles show the MOST CURRENT figure
   // available — which, as of 2026-07-09, can be the still-in-progress
@@ -352,6 +356,27 @@ function renderFinancials({
                 sparkline: rentByTenthTrend ? { values: rentByTenthTrend, color: "#1e5631" } : null,
               })
             : couldNotLoadTile({ id: "rent-by-10th", label: "Rent By 10th", sourceTags: ["BD"] })
+        }
+        ${
+          !extendedGrace
+            ? couldNotLoadTile({ id: "extended-grace", label: "Extended Grace", sourceTags: ["BD"] })
+            : !extendedGrace.synced
+            ? tileHtml({
+                id: "extended-grace",
+                label: "Extended Grace",
+                sourceTags: ["BD"],
+                notConnected: true,
+                notConnectedReason: "Not synced yet",
+              })
+            : tileHtml({
+                id: "extended-grace",
+                label: "Extended Grace",
+                value: formatNumber(extendedGrace.count),
+                sub: `${formatNumber(extendedGrace.totalFlaggedLeases)} total since Jul 2026`,
+                sourceTags: ["BD"],
+                live: true,
+                clickable: true,
+              })
         }
         ${
           rentAndDeposit
@@ -1573,6 +1598,47 @@ async function handleTileClick(tileId) {
         { label: "%", render: (r) => formatPercent(r.percent) },
       ],
       emptyText: "No reconciled move-outs in the trailing window yet — trigger a Security Deposit Withheld sync first if this looks wrong.",
+    });
+    return;
+  }
+
+  // Extended Grace drill-down — ADDED 2026-07-29, per Jason directly.
+  // Deliberately NOT scoped to the period dropdown at the top of the page
+  // (unlike every other drill-down here) — always shows the full history
+  // since the law changed, grouped by lease and sorted repeat-offenders-
+  // first, so a tenant who did this in July, then September, then January
+  // shows up as one row listing every date instead of scattered across
+  // separate month views.
+  const EXTENDED_GRACE_NOTE =
+    "Virginia's pay-or-quit notice period for late rent changed 07/01/2026: a 5-day notice became a 14-day one. Rent is due the 1st, late after the 3rd. Under the old 5-day notice, the 9th was the first day we could file for eviction. Under the new 14-day notice, that's the 17th — or the following Monday if the 17th falls on a weekend, since the office is closed then. This tracks leases that are on or past the 9th without having paid that month in full — either they eventually paid inside the gap (shown with the date they paid), or they still haven't paid at all as of today (shown as \"still unpaid\") — the population that would already have been eviction-eligible under the old law, but isn't (or wasn't, until they paid) under the new one. A month is excluded if that lease had an NSF/bounced payment — a bounce reflects real intent to pay on time, not someone waiting out the longer notice period. Only tracks currently-active leases, and only months from July 2026 forward (there's no \"extra days\" before the law existed).";
+
+  if (tileId === "extended-grace") {
+    await simpleDrillDown({
+      tileId,
+      title: "Extended Grace — Full History Since July 2026",
+      subtitle: (rows) => `${rows.length} lease${rows.length === 1 ? "" : "s"} flagged, ever`,
+      url: "/api/dashboard/financials/extended-grace/list",
+      note: EXTENDED_GRACE_NOTE,
+      columns: [
+        { label: "Property", render: (r) => r.propertyAddress ?? r.propertyId },
+        { label: "Unit", key: "unitNumber" },
+        { label: "Tenant", render: (r) => r.tenantName ?? "—" },
+        { label: "# Times", key: "occurrenceCount" },
+        {
+          label: "Status",
+          render: (r) =>
+            r.occurrences
+              .map((o) => {
+                if (o.status === "still_unpaid") {
+                  const [year, month] = o.month.split("-");
+                  return `${month}/${year}: still unpaid`;
+                }
+                return formatMonthDayYear(`${o.month}-${String(o.paidDay).padStart(2, "0")}`);
+              })
+              .join(", "),
+        },
+      ],
+      emptyText: "No leases have been flagged in the extended-grace window since July 2026 — trigger an Extended Grace sync first if this looks wrong.",
     });
     return;
   }

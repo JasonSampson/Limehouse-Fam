@@ -35,6 +35,7 @@ import {
   refreshSecurityDepositWithheldCache,
   refreshRenewalRateCache,
   refreshCallActivityCache,
+  refreshExtendedGraceCache,
   runTeamPerformanceKpisSync,
 } from "../jobs/cacheRefreshJobs.js";
 
@@ -246,6 +247,18 @@ syncRoutes.post("/api/sync/renewal-rate", requireLogin, async (_req, res) => {
     res
       .status(502)
       .json({ error: "Renewal rate sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
+// Extended Grace (Financials section) — ADDED 2026-07-29, per Jason
+// directly. See src/kpi/extendedNoticeTracking.ts for the full derivation.
+syncRoutes.post("/api/sync/extended-grace", requireLogin, async (_req, res) => {
+  try {
+    await refreshExtendedGraceCache();
+    res.json({ ok: true, syncedAt: new Date().toISOString() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Extended grace sync failed. Last known-good data is still being served.", detail: message });
   }
 });
 

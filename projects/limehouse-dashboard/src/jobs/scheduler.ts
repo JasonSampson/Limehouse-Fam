@@ -4,6 +4,7 @@ import {
   refreshRenewalRateCache,
   refreshCallActivityCache,
   refreshRentEngineLeasingPerformanceCache,
+  refreshExtendedGraceCache,
   runTeamPerformanceKpisSync,
 } from "./cacheRefreshJobs.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
@@ -69,6 +70,9 @@ const HOUR = 60 * MINUTE;
 //     this sync was manual-only and nobody had ever triggered it). Same
 //     interval as team-performance-kpis since it's a similarly slow,
 //     not-minute-fresh business metric.
+//   - extended-grace: every 2 hours — ADDED 2026-07-29, per Jason
+//     directly. Same one-call-per-active-lease cost as Rent Collection
+//     above, same interval.
 //   - terminated-properties is still deliberately NOT scheduled here —
 //     unconfirmed as a user-facing tile, left manual-only until a real
 //     tile is found depending on it going stale.
@@ -80,6 +84,7 @@ const JOBS: ScheduledJob[] = [
   { name: "team-performance-kpis", fn: () => runTeamPerformanceKpisSync().then(() => {}), intervalMs: 6 * HOUR, initialDelayMs: 90 * 1000 },
   { name: "security-deposit-withheld", fn: refreshSecurityDepositWithheldCache, intervalMs: 4 * HOUR, initialDelayMs: 60 * 1000 },
   { name: "financial-history", fn: () => syncFinancialHistory().then(() => {}), intervalMs: 6 * HOUR, initialDelayMs: 120 * 1000 },
+  { name: "extended-grace", fn: refreshExtendedGraceCache, intervalMs: 2 * HOUR, initialDelayMs: 105 * 1000 },
 ];
 
 let started = false;

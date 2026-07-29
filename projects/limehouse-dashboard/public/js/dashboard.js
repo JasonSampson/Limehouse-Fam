@@ -71,7 +71,7 @@ async function loadDashboard() {
     extendedGraceResult,
   ] = await Promise.allSettled([
     apiGet(`/api/dashboard/period-info?period=${period}`),
-    apiGet("/api/dashboard/occupancy"),
+    apiGet(`/api/dashboard/occupancy?period=${period}`),
     apiGet("/api/dashboard/occupancy-history"),
     apiGet("/api/dashboard/lease-mix"),
     apiGet("/api/dashboard/delinquency"),
@@ -99,6 +99,14 @@ async function loadDashboard() {
 
   const periodInfo = unwrap(periodInfoResult);
   const occupancy = unwrap(occupancyResult);
+  // ADDED 2026-07-30, per Jason directly: the Occupancy TILE only (not
+  // Total Units / Vacant — Not Rented, which stay "as of today" always —
+  // see occupancy's own comment in dashboardRoutes.ts) shows the selected
+  // period's own occupancy once it's a fully-elapsed period. Falls back to
+  // the same as-of-today figures as before for "This month"/"This
+  // quarter"/"This year" (which the backend never computes a
+  // periodOccupancy for — those already mean "up to today").
+  const occupancyForTile = occupancy && occupancy.periodOccupancy ? occupancy.periodOccupancy : occupancy;
   const occupancyHistory = unwrap(occupancyHistoryResult);
   const leaseMix = unwrap(leaseMixResult);
   const delinquency = unwrap(delinquencyResult);
@@ -136,6 +144,13 @@ async function loadDashboard() {
   const rentCollectionLatest =
     rentCollectionFull && rentCollectionFull.length > 0 ? rentCollectionFull[rentCollectionFull.length - 1] : null;
   const isLatestMonthCurrent = rentCollectionLatest ? rentCollectionLatest.month === currentMonthStr : false;
+  // ADDED 2026-07-30, per Jason directly: Rent By 3rd/10th now follow the
+  // period dropdown (re-aggregating the same rentCollectionFull data, see
+  // aggregateRentCollectionForPeriod's own comment) instead of always
+  // showing the single latest month. Falls back to the old
+  // rentCollectionLatest/isLatestMonthCurrent behavior if periodInfo
+  // itself failed to load or the selected range has no matching months.
+  const rentCollectionForPeriod = periodInfo ? aggregateRentCollectionForPeriod(rentCollectionFull, periodInfo.range, currentMonthStr) : null;
   const rentCollectionYearly = rentCollectionResponse ? rentCollectionResponse.yearly : null;
   const rentCollectionSameMonthLastYear = rentCollectionResponse ? rentCollectionResponse.sameMonthLastYear : null;
   const propertyHealth = unwrap(propertyHealthResult);
@@ -160,8 +175,8 @@ async function loadDashboard() {
 
   content.innerHTML = `
     ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
-    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear, extendedGrace })}
-    ${renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant })}
+    ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, rentCollectionForPeriod, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear, extendedGrace })}
+    ${renderOccupancyAndDoors({ occupancy, occupancyForTile, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
     ${renderMarketingAndShowings({ leasingFunnel, prospectsBySource, unitsOnMarket, marketingActivity, completionRate, daysOnMarket })}
   `;
@@ -178,6 +193,37 @@ async function loadDashboard() {
 function trendFromRentCollection(rentCollection, field) {
   if (!rentCollection || rentCollection.length < 2) return null;
   return rentCollection.map((m) => m[field]);
+}
+
+// ADDED 2026-07-30, per Jason directly: Rent By 3rd/10th used to always
+// show the single latest month regardless of the period dropdown up top.
+// rentCollectionFull already covers a ~2-year window with every month's
+// own paidByThird/paidByTenth/totalLeasesDue counts (see
+// dashboardRoutes.ts's /api/dashboard/financials/rent-collection) — this
+// just re-aggregates that SAME already-fetched data to the months the
+// selected period actually covers, entirely client-side (no new route, no
+// new Buildium calls). Ratio of SUMS across the included months, not an
+// average of each month's percentage — same reasoning as the backend's
+// own summarizeYearlyCollectionRates for the exact same metric.
+function aggregateRentCollectionForPeriod(monthsFull, range, currentMonthStr) {
+  if (!monthsFull || monthsFull.length === 0 || !range) return null;
+  const fromMonth = range.from.slice(0, 7);
+  const toMonth = range.to.slice(0, 7);
+  const inRange = monthsFull.filter((m) => m.month >= fromMonth && m.month <= toMonth);
+  if (inRange.length === 0) return null;
+
+  const totalLeasesDue = inRange.reduce((sum, m) => sum + m.totalLeasesDue, 0);
+  const paidByThirdCount = inRange.reduce((sum, m) => sum + m.paidByThirdCount, 0);
+  const paidByTenthCount = inRange.reduce((sum, m) => sum + m.paidByTenthCount, 0);
+
+  return {
+    totalLeasesDue,
+    paidByThirdCount,
+    paidByThirdPercent: totalLeasesDue > 0 ? Math.round((paidByThirdCount / totalLeasesDue) * 1000) / 10 : 0,
+    paidByTenthCount,
+    paidByTenthPercent: totalLeasesDue > 0 ? Math.round((paidByTenthCount / totalLeasesDue) * 1000) / 10 : 0,
+    includesCurrentMonth: inRange.some((m) => m.month === currentMonthStr),
+  };
 }
 
 // Promise.allSettled helper: returns the resolved value, or null on
@@ -214,8 +260,10 @@ function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, 
             ? tileHtml({
                 id: "occupancy",
                 label: "Occupancy",
-                value: formatPercent(occupancy.occupancyRatePercent),
-                sub: `${formatNumber(occupancy.occupiedUnits)} of ${formatNumber(occupancy.totalUnits)} units`,
+                value: formatPercent(occupancyForTile.occupancyRatePercent),
+                sub: occupancy.periodOccupancy
+                  ? `${formatNumber(occupancyForTile.occupiedUnits)} of ${formatNumber(occupancyForTile.totalUnits)} units as of ${formatMonthLabel(occupancy.periodOccupancy.month)}`
+                  : `${formatNumber(occupancyForTile.occupiedUnits)} of ${formatNumber(occupancyForTile.totalUnits)} units`,
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
@@ -307,20 +355,27 @@ function renderFinancials({
   rentCollectionFull,
   rentCollectionLatest,
   isLatestMonthCurrent,
+  rentCollectionForPeriod,
   todayDayOfMonth,
   rentCollectionYearly,
   rentCollectionSameMonthLastYear,
   extendedGrace,
 }) {
-  // "Rent By 3rd" / "Rent By 10th" tiles show the MOST CURRENT figure
-  // available — which, as of 2026-07-09, can be the still-in-progress
-  // current month (see the note in loadDashboard for why that's not
-  // stale/misleading data). If today hasn't reached a tile's own cutoff
-  // day yet, that tile's sub-label says "(so far)" so it's honest about
-  // being a live, still-moving number rather than a locked-in final one.
-  const latestMonth = rentCollectionLatest;
-  const thirdSoFar = isLatestMonthCurrent && todayDayOfMonth < 3;
-  const tenthSoFar = isLatestMonthCurrent && todayDayOfMonth < 10;
+  // "Rent By 3rd" / "Rent By 10th" tiles now follow the period dropdown —
+  // rentCollectionForPeriod (see aggregateRentCollectionForPeriod) is the
+  // ratio-of-sums across every month the selected period covers, falling
+  // back to the old single-latest-month behavior only if periodInfo
+  // itself failed to load. "This month" resolves to exactly one month
+  // (the current one), so this is byte-for-byte the same number as
+  // before for the default view — only past periods actually differ.
+  // If the period includes the still-in-progress current month and today
+  // hasn't reached a tile's own cutoff day yet, that tile's sub-label
+  // says "(so far)" so it's honest about being a live, still-moving
+  // number rather than a locked-in final one.
+  const latestMonth = rentCollectionForPeriod || rentCollectionLatest;
+  const includesCurrentMonth = rentCollectionForPeriod ? rentCollectionForPeriod.includesCurrentMonth : isLatestMonthCurrent;
+  const thirdSoFar = includesCurrentMonth && todayDayOfMonth < 3;
+  const tenthSoFar = includesCurrentMonth && todayDayOfMonth < 10;
 
   const rentByThirdTrend = trendFromRentCollection(rentCollection, "paidByThirdPercent");
   const rentByTenthTrend = trendFromRentCollection(rentCollection, "paidByTenthPercent");
@@ -663,7 +718,19 @@ function totalUnitsYoyBadge(totalUnitsYoY) {
   return { direction: totalUnitsYoY.direction, text: `${arrow} ${sign}${totalUnitsYoY.percent}% vs Jan. 1st` };
 }
 
-function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant }) {
+// ADDED 2026-07-30, per Jason directly: unlike Vacant — Not Rented (left
+// as-of-today, per Jason directly — vacancy is about what needs marketing
+// RIGHT NOW), Total Units is an "ever changing number" he'd rather see as
+// an end-of-month snapshot for a historical period — same
+// occupancyForTile/periodOccupancy this section's Occupancy tile already
+// uses (see loadDashboard's own comment), reusing its totalUnits field
+// rather than a second computation. The YoY-vs-Jan-1st badge is always
+// computed against TODAY's real count (see summarizeTotalUnitsYoY) — for
+// a historical month that comparison would be showing today's growth
+// while claiming to describe a past month, so it's suppressed whenever a
+// periodOccupancy snapshot is in use instead of showing something
+// misleading.
+function renderOccupancyAndDoors({ occupancy, occupancyForTile, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant }) {
   return `
     <div class="section">
       <p class="section-title">Occupancy &amp; Doors</p>
@@ -673,11 +740,12 @@ function renderOccupancyAndDoors({ occupancy, occupancyHistory, owners, ownersGa
             ? tileHtml({
                 id: "total-units",
                 label: "Total Units",
-                value: formatNumber(occupancy.totalUnits),
+                value: formatNumber(occupancyForTile.totalUnits),
+                sub: occupancy.periodOccupancy ? `As of ${formatMonthLabel(occupancy.periodOccupancy.month)}` : null,
                 sourceTags: ["BD"],
                 live: true,
                 clickable: true,
-                yoy: totalUnitsYoyBadge(occupancy.totalUnitsYoY),
+                yoy: occupancy.periodOccupancy ? null : totalUnitsYoyBadge(occupancy.totalUnitsYoY),
               })
             : couldNotLoadTile({ id: "total-units", label: "Total Units", sourceTags: ["BD"] })
         }

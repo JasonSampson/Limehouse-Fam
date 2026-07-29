@@ -105,6 +105,11 @@ function resolveDateRangeFromQuery(periodRaw: unknown): { from: string; to: stri
 // ============================================================================
 // STRUCTURAL tiles — always as-of-today, period param is intentionally
 // ignored if a caller sends one, per the brief's flow-vs-structural rule.
+// EXCEPTION, 2026-07-30, per Jason directly: /api/dashboard/occupancy now
+// also accepts an optional period and returns an ADDITIONAL periodOccupancy
+// field for a historical period selection — see that route's own comment.
+// Every top-level field on that response (what Total Units and Vacant —
+// Not Rented actually read) is still always "as of today," unchanged.
 // ============================================================================
 
 // CORRECTED 2026-07-03, second pass: the first fix (fetchAllUnits, one
@@ -142,7 +147,23 @@ function resolveDateRangeFromQuery(periodRaw: unknown): { from: string; to: stri
 // manages, not just the residential subset. See fetchActiveManagedUnits'
 // doc comment in src/buildium/client.ts for why other metrics (Avg Rent/
 // Lease, lease-mix, Revenue per Unit, Avg Days Vacant) were NOT changed.
-dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) => {
+// UPDATED 2026-07-30, per Jason directly: the Occupancy TILE (not this
+// whole route) is now period-aware for a genuinely HISTORICAL period
+// selection (last_month/last_quarter/last_year) — reconstructed from real
+// lease-coverage history via summarizeMonthlyOccupancy, the same
+// machinery /api/dashboard/occupancy-history already uses for the YoY
+// chart. "this_month"/"this_quarter"/"this_year" always resolve to "up to
+// today" anyway (see period.ts's clampEnd), so there's nothing historical
+// to compute for them — the existing as-of-today figures already are the
+// right answer. Total Units and Vacant — Not Rented pull from this SAME
+// response's top-level fields too, and per the flow-vs-structural rule
+// must stay exactly "as of today" regardless of the period dropdown — so
+// the historical figure is added as a SEPARATE periodOccupancy field,
+// never substituted into occupancyRatePercent/occupiedUnits/totalUnits
+// themselves.
+const HISTORICAL_PERIODS = new Set(["last_month", "last_quarter", "last_year"]);
+
+dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (req, res) => {
   try {
     const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
@@ -176,7 +197,24 @@ dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, async (_req, res) 
     const occupiedUnitIds = new Set(activeLeasesOnTrackedUnits.map((l) => l.UnitId));
     const vacantWithoutFutureLease = units.filter((u) => !occupiedUnitIds.has(u.Id) && !futureLeasedUnitIds.has(u.Id)).length;
     const totalUnitsYoY = summarizeTotalUnitsYoY(units.length, new Date());
-    res.json({ ...summary, vacantUnits: vacantWithoutFutureLease, totalUnitsYoY });
+
+    let periodOccupancy: { occupiedUnits: number; totalUnits: number; occupancyRatePercent: number | null; month: string } | null = null;
+    const periodParsed = periodSchema.safeParse(req.query.period);
+    if (periodParsed.success && HISTORICAL_PERIODS.has(periodParsed.data)) {
+      const range = resolvePeriod(periodParsed.data);
+      const targetMonth = range.to.slice(0, 7);
+      const [monthly] = summarizeMonthlyOccupancy(units, allLeases, [targetMonth], new Date());
+      if (monthly && monthly.totalUnits > 0) {
+        periodOccupancy = {
+          occupiedUnits: monthly.occupiedUnits,
+          totalUnits: monthly.totalUnits,
+          occupancyRatePercent: monthly.occupancyPercent,
+          month: targetMonth,
+        };
+      }
+    }
+
+    res.json({ ...summary, vacantUnits: vacantWithoutFutureLease, totalUnitsYoY, periodOccupancy });
   } catch (err) {
     logError("GET /api/dashboard/occupancy failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load occupancy data from Buildium." });

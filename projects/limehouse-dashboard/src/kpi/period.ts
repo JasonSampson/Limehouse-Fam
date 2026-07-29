@@ -2,11 +2,16 @@
 // "this_quarter" | "last_quarter" | "this_year" | "last_year") into a
 // concrete date range. This is ONLY used by tiles classified "flow" (Oracle's
 // spec — changes with the period selector). Tiles classified "structural"
-// (e.g. current occupancy, total units) must NEVER call this function or
-// take a period param at all — they are always as-of-today regardless of
-// what the user has selected, which is why summarizeOccupancy/
-// summarizeLeaseMix in src/kpi/occupancy.ts intentionally have no period
-// argument.
+// (e.g. total units, vacant units) must NEVER call this function or take a
+// period param at all — they are always as-of-today regardless of what the
+// user has selected, which is why summarizeOccupancy/summarizeLeaseMix in
+// src/kpi/occupancy.ts intentionally have no period argument.
+//
+// EXCEPTION, 2026-07-30, per Jason directly: the Occupancy TILE itself
+// (distinct from Total Units/Vacant, which read the same underlying route
+// but stay structural) now also resolves a period for a historical
+// selection, via summarizeMonthlyOccupancy — see
+// /api/dashboard/occupancy's own comment in dashboardRoutes.ts.
 export type PeriodKey = "this_month" | "last_month" | "this_quarter" | "last_quarter" | "this_year" | "last_year";
 
 export interface DateRange {

@@ -1,4 +1,5 @@
 import type { LeaseBalance } from "./client.js";
+import { roundCurrency } from "../lib/rounding.js";
 
 // Delinquency/balance summary logic for the Dashboard and CEO View tabs.
 // Deliberately built ONLY on top of fetchOutstandingBalances() (Buildium's
@@ -57,10 +58,6 @@ export function delinquentLeaseRows(balances: LeaseBalance[]): DelinquentLeaseRo
       evictionPendingDate: b.evictionPendingDate,
     }))
     .sort((a, b) => b.balance - a.balance);
-}
-
-function roundCurrency(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 // ============================================================================

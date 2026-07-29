@@ -1,6 +1,20 @@
 // Shared helpers used by dashboard.js, team-performance.js, ceo-view.js.
 // Plain vanilla JS on purpose — this is a small internal tool, no build step.
 
+// ADDED 2026-07-30, per Sentinel's security review: modal.js's drill-down
+// table used to interpolate cell values straight into an innerHTML string
+// with no escaping anywhere in this codebase. Most cell values are just
+// numbers/dates we computed ourselves, but a handful of columns show real
+// free-text fields from Buildium/RentEngine (tenant names, prospect
+// names) — data entered by someone outside Limehouse staff (e.g. a
+// prospect's own name on a public lead form). Used by modal.js to escape
+// every cell value by default; see that file's own comment for the rare
+// opt-out (a column that intentionally renders real markup for styling).
+const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
+}
+
 const PERIOD_LABELS = {
   this_month: "This month",
   last_month: "Last month",

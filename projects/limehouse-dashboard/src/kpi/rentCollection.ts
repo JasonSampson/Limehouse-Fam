@@ -1,4 +1,5 @@
 import type { BuildiumLease, BuildiumLeaseTransaction } from "../buildium/client.js";
+import { roundPercent, roundCurrency } from "../lib/rounding.js";
 
 // Dashboard tab Financials section: Avg Rent/Lease, Avg SD Withheld, Avg SD
 // Withheld %, and the Rent Collection — 12 months chart (% paid by the 3rd
@@ -55,12 +56,6 @@ export interface MonthlyCollectionRate {
   // already passed for every lease, so there's nothing to override here.
   paidByMonthEndCount: number;
   paidByMonthEndPercent: number;
-}
-
-export interface LeasePaymentForMonth {
-  leaseId: string;
-  month: string; // "YYYY-MM" — the rent-due month this payment is being credited against
-  paymentDate: string | null; // "YYYY-MM-DD" of the first Payment transaction that month; null if unpaid that month
 }
 
 // Trailing 12 calendar months ending at (and including) asOf's month,
@@ -303,8 +298,8 @@ export function findSameMonthLastYear(months: MonthlyCollectionRate[], latestMon
 
 // ============================================================================
 // FIXED 2026-07-04, per Oracle's real-data reconciliation research —
-// REPLACES earliestPaymentPerMonth below (kept only as a reference/fallback,
-// not called anywhere anymore). CONFIRMED LIVE against real leases: the old
+// replaces an earlier same-month-only rule (deleted 2026-07-30, long
+// superseded). CONFIRMED LIVE against real leases: the old
 // "same-month Payment transaction" rule missed every tenant who pays early
 // (Applied Prepayment pattern) or pays in several partial installments,
 // which is why Rent By 3rd/10th read 53.3%/53.3% against the vendor's real
@@ -549,35 +544,15 @@ export function resolveLeaseBalancesPerMonth(leaseId: string, transactions: Buil
   }));
 }
 
-// SUPERSEDED 2026-07-07 in the live pipeline by resolveLeaseBalancesPerMonth
-// above — kept for reference/tests, not called from syncRoutes.ts anymore.
-// Drop-in replacement for the old earliestPaymentPerMonth's call shape, so
-// syncRoutes.ts only needs a one-line swap. Only returns rows for months
-// that actually had a charge on this lease (a month with no charge at all
-// isn't "unpaid," it's simply not applicable — buildDuePerMonth's own
-// LeaseFromDate filtering already handles which months a lease is
-// considered due for, this just reports what's known from the ledger).
-export function resolvePaymentDatesPerMonth(leaseId: string, transactions: BuildiumLeaseTransaction[]): LeasePaymentForMonth[] {
-  const resolved = resolveRentPaymentDates(transactions);
-  return [...resolved.entries()].map(([month, paymentDate]) => ({ leaseId, month, paymentDate }));
-}
-
-// SUPERSEDED 2026-07-04 — kept only for reference/comparison, not called
-// anywhere. Only recognized a same-month "Payment" transaction as proof of
-// payment, which missed every prepaying and partial-paying tenant. See
-// resolveRentPaymentDates above for the real fix.
-export function earliestPaymentPerMonth(leaseId: string, transactions: BuildiumLeaseTransaction[]): LeasePaymentForMonth[] {
-  const earliestByMonth = new Map<string, string>();
-  for (const t of transactions) {
-    if (t.TransactionType !== "Payment") continue;
-    const month = t.Date.slice(0, 7);
-    const existing = earliestByMonth.get(month);
-    if (!existing || t.Date < existing) {
-      earliestByMonth.set(month, t.Date);
-    }
-  }
-  return [...earliestByMonth.entries()].map(([month, paymentDate]) => ({ leaseId, month, paymentDate }));
-}
+// DELETED 2026-07-30 (per Jason directly, per Judge's code-quality
+// review): resolvePaymentDatesPerMonth and earliestPaymentPerMonth used to
+// live here, both already SUPERSEDED and unused by any live route —
+// resolvePaymentDatesPerMonth (2026-07-07) was a drop-in-shaped wrapper
+// around resolveRentPaymentDates for a syncRoutes.ts caller that no
+// longer exists; earliestPaymentPerMonth (2026-07-04) only recognized a
+// same-month "Payment" transaction as proof of payment, which missed
+// every prepaying and partial-paying tenant — resolveRentPaymentDates
+// below is the real fix.
 
 // ============================================================================
 // Avg SD Withheld / Avg SD Withheld % — REBUILT 2026-07-10, per Jason
@@ -695,10 +670,3 @@ function average(values: number[]): number {
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
-function roundCurrency(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-function roundPercent(n: number): number {
-  return Math.round(n * 10) / 10;
-}

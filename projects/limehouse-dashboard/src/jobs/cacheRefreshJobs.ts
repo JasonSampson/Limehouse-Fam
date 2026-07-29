@@ -253,16 +253,44 @@ export async function refreshCallActivityCache(): Promise<void> {
 // schedule is enough to keep it warm — it no-ops if already fresh. Scoped
 // to "this month," the same default range the dashboard's tiles request
 // when no period is selected.
+//
+// FIXED 2026-07-30, per Judge's code-quality review: this used to be the
+// only refresh function in this file that didn't follow the rest of the
+// file's startSyncRun/completeSyncRun/failSyncRun + recordCacheRefreshFailure
+// pattern — a failure here was invisible everywhere except a generic log
+// line (never written to dashboard_sync_log, so /api/sync/status can't
+// reflect it; never set last_error on the cache row, so the frontend's
+// stale/error indicators for this data wouldn't show anything wrong even
+// after hours of silent failures). Brought in line with every other
+// function in this file. recordCacheRefreshFailure uses the SAME cache
+// key getOrFetchLeasingPerformanceForAllUnits itself writes to, so a
+// failure here correctly shows up against the real cached row a tile
+// would actually read.
 export async function refreshRentEngineLeasingPerformanceCache(): Promise<void> {
   if (!isRentEngineConnected()) return;
   const range = resolvePeriod("this_month");
-  const result = await getOrFetchLeasingPerformanceForAllUnits(`${range.from}T00:00:00Z`, `${range.to}T23:59:59Z`);
-  if (result.error) {
-    logError("Scheduled RentEngine leasing-performance refresh failed", { error: result.error });
-    return;
-  }
-  if (!result.cached) {
-    logInfo("Scheduled RentEngine leasing-performance refresh completed", { unitCount: result.rows?.length ?? 0 });
+  const fromDate = `${range.from}T00:00:00Z`;
+  const toDate = `${range.to}T23:59:59Z`;
+  const cacheKey = `leasing_performance_all_units_${fromDate}_${toDate}`;
+  const syncLogId = await startSyncRun("rent_engine", "rentengine_leasing_performance_cache_refresh");
+  try {
+    const result = await getOrFetchLeasingPerformanceForAllUnits(fromDate, toDate);
+    if (result.error) {
+      await recordCacheRefreshFailure(cacheKey, "portfolio", "rent_engine", result.error);
+      await failSyncRun(syncLogId, result.error);
+      logError("Scheduled RentEngine leasing-performance refresh failed", { syncLogId, error: result.error });
+      return;
+    }
+    await completeSyncRun(syncLogId, result.rows?.length ?? 0);
+    if (!result.cached) {
+      logInfo("Scheduled RentEngine leasing-performance refresh completed", { syncLogId, unitCount: result.rows?.length ?? 0 });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure(cacheKey, "portfolio", "rent_engine", message);
+    await failSyncRun(syncLogId, message);
+    logError("Scheduled RentEngine leasing-performance refresh failed", { syncLogId, error: message });
+    throw err;
   }
 }
 

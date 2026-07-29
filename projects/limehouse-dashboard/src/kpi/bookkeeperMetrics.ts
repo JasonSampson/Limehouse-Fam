@@ -1,8 +1,5 @@
 import type { BuildiumVendor, BuildiumBankAccount, BuildiumReconciliation, BuildiumLeaseTransaction } from "../buildium/client.js";
-
-function roundPercent(n: number): number {
-  return Math.round(n * 10) / 10;
-}
+import { roundPercent } from "../lib/rounding.js";
 
 // ============================================================================
 // Reconciliation Accuracy — formula confirmed by Jason 2026-07-05.

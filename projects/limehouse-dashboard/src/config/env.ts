@@ -46,7 +46,18 @@ const envSchema = z.object({
   LEADSIMPLE_BASE_URL: z.string().url().default("https://api.leadsimple.com/v1"),
 
   PORT: z.coerce.number().int().positive().default(3100),
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  // FIXED 2026-07-30, per Sentinel's security review: this used to default
+  // to "development" when unset, which is the WRONG failure direction —
+  // NODE_ENV gates both the dev-login admin bypass (src/server.ts) and the
+  // session cookie's `secure` flag (src/auth/session.ts). A real deploy
+  // that simply forgot to set this one variable would silently and
+  // safely-LOOKING fall into the exact state that hands out a free admin
+  // login to anyone. No default now — matches every other required value
+  // in this schema (DATABASE_URL, BUILDIUM_CLIENT_ID, etc.): fails loudly
+  // at startup instead of failing open at runtime. Local dev already sets
+  // this explicitly in .env; vitest sets its own NODE_ENV=test before any
+  // test file runs, so `npm test` is unaffected.
+  NODE_ENV: z.enum(["development", "production", "test"]),
 
   // Signs the app's own session cookie issued after a successful Microsoft
   // sign-in (see src/auth/session.ts). Not related to Entra itself.
@@ -90,11 +101,4 @@ export function isRentEngineConnected(): boolean {
 export function isLeadSimpleConnected(): boolean {
   const key = loadEnv().LEADSIMPLE_API_KEY;
   return typeof key === "string" && key.length > 0;
-}
-
-// Test-only helper: allows tests to reset the module-level cache between
-// cases that set different process.env values. Mirrors a common pattern for
-// this kind of singleton config loader; not used by production code paths.
-export function _resetEnvCacheForTests(): void {
-  cachedEnv = undefined;
 }

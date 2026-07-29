@@ -422,7 +422,10 @@ const KPI_EXPLAIN_COLUMNS = {
     // track" confirmed against a real vendor screenshot; "Not Reconciled"
     // (red) is our own wording for the not-on-track case, since the
     // vendor's real wording for that state hasn't been seen yet.
-    { label: "Status", render: (r) => (r.onTrack ? "on track" : `<span class="recon-not-reconciled">Not Reconciled</span>`) },
+    // html: true — this render function intentionally returns a real
+    // <span> for styling (see modal.js's cellHtml), unlike every other
+    // column, which is why it opts out of the default HTML-escaping.
+    { label: "Status", html: true, render: (r) => (r.onTrack ? "on track" : `<span class="recon-not-reconciled">Not Reconciled</span>`) },
   ],
   "Rent Processing Accuracy": [
     { label: "Property", render: (r) => r.propertyAddress ?? "—" },

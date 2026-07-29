@@ -1,5 +1,6 @@
 import type { BuildiumLease, BuildiumUnit, LeaseBalance } from "../buildium/client.js";
 import { RENT_INCOME_GL_ACCOUNT_ID, monthsSinceYearsAgo, lastDayOfMonth } from "./rentCollection.js";
+import { roundPercent, roundCurrency } from "../lib/rounding.js";
 
 // Occupancy / lease-mix calculations. These are STRUCTURAL metrics (per the
 // project brief's flow vs. structural distinction) — they always reflect
@@ -12,31 +13,15 @@ export interface OccupancySummary {
   occupancyRatePercent: number;
 }
 
-// SUPERSEDED 2026-07-04 for /api/dashboard/occupancy — kept for any caller
-// that genuinely only has unit records and not lease data handy. Confirmed
-// live 2026-07-04 comparing against the vendor site side-by-side:
-// IsUnitOccupied lags real lease-status transitions — 9 real units in
-// Jason's account show IsUnitOccupied=true with NO currently-Active lease,
-// because the outgoing tenant's lease already ended (Past) and the
-// incoming tenant's lease hasn't started yet (Future, signed but move-in
-// still days/weeks out). That inflated occupancy to 90.6% vs the vendor's
-// real 86.8%. summarizeOccupancy() below (deriving occupied from Active
-// lease status) is what /api/dashboard/occupancy now calls, and matches
-// the vendor number almost exactly.
-export function summarizeOccupancyFromUnits(units: BuildiumUnit[]): OccupancySummary {
-  const totalUnits = units.length;
-  const occupiedUnits = units.filter((u) => u.IsUnitOccupied).length;
-  const vacantUnits = totalUnits - occupiedUnits;
-  const occupancyRatePercent = totalUnits > 0 ? roundPercent((occupiedUnits / totalUnits) * 100) : 0;
-
-  return { totalUnits, occupiedUnits, vacantUnits, occupancyRatePercent };
-}
-
-// PREFERRED as of 2026-07-04: derives occupancy from which units have an
-// Active lease attached (occupied = has an Active lease attached to that
-// unit), rather than trusting the unit record's own IsUnitOccupied flag —
-// see summarizeOccupancyFromUnits' comment above for why that flag lags
-// real occupancy during lease transitions. totalUnits comes from the
+// DELETED 2026-07-30 (per Jason directly, per Judge's code-quality
+// review): summarizeOccupancyFromUnits used to live here — trusted the
+// unit record's own IsUnitOccupied flag, SUPERSEDED 2026-07-04 once that
+// flag was confirmed live to lag real lease-status transitions by up to
+// ~2 weeks (9 real units showed IsUnitOccupied=true with no Active lease,
+// inflating occupancy to 90.6% vs the vendor's real 86.8%). Had no
+// remaining caller. summarizeOccupancy() below (deriving occupied from
+// Active lease status) is what /api/dashboard/occupancy actually uses,
+// and matches the vendor number almost exactly. totalUnits comes from the
 // caller (Buildium unit records), not derived from lease count, because a
 // unit can have zero leases (never-leased vacant unit) and would
 // otherwise be invisible to a lease-based count.
@@ -102,10 +87,6 @@ export function summarizeLeaseMix(activeLeases: BuildiumLease[]): LeaseMixSummar
 // rows) — the Renewals tile now reuses that same cached computation rather
 // than a separate live one, so it can never disagree with Renewal Rate's
 // own "N renewed" subtext.
-
-function roundPercent(n: number): number {
-  return Math.round(n * 10) / 10;
-}
 
 // Avg Tenancy moved to src/kpi/tenancy.ts 2026-07-12, per Jason directly —
 // rebuilt around every real Buildium tenant (past and current), not just
@@ -286,10 +267,6 @@ export function summarizeDelinquencyRate(balances: LeaseBalance[], activeLeases:
     totalMonthlyRent: roundCurrency(totalMonthlyRent),
     ratePercent: totalMonthlyRent > 0 ? roundPercent((totalDelinquentBalance / totalMonthlyRent) * 100) : null,
   };
-}
-
-function roundCurrency(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 // ============================================================================

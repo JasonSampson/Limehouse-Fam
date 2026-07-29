@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { z } from "zod";
 import {
   fetchOutstandingBalances,
   fetchProperties,
@@ -66,7 +65,7 @@ import {
   type SecurityDepositWithheldRow,
 } from "../kpi/leaseRows.js";
 import { propertyAddressById, withPropertyAddress, unitNumberByLeaseId, withUnitNumber } from "../kpi/propertyLookup.js";
-import { resolvePeriod, type PeriodKey } from "../kpi/period.js";
+import { resolvePeriod, resolveDateRangeFromQuery, periodEnumSchema, type PeriodKey } from "../kpi/period.js";
 import { getExcludedPropertyIds, withPendingCloseOutCategory } from "../kpi/terminatedProperties.js";
 import { groupOwners } from "../kpi/owners.js";
 import { pendingApplicantRows } from "../kpi/applicants.js";
@@ -88,19 +87,11 @@ import { requireLogin } from "../auth/session.js";
 // teamPerformanceRoutes.ts's comment for the real bug this caused before.
 export const dashboardRoutes = Router();
 
-const periodSchema = z
-  .enum(["this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"])
-  .default("this_month");
-
-// Same helper as rentEngineRoutes.ts's resolveDateRangeFromQuery (kept
-// local rather than exported/shared across files, since it's a 4-line
-// wrapper around resolvePeriod — not worth a cross-file import for this).
-function resolveDateRangeFromQuery(periodRaw: unknown): { from: string; to: string } {
-  const parsed = periodSchema.safeParse(periodRaw);
-  const period: PeriodKey = parsed.success ? parsed.data : "this_month";
-  const range = resolvePeriod(period);
-  return { from: `${range.from}T00:00:00Z`, to: `${range.to}T23:59:59Z` };
-}
+// CONSOLIDATED 2026-07-30, per Judge's code-quality review — see
+// periodEnumSchema/resolveDateRangeFromQuery's own comments in
+// src/kpi/period.ts for why these moved out of this file (and 3 others
+// that each redefined the same 6-value enum).
+const periodSchema = periodEnumSchema.default("this_month");
 
 // ============================================================================
 // STRUCTURAL tiles — always as-of-today, period param is intentionally

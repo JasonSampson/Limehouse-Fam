@@ -744,19 +744,6 @@ export function daysOnMarketExplainRows(
     .sort((a, b) => (b.daysOnMarket ?? -1) - (a.daysOnMarket ?? -1));
 }
 
-// Per-unit detail behind Showing Completion Rate.
-export interface CompletionRateExplainRow {
-  unitId: number;
-  showingsScheduled: number;
-  showingsCompleted: number;
-}
-
-export function completionRateExplainRows(rows: RentEngineLeasingPerformance[]): CompletionRateExplainRow[] {
-  return rows
-    .filter((r) => r.showings_scheduled > 0 || r.showings_completed > 0)
-    .map((r) => ({ unitId: r.unit_id, showingsScheduled: r.showings_scheduled, showingsCompleted: r.showings_completed }));
-}
-
 export interface ShowingCompletionRateSummary {
   showingsCompleted: number;
   showingsScheduled: number;

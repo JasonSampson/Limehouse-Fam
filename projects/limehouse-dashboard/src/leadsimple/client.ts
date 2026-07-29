@@ -3,6 +3,7 @@ import { loadEnv, isLeadSimpleConnected } from "../config/env.js";
 import { logWarn } from "../lib/logger.js";
 import { businessHoursBetween, nyDateOnly } from "../kpi/businessHours.js";
 import { leadSimpleLimiter } from "../lib/globalRequestLimiter.js";
+import { roundPercent } from "../lib/rounding.js";
 
 // REBUILT 2026-07-05 against LeadSimple's REAL REST API, confirmed live
 // via docs Jason retrieved himself from https://app.leadsimple.com/api_docs
@@ -500,10 +501,6 @@ export interface LeaseRenewalRateSummary {
   renewedCount: number;
   decidedCount: number;
   ratePercent: number | null;
-}
-
-function roundPercent(n: number): number {
-  return Math.round(n * 10) / 10;
 }
 
 // CONFIRMED LIVE 2026-07-06 against the vendor's own real drill-down data

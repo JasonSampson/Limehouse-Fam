@@ -1,8 +1,7 @@
 import { Router } from "express";
-import { z } from "zod";
 import { requireLogin, requireAdmin } from "../auth/session.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
-import { periodToSnapshotLabel, resolvePeriod, quarterLabelToDateRange, type PeriodKey } from "../kpi/period.js";
+import { periodToSnapshotLabel, resolvePeriod, quarterLabelToDateRange, periodEnumSchema, type PeriodKey } from "../kpi/period.js";
 import { logError } from "../lib/logger.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import {
@@ -62,9 +61,9 @@ export const teamPerformanceRoutes = Router();
 // entirely (see migrations/0007_drop_team_performance_password.ts).
 // /roles is now gated the same way CEO View is: signed in AND Admin.
 
-const periodQuerySchema = z
-  .enum(["this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"])
-  .default("this_quarter");
+// CONSOLIDATED 2026-07-30, per Judge's code-quality review — see
+// periodEnumSchema's own comment in src/kpi/period.ts.
+const periodQuerySchema = periodEnumSchema.default("this_quarter");
 
 const QUARTER_LABEL_PATTERN = /^\d{4}-Q[1-4]$/;
 

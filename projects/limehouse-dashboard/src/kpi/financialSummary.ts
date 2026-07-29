@@ -1,4 +1,5 @@
 import type { BuildiumGeneralLedgerAccount, BuildiumGlAccount } from "../buildium/client.js";
+import { roundCurrency } from "../lib/rounding.js";
 
 // Derives Gross Income / Net Income / Revenue-per-Unit from Buildium's real
 // /v1/generalledger endpoint (see src/buildium/client.ts's
@@ -119,6 +120,3 @@ export function checkGlHistoryCoverage(
   };
 }
 
-function roundCurrency(n: number): number {
-  return Math.round(n * 100) / 100;
-}

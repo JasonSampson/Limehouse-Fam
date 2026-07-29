@@ -2,7 +2,9 @@
 // confirmed against the live vendor dashboard's own displayed numbers and
 // legend text — see test/unit/kpiScoring.test.ts for the 5 known-good role
 // totals this must reproduce exactly.
-//
+
+import { roundPercent, roundCurrency } from "../lib/rounding.js";
+
 // TWO SEPARATE DIVISORS — this is the key correction from an earlier draft
 // of this formula that only used one:
 //
@@ -227,13 +229,3 @@ export function scoreRole(role: string, maxBonusUsd: number, kpiInputs: KpiInput
   };
 }
 
-// Cents-precision rounding for dollar payouts — avoids floating point noise
-// like 166.66666666666669 showing up in API responses.
-function roundCurrency(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-// One-decimal rounding for percentages (e.g. 44.4%, not 44.44444%).
-function roundPercent(n: number): number {
-  return Math.round(n * 10) / 10;
-}

@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   summarizeOccupancy,
-  summarizeOccupancyFromUnits,
   summarizeLeaseMix,
   summarizeRenewalRate,
   mostRecentRentEffectiveDate,
@@ -89,43 +88,6 @@ describe("summarizeOccupancy", () => {
     expect(result.occupiedUnits).toBe(1);
     expect(result.vacantUnits).toBe(2);
     expect(result.occupancyRatePercent).toBe(33.3);
-  });
-});
-
-// CONFIRMED LIVE 2026-07-03 against Jason's real Buildium account:
-// IsUnitOccupied is a real field on the unit record, returned by the
-// (also newly confirmed) bulk /rentals/units endpoint. This is the
-// function /api/dashboard/occupancy actually calls now, replacing the
-// broken per-property /rentals/{id}/units approach that 404'd for every
-// property in this account.
-describe("summarizeOccupancyFromUnits", () => {
-  it("counts occupied/vacant directly from each unit's IsUnitOccupied flag", () => {
-    const units = [
-      unit({ Id: 1, IsUnitOccupied: true }),
-      unit({ Id: 2, IsUnitOccupied: true }),
-      unit({ Id: 3, IsUnitOccupied: false }),
-    ];
-    const result = summarizeOccupancyFromUnits(units);
-    expect(result).toEqual({ totalUnits: 3, occupiedUnits: 2, vacantUnits: 1, occupancyRatePercent: 66.7 });
-  });
-
-  it("returns 0% occupancy rate (not NaN) for an empty portfolio", () => {
-    const result = summarizeOccupancyFromUnits([]);
-    expect(result).toEqual({ totalUnits: 0, occupiedUnits: 0, vacantUnits: 0, occupancyRatePercent: 0 });
-  });
-
-  it("all-occupied portfolio reports 100%", () => {
-    const units = [unit({ IsUnitOccupied: true }), unit({ IsUnitOccupied: true })];
-    const result = summarizeOccupancyFromUnits(units);
-    expect(result.occupancyRatePercent).toBe(100);
-    expect(result.vacantUnits).toBe(0);
-  });
-
-  it("all-vacant portfolio reports 0%", () => {
-    const units = [unit({ IsUnitOccupied: false }), unit({ IsUnitOccupied: false })];
-    const result = summarizeOccupancyFromUnits(units);
-    expect(result.occupancyRatePercent).toBe(0);
-    expect(result.occupiedUnits).toBe(0);
   });
 });
 

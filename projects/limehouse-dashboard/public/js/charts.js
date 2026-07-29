@@ -186,52 +186,6 @@ function renderGroupedBarChart({ canvasId, labels, series, yFormat }) {
 }
 
 // ---------------------------------------------------------------------
-// Single-line chart with dot markers (Occupancy Rate — 12 months)
-// ---------------------------------------------------------------------
-function lineChartHtml({ canvasId, labels, data, color = LH_COLORS.green, yFormat, min, max }) {
-  queueMicrotask(() => renderLineChart({ canvasId, labels, data, color, yFormat, min, max }));
-  return `<div class="chart-canvas-wrap" style="height:200px;"><canvas id="${canvasId}"></canvas></div>`;
-}
-
-function renderLineChart({ canvasId, labels, data, color, yFormat, min, max }) {
-  _makeChart(canvasId, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          data,
-          borderColor: color,
-          backgroundColor: color,
-          pointBackgroundColor: color,
-          pointRadius: 3,
-          borderWidth: 2,
-          tension: 0.3,
-          fill: false,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: yFormat ? { label: (ctx) => yFormat(ctx.parsed.y) } : undefined },
-      },
-      scales: {
-        x: { grid: { display: false } },
-        y: {
-          min,
-          max,
-          ticks: yFormat ? { callback: (v) => yFormat(v) } : undefined,
-        },
-      },
-    },
-  });
-}
-
-// ---------------------------------------------------------------------
 // Multi-series line chart, one line per year, same Jan-Dec x-axis
 // (CEO View: Gross Income / Net Income / Revenue Per Unit).
 // ---------------------------------------------------------------------
@@ -304,45 +258,6 @@ function renderYearOverYearLineChart({ canvasId, seriesByYear, currentYear, yFor
       scales: {
         x: { grid: { display: false } },
         y: { ticks: yFormat ? { callback: (v) => yFormat(v) } : undefined },
-      },
-    },
-  });
-}
-
-// ---------------------------------------------------------------------
-// Doors Added vs Lost — alternating positive/negative bars around a
-// zero baseline.
-// ---------------------------------------------------------------------
-function divergingBarChartHtml({ canvasId, labels, data }) {
-  queueMicrotask(() => renderDivergingBarChart({ canvasId, labels, data }));
-  return `<div class="chart-canvas-wrap" style="height:200px;"><canvas id="${canvasId}"></canvas></div>`;
-}
-
-function renderDivergingBarChart({ canvasId, labels, data }) {
-  _makeChart(canvasId, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [
-        {
-          data,
-          backgroundColor: data.map((v) => (v >= 0 ? LH_COLORS.green : LH_COLORS.red)),
-          borderRadius: 3,
-          maxBarThickness: 18,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: (ctx) => (ctx.parsed.y >= 0 ? `+${ctx.parsed.y}` : `${ctx.parsed.y}`) } },
-      },
-      scales: {
-        x: { grid: { display: false } },
-        y: { beginAtZero: true },
       },
     },
   });

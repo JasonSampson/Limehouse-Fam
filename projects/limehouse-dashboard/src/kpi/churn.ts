@@ -1,4 +1,5 @@
 import type { BuildiumOwner, BuildiumProperty, BuildiumLease } from "../buildium/client.js";
+import { roundPercent } from "../lib/rounding.js";
 
 // Doors Added (Occupancy & Doors section). CONFIRMED LIVE 2026-07-03:
 // ManagementAgreementStartDate on /rentals/owners records is a real,
@@ -180,10 +181,6 @@ export function summarizeNetDoorsYTD(currentTotalDoors: number, asOfDate: Date):
     doorsAtStartOfYear,
     currentTotalDoors,
   };
-}
-
-function roundPercent(n: number): number {
-  return Math.round(n * 10) / 10;
 }
 
 // Total Units "vs last yr" badge — ADDED 2026-07-09, per Jason directly.

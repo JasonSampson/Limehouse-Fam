@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { loadEnv } from "../config/env.js";
 import { buildiumLimiter } from "../lib/globalRequestLimiter.js";
+import { getCachedMetric, upsertCachedMetric, isCacheFresh } from "../db/metricCache.js";
 
 // Adapted from late-rent-notices/src/buildium/client.ts — same proven auth
 // pattern, error handling, and pagination style, confirmed against
@@ -99,6 +100,60 @@ async function buildiumGetAllPages<T>(
     if (rows.length < pageSize) break;
   }
   return results;
+}
+
+// ADDED 2026-07-30 — Hermes's performance review found the same bug class
+// already fixed for RentEngine (see src/rentengine/sharedFetchCache.ts)
+// unfixed here: roughly 16 redundant Buildium calls on every single
+// Dashboard page load, because fetchProperties/fetchAllUnits/
+// fetchActiveLeases/fetchAllLeases/fetchOwners are each called
+// independently by several route handlers — some directly, some through
+// the composed fetchActiveResidentialUnits/fetchActiveManagedUnits/
+// fetchActiveProperties helpers below, which themselves call these same
+// five functions. Wrapping the primitives HERE (rather than a separate
+// wrapper file, the way sharedFetchCache.ts does for RentEngine) means
+// every caller — direct or through a composed helper — automatically
+// shares one real fetch, without a circular import between this file and
+// a wrapper file for helpers that live in this same file. Same 10-minute
+// TTL + in-flight dedup pattern as sharedFetchCache.ts; only a genuinely
+// successful fetch gets cached, same reasoning as that file (a transient
+// Buildium outage shouldn't get stuck serving a fake-broken state for the
+// TTL).
+const inFlightBuildiumFetches = new Map<string, Promise<unknown>>();
+
+async function cachedBuildiumFetch<T>(cacheKey: string, fetcher: () => Promise<T>): Promise<T> {
+  // Vitest sets NODE_ENV=test automatically (same confirmed-live pattern
+  // globalRequestLimiter.ts already relies on) — checked raw here rather
+  // than through loadEnv(), which would throw on DATABASE_URL not being
+  // stubbed in a unit test that only mocks fetch. Without this, every unit
+  // test exercising fetchProperties/fetchAllUnits/fetchActiveLeases/
+  // fetchAllLeases/fetchOwners (directly or via the composed
+  // fetchActive*/fetchAllUnits helpers) would try to open a real Postgres
+  // connection that doesn't exist in the test environment — this file's
+  // caching is a live-server optimization, not something a unit test
+  // exercising the Buildium HTTP/parsing layer should have to care about.
+  if (process.env.NODE_ENV === "test") return fetcher();
+
+  const cached = await getCachedMetric(cacheKey, "portfolio");
+  if (cached && cached.value !== null && isCacheFresh(cached)) {
+    return cached.value as T;
+  }
+
+  const existing = inFlightBuildiumFetches.get(cacheKey);
+  if (existing) return existing as Promise<T>;
+
+  const fetchPromise = (async (): Promise<T> => {
+    try {
+      const result = await fetcher();
+      await upsertCachedMetric(cacheKey, "portfolio", "buildium", result);
+      return result;
+    } finally {
+      inFlightBuildiumFetches.delete(cacheKey);
+    }
+  })();
+
+  inFlightBuildiumFetches.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 // ============================================================================
@@ -223,8 +278,10 @@ export async function fetchLeasesByStatus(
 // once here, at the fetch layer, means every caller gets the correct
 // 203-lease set with no risk of a future call-site forgetting the filter.
 export async function fetchActiveLeases(): Promise<BuildiumLease[]> {
-  const leases = await fetchLeasesByStatus(["Active"]);
-  return leases.filter((l) => l.CurrentTenants && l.CurrentTenants.length > 0);
+  return cachedBuildiumFetch("buildium_active_leases", async () => {
+    const leases = await fetchLeasesByStatus(["Active"]);
+    return leases.filter((l) => l.CurrentTenants && l.CurrentTenants.length > 0);
+  });
 }
 
 // CORRECTED 2026-07-10, per Jason directly: the 2026-07-07 fix above
@@ -252,8 +309,10 @@ export function isNotGhostLease(l: BuildiumLease): boolean {
 }
 
 export async function fetchAllLeases(): Promise<BuildiumLease[]> {
-  const leases = await fetchLeasesByStatus(["Active", "Past", "Future"]);
-  return leases.filter(isNotGhostLease);
+  return cachedBuildiumFetch("buildium_all_leases", async () => {
+    const leases = await fetchLeasesByStatus(["Active", "Past", "Future"]);
+    return leases.filter(isNotGhostLease);
+  });
 }
 
 // ADDED 2026-07-12 for the "every past and current tenant" Avg Tenancy
@@ -457,7 +516,9 @@ const buildiumPropertySchema = z.object({
 export type BuildiumProperty = z.infer<typeof buildiumPropertySchema>;
 
 export async function fetchProperties(): Promise<BuildiumProperty[]> {
-  return buildiumGetAllPages<BuildiumProperty>("/rentals", z.array(buildiumPropertySchema));
+  return cachedBuildiumFetch("buildium_properties", () =>
+    buildiumGetAllPages<BuildiumProperty>("/rentals", z.array(buildiumPropertySchema))
+  );
 }
 
 // CORRECTED LIVE 2026-07-03 against Jason's real Buildium account: the
@@ -499,7 +560,9 @@ export type BuildiumUnit = z.infer<typeof buildiumUnitSchema>;
 // is the exact mistake that produced 401 instead of the real ~230 (see
 // that function's comment for the full story).
 export async function fetchAllUnits(): Promise<BuildiumUnit[]> {
-  return buildiumGetAllPages<BuildiumUnit>("/rentals/units", z.array(buildiumUnitSchema));
+  return cachedBuildiumFetch("buildium_all_units", () =>
+    buildiumGetAllPages<BuildiumUnit>("/rentals/units", z.array(buildiumUnitSchema))
+  );
 }
 
 // CORRECTED LIVE 2026-07-03 against Jason's real Buildium account (second
@@ -636,7 +699,9 @@ export type BuildiumOwner = z.infer<typeof buildiumOwnerSchema>;
 // "went inactive recently" is exactly how a lost door is detected. Do NOT
 // swap this to fetchActiveOwners() for those routes.
 export async function fetchOwners(): Promise<BuildiumOwner[]> {
-  return buildiumGetAllPages<BuildiumOwner>("/rentals/owners", z.array(buildiumOwnerSchema));
+  return cachedBuildiumFetch("buildium_owners", () =>
+    buildiumGetAllPages<BuildiumOwner>("/rentals/owners", z.array(buildiumOwnerSchema))
+  );
 }
 
 // CONFIRMED LIVE 2026-07-05: Buildium's /rentals/owners defaults to

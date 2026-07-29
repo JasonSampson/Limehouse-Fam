@@ -1,7 +1,6 @@
 import { Router } from "express";
-import { z } from "zod";
 import { getScoredRoles } from "../db/kpiRepository.js";
-import { periodToSnapshotLabel, type PeriodKey } from "../kpi/period.js";
+import { periodToSnapshotLabel, periodEnumSchema, type PeriodKey } from "../kpi/period.js";
 import { fetchActiveResidentialUnits, fetchBankAccounts } from "../buildium/client.js";
 import { revenuePerUnit } from "../kpi/financialSummary.js";
 import { getAllFinancialHistory } from "../db/financialHistory.js";
@@ -18,9 +17,10 @@ export const ceoViewRoutes = Router();
 // scoring as Team Performance, different display_group/labels (Neo's
 // migration 0002 comment: "Assistant Property Manager" here vs. "Portfolio
 // Assistant" under team_performance for the same role).
-const periodQuerySchema = z
-  .enum(["this_month", "last_month", "this_quarter", "last_quarter", "this_year", "last_year"])
-  .default("this_quarter");
+// CONSOLIDATED 2026-07-30, per Judge's code-quality review — see
+// periodEnumSchema's own comment in src/kpi/period.ts. This route
+// defaults to "this_quarter", unlike Dashboard/RentEngine's "this_month".
+const periodQuerySchema = periodEnumSchema.default("this_quarter");
 
 ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, async (req, res) => {
   const parsed = periodQuerySchema.safeParse(req.query.period);

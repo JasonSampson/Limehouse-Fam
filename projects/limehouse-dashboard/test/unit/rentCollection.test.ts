@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   summarizeRentAndDeposit,
   summarizeMonthlyCollectionRates,
-  earliestPaymentPerMonth,
   resolveRentPaymentDates,
-  resolvePaymentDatesPerMonth,
   resolveLeaseBalancesPerMonth,
   LATE_CUTOFF_DAY_OVERRIDE_BY_LEASE_ID,
   extractSecurityDepositWithheld,
@@ -18,7 +16,6 @@ import {
   excludeCurrentInProgressMonth,
   buildDuePerMonth,
   leaseOverlapsWindow,
-  type LeasePaymentForMonth,
   type LeaseBalanceForMonth,
   type MonthlyCollectionRate,
 } from "../../src/kpi/rentCollection.js";
@@ -326,40 +323,13 @@ describe("leaseOverlapsWindow", () => {
   });
 });
 
-describe("earliestPaymentPerMonth", () => {
-  it("picks the earliest Payment transaction per month, ignoring non-Payment types", () => {
-    const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 10, Date: "2026-06-15", TransactionType: "Charge", TotalAmount: 1000 },
-      { Id: 2, LeaseId: 10, Date: "2026-06-08", TransactionType: "Payment", TotalAmount: 1000 },
-      { Id: 3, LeaseId: 10, Date: "2026-06-02", TransactionType: "Payment", TotalAmount: 1000 },
-    ];
-    const result = earliestPaymentPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", paymentDate: "2026-06-02" }]);
-  });
-
-  it("returns separate entries for separate months", () => {
-    const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 10, Date: "2026-05-05", TransactionType: "Payment", TotalAmount: 1000 },
-      { Id: 2, LeaseId: 10, Date: "2026-06-05", TransactionType: "Payment", TotalAmount: 1000 },
-    ];
-    const result = earliestPaymentPerMonth("10", transactions);
-    expect(result).toHaveLength(2);
-  });
-
-  it("returns an empty array when there are no Payment transactions", () => {
-    const transactions: BuildiumLeaseTransaction[] = [
-      { Id: 1, LeaseId: 10, Date: "2026-06-15", TransactionType: "Charge", TotalAmount: 1000 },
-    ];
-    expect(earliestPaymentPerMonth("10", transactions)).toEqual([]);
-  });
-});
-
 // ============================================================================
-// resolveRentPaymentDates — the FIXED 2026-07-04 replacement for
-// earliestPaymentPerMonth above. Fixtures modeled on Oracle's real,
-// hand-verified leases (real IDs referenced in comments for traceability;
-// verified live against the actual leases with these exact outcomes before
-// this was wired into the sync route).
+// resolveRentPaymentDates — the FIXED 2026-07-04 replacement for an
+// earlier same-month-only rule (deleted 2026-07-30, long superseded).
+// Fixtures modeled on Oracle's real, hand-verified leases (real IDs
+// referenced in comments for traceability; verified live against the
+// actual leases with these exact outcomes before this was wired into the
+// sync route).
 // ============================================================================
 describe("resolveRentPaymentDates", () => {
   // Modeled on real lease 2706563: tenant pays early via Buildium's
@@ -455,21 +425,11 @@ describe("resolveRentPaymentDates", () => {
   });
 });
 
-describe("resolvePaymentDatesPerMonth", () => {
-  it("wraps resolveRentPaymentDates into the LeasePaymentForMonth shape summarizeMonthlyCollectionRates expects", () => {
-    const transactions = [
-      txn({ Id: 1, Date: "2026-06-01", TransactionType: "Charge", TotalAmount: 1500, glLines: [[RENT_INCOME, "Rent Income", 1500]] }),
-      txn({ Id: 2, Date: "2026-06-01", TransactionType: "Payment", TotalAmount: -1500, glLines: [[RENT_INCOME, "Rent Income", -1500]] }),
-    ];
-    const result = resolvePaymentDatesPerMonth("10", transactions);
-    expect(result).toEqual([{ leaseId: "10", month: "2026-06", paymentDate: "2026-06-01" }]);
-  });
-});
-
 // ============================================================================
-// resolveLeaseBalancesPerMonth — REBUILT 2026-07-07, replaces
-// resolvePaymentDatesPerMonth in the live pipeline (see LATE_BALANCE_THRESHOLD
-// and resolveLeaseBalancesPerMonth's own comment in rentCollection.ts for
+// resolveLeaseBalancesPerMonth — REBUILT 2026-07-07, replaces an earlier
+// resolveRentPaymentDates wrapper (deleted 2026-07-30, long superseded)
+// in the live pipeline (see LATE_BALANCE_THRESHOLD and
+// resolveLeaseBalancesPerMonth's own comment in rentCollection.ts for
 // why: "paid by 3rd/10th" needs the balance STILL OWED as of a cutoff, not
 // a binary fully-paid-or-not answer).
 // ============================================================================

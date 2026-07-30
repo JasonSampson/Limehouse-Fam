@@ -26,7 +26,7 @@ import {
 import { securityDepositWithheldRows } from "../kpi/leaseRows.js";
 import { syncCallActivityForPeriod } from "../rentengine/callActivitySync.js";
 import { logError, logInfo } from "../lib/logger.js";
-import { requireLogin } from "../auth/session.js";
+import { requireLogin, requireAdmin } from "../auth/session.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
 import { fetchLeaseRenewalProcesses } from "../leadsimple/client.js";
 import { findTerminatingCandidates, matchCandidatesToActiveProperties, isStillExcluded } from "../kpi/terminatedProperties.js";
@@ -403,7 +403,14 @@ syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
 // only re-fetches months not already cached, plus the always-live current
 // month, so a second call after the first full backfill completes in a
 // few seconds instead of minutes.
-syncRoutes.post("/api/sync/financial-history", requireLogin, async (_req, res) => {
+// FIXED 2026-07-30, per Sentinel's security review: this used to be
+// requireLogin-only, letting any logged-in non-admin staff account
+// trigger a sync — the response body only echoes counts (monthsWritten/
+// monthsSkipped), never dollar figures, so this was lower risk than the
+// team-performance-kpis route below, but it exists solely to feed CEO
+// View's Admin-only income charts, so its trigger having a lower bar than
+// the page it serves was still an inconsistency worth closing.
+syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "financial_history_sync");
   try {
     const result = await syncFinancialHistory();
@@ -434,7 +441,16 @@ syncRoutes.post("/api/sync/financial-history", requireLogin, async (_req, res) =
 // "one implementation, called from the manual route and the automatic
 // scheduler" pattern already used for the other jobs in that file. This
 // route is now just the thin HTTP wrapper.
-syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, async (_req, res) => {
+//
+// FIXED 2026-07-30, per Sentinel's security review: this was
+// requireLogin-only, and its response echoes `summary` directly — every
+// staff performance rate (occupancy, delinquency, task completion,
+// workflow compliance, etc.) that /api/team-performance/roles correctly
+// restricts to Admin. Any of the 7 staff accounts could call this POST
+// route directly with their own valid session and read every other
+// staff member's current performance numbers, defeating the entire
+// Admin-only gate documented on the page routes themselves.
+syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, requireAdmin, async (_req, res) => {
   try {
     const summary = await runTeamPerformanceKpisSync();
     res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });

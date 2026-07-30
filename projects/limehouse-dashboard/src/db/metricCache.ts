@@ -9,7 +9,7 @@ import { getPool } from "./pool.js";
 export interface CachedMetric {
   metricKey: string;
   scope: string;
-  sourceSystem: "buildium" | "rent_engine" | "lead_simple";
+  sourceSystem: "buildium" | "rent_engine" | "lead_simple" | "google";
   value: unknown;
   fetchedAt: Date;
   lastError: string | null;
@@ -46,7 +46,7 @@ export function isCacheFresh(metric: CachedMetric): boolean {
 export async function upsertCachedMetric(
   metricKey: string,
   scope: string,
-  sourceSystem: "buildium" | "rent_engine" | "lead_simple",
+  sourceSystem: "buildium" | "rent_engine" | "lead_simple" | "google",
   value: unknown
 ): Promise<void> {
   const pool = getPool();
@@ -70,7 +70,7 @@ export async function upsertCachedMetric(
 export async function recordCacheRefreshFailure(
   metricKey: string,
   scope: string,
-  sourceSystem: "buildium" | "rent_engine" | "lead_simple",
+  sourceSystem: "buildium" | "rent_engine" | "lead_simple" | "google",
   errorMessage: string
 ): Promise<void> {
   const pool = getPool();

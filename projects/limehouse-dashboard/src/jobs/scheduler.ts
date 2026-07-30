@@ -5,6 +5,7 @@ import {
   refreshCallActivityCache,
   refreshRentEngineLeasingPerformanceCache,
   refreshExtendedGraceCache,
+  refreshGoogleReviewsCache,
   runTeamPerformanceKpisSync,
 } from "./cacheRefreshJobs.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
@@ -73,6 +74,12 @@ const HOUR = 60 * MINUTE;
 //   - extended-grace: every 2 hours — ADDED 2026-07-29, per Jason
 //     directly. Same one-call-per-active-lease cost as Rent Collection
 //     above, same interval.
+//   - google-reviews: every 6 hours — ADDED 2026-07-30, per Jason directly.
+//     A business's review count/rating moves slowly (at most a handful of
+//     new reviews a week), so this doesn't need to be fresher than the
+//     other slow-moving business metrics above. Also writes today's
+//     snapshot row each run, which just keeps overwriting in place — no
+//     harm in it running a few times a day.
 //   - terminated-properties is still deliberately NOT scheduled here —
 //     unconfirmed as a user-facing tile, left manual-only until a real
 //     tile is found depending on it going stale.
@@ -85,6 +92,7 @@ const JOBS: ScheduledJob[] = [
   { name: "security-deposit-withheld", fn: refreshSecurityDepositWithheldCache, intervalMs: 4 * HOUR, initialDelayMs: 60 * 1000 },
   { name: "financial-history", fn: () => syncFinancialHistory().then(() => {}), intervalMs: 6 * HOUR, initialDelayMs: 120 * 1000 },
   { name: "extended-grace", fn: refreshExtendedGraceCache, intervalMs: 2 * HOUR, initialDelayMs: 105 * 1000 },
+  { name: "google-reviews", fn: refreshGoogleReviewsCache, intervalMs: 6 * HOUR, initialDelayMs: 135 * 1000 },
 ];
 
 let started = false;

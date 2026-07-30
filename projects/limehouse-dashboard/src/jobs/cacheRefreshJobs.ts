@@ -1,4 +1,4 @@
-import { loadEnv, isRentEngineConnected, isLeadSimpleConnected } from "../config/env.js";
+import { loadEnv, isRentEngineConnected, isLeadSimpleConnected, isGoogleReviewsConnected } from "../config/env.js";
 import {
   fetchLeasesByStatus,
   fetchActiveLeases,
@@ -60,6 +60,8 @@ import {
 } from "../leadsimple/client.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import { getKpiDefinitionIdsByName, upsertKpiSnapshot } from "../db/kpiRepository.js";
+import { fetchGoogleReviewSummary } from "../google/placesClient.js";
+import { upsertTodaySnapshot } from "../db/googleReviewSnapshots.js";
 
 // ============================================================================
 // Shared cache-refresh logic — ADDED 2026-07-18, per Jason directly
@@ -178,6 +180,33 @@ export async function refreshRenewalRateCache(): Promise<void> {
     await recordCacheRefreshFailure("renewal_rate", "portfolio", "buildium", message);
     await failSyncRun(syncLogId, message);
     logError("Renewal rate sync failed", { syncLogId, error: message });
+    throw err;
+  }
+}
+
+// Google Reviews (Top of Mind) — ADDED 2026-07-30, per Jason directly. One
+// call to Google's Places API gets the current rating + review count; those
+// two numbers get cached (for the tile's "live" headline, same 10-min TTL
+// pattern as every other cached metric here) AND recorded as today's row in
+// dashboard_google_review_snapshots, which is what lets "new reviews this
+// period" be computed later by diffing against an earlier day's row. Skips
+// silently (not an error) when the Google key/place ID aren't configured —
+// same "optional integration" pattern as RentEngine/LeadSimple.
+export async function refreshGoogleReviewsCache(): Promise<void> {
+  if (!isGoogleReviewsConnected()) return;
+
+  const syncLogId = await startSyncRun("google", "google_reviews_cache_refresh");
+  try {
+    const summary = await fetchGoogleReviewSummary();
+    await upsertCachedMetric("google_reviews_current", "portfolio", "google", summary);
+    await upsertTodaySnapshot(summary.rating, summary.reviewCount);
+    await completeSyncRun(syncLogId, 1);
+    logInfo("Google Reviews sync completed", { syncLogId, ...summary });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordCacheRefreshFailure("google_reviews_current", "portfolio", "google", message);
+    await failSyncRun(syncLogId, message);
+    logError("Google Reviews sync failed", { syncLogId, error: message });
     throw err;
   }
 }

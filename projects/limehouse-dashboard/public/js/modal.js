@@ -12,6 +12,14 @@
 // intentionally renders real markup for styling (Team Performance's
 // reconciliation "Not Reconciled" badge) opts out via `html: true` on its
 // column definition — see that column's own comment.
+//
+// FIXED 2026-07-30, follow-up per Sentinel's review: title/subtitle/formula/
+// note were still interpolated unescaped — every real caller today only
+// passes developer-written strings here (tile labels, hardcoded note text),
+// so this wasn't actually exploitable yet, but it's the same class of bug
+// as the cell fix above and would become one the moment any caller ever
+// passes real external text into these slots. Escaped the same way for
+// consistency, at no cost to any current caller.
 function openDrillDownModal({ title, subtitle, formula, note, columns, rows, emptyText = "No records for this period." }) {
   closeDrillDownModal();
 
@@ -19,12 +27,12 @@ function openDrillDownModal({ title, subtitle, formula, note, columns, rows, emp
   overlay.className = "modal-overlay";
   overlay.id = "drill-down-overlay";
 
-  const formulaHtml = formula ? `<p class="modal-formula"><strong>Formula:</strong> ${formula}</p>` : "";
+  const formulaHtml = formula ? `<p class="modal-formula"><strong>Formula:</strong> ${escapeHtml(formula)}</p>` : "";
   // "Note" box — same idea as the vendor site's own explainer box on tiles
   // whose data isn't a straightforward live number, so Jason can see how a
   // figure was put together without having to ask.
   const noteHtml = note
-    ? `<div class="modal-note"><p class="modal-note-label">Note</p><p class="modal-note-text">${note}</p></div>`
+    ? `<div class="modal-note"><p class="modal-note-label">Note</p><p class="modal-note-text">${escapeHtml(note)}</p></div>`
     : "";
 
   function cellHtml(column, row) {
@@ -50,13 +58,13 @@ function openDrillDownModal({ title, subtitle, formula, note, columns, rows, emp
         </table>
       `;
 
-  const subtitleHtml = subtitle ? `<span class="modal-subtitle">${subtitle}</span>` : "";
+  const subtitleHtml = subtitle ? `<span class="modal-subtitle">${escapeHtml(subtitle)}</span>` : "";
 
   overlay.innerHTML = `
     <div class="modal-panel">
       <div class="modal-header">
         <div class="modal-heading">
-          <span class="modal-title">${title}</span>
+          <span class="modal-title">${escapeHtml(title)}</span>
           ${subtitleHtml}
         </div>
         <button class="modal-close" aria-label="Close">&times;</button>
@@ -86,7 +94,7 @@ function openLoadingModal(title) {
   overlay.innerHTML = `
     <div class="modal-panel">
       <div class="modal-header">
-        <span class="modal-title">${title}</span>
+        <span class="modal-title">${escapeHtml(title)}</span>
         <button class="modal-close" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body"><p class="loading-text">Loading…</p></div>

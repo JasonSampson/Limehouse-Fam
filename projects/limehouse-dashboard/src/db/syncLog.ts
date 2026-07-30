@@ -5,7 +5,7 @@ import { getPool } from "./pool.js";
 // completed there — "last synced" is always computed as the most recent
 // row WHERE status = 'succeeded', never just the most recent row
 // regardless of outcome (per Neo's migration comment).
-export type SyncSource = "buildium" | "rent_engine" | "lead_simple";
+export type SyncSource = "buildium" | "rent_engine" | "lead_simple" | "google";
 export type SyncStatus = "running" | "succeeded" | "failed";
 
 export async function startSyncRun(sourceSystem: SyncSource, syncType: string, traceId?: string): Promise<number> {

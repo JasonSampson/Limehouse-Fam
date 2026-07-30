@@ -58,6 +58,7 @@ async function loadDashboard() {
     rentCollectionResult,
     propertyHealthResult,
     doorsResult,
+    googleReviewsResult,
     avgTenancyResult,
     leasingFunnelResult,
     prospectsBySourceResult,
@@ -84,6 +85,7 @@ async function loadDashboard() {
     apiGet("/api/dashboard/financials/rent-collection"),
     apiGet("/api/dashboard/property-health"),
     apiGet("/api/dashboard/doors"),
+    apiGet(`/api/dashboard/google-reviews?period=${period}`),
     apiGet("/api/dashboard/avg-tenancy"),
     apiGet(`/api/rentengine/leasing-funnel?period=${period}`),
     apiGet(`/api/rentengine/prospects-by-source?period=${period}`),
@@ -155,6 +157,7 @@ async function loadDashboard() {
   const rentCollectionSameMonthLastYear = rentCollectionResponse ? rentCollectionResponse.sameMonthLastYear : null;
   const propertyHealth = unwrap(propertyHealthResult);
   const doors = unwrap(doorsResult);
+  const googleReviews = unwrap(googleReviewsResult);
   const avgTenancy = unwrap(avgTenancyResult);
   const leasingFunnel = unwrap(leasingFunnelResult);
   const prospectsBySource = unwrap(prospectsBySourceResult);
@@ -174,7 +177,7 @@ async function loadDashboard() {
     : `${PERIOD_LABELS[period].toUpperCase()} · Flow metrics for this period; structural metrics shown as of today`;
 
   content.innerHTML = `
-    ${renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors })}
+    ${renderTopOfMind({ delinquency, occupancy, occupancyForTile, renewalRate, rentCollection, doors, googleReviews })}
     ${renderFinancials({ rentAndDeposit, delinquencyAging, rentCollection, rentCollectionFull, rentCollectionLatest, isLatestMonthCurrent, rentCollectionForPeriod, todayDayOfMonth, rentCollectionYearly, rentCollectionSameMonthLastYear, extendedGrace })}
     ${renderOccupancyAndDoors({ occupancy, occupancyForTile, occupancyHistory, owners, ownersGainedThisPeriod, propertyHealth, doors, avgDaysVacant })}
     ${renderLeasingPipeline({ leaseMix, renewals, renewalsMonthly, avgTenancy, moveIns, appsSubmitted })}
@@ -237,7 +240,7 @@ function unwrap(settledResult) {
 // TOP OF MIND
 // ---------------------------------------------------------------------
 
-function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, doors }) {
+function renderTopOfMind({ delinquency, occupancy, occupancyForTile, renewalRate, rentCollection, doors, googleReviews }) {
   return `
     <div class="section">
       <p class="section-title">Top of Mind</p>
@@ -295,9 +298,35 @@ function renderTopOfMind({ delinquency, occupancy, renewalRate, rentCollection, 
               })
         }
         ${renderNetDoorsTile(doors)}
+        ${renderGoogleReviewsTile(googleReviews)}
       </div>
     </div>
   `;
+}
+
+// Google Reviews — ADDED 2026-07-30, per Jason directly. Headline is the
+// current rating + total review count (live, cached same as every other
+// Buildium/RentEngine tile); the sub-line follows the same period dropdown
+// as the rest of the dashboard. newReviewsThisPeriod is null (not 0) for any
+// period starting before this feature's tracking began — shown honestly as
+// "no history yet" rather than a fabricated zero.
+function renderGoogleReviewsTile(googleReviews) {
+  if (!googleReviews) {
+    return couldNotLoadTile({ id: "google-reviews", label: "Google Reviews", sourceTags: ["GG"] });
+  }
+  if (!googleReviews.synced) {
+    return tileHtml({ id: "google-reviews", label: "Google Reviews", sourceTags: ["GG"], notConnected: true });
+  }
+  const newCount = googleReviews.newReviewsThisPeriod;
+  const sub = newCount === null ? "No history yet for this period" : `${newCount >= 0 ? "+" : ""}${formatNumber(newCount)} this period`;
+  return tileHtml({
+    id: "google-reviews",
+    label: "Google Reviews",
+    value: `${googleReviews.rating.toFixed(1)}★`,
+    sub: `${formatNumber(googleReviews.reviewCount)} reviews · ${sub}`,
+    sourceTags: ["GG"],
+    live: true,
+  });
 }
 
 // Net Doors — CORRECTED 2026-07-04, window mismatch FIXED 2026-07-05: this

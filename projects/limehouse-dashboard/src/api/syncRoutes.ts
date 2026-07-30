@@ -36,6 +36,7 @@ import {
   refreshRenewalRateCache,
   refreshCallActivityCache,
   refreshExtendedGraceCache,
+  refreshGoogleReviewsCache,
   runTeamPerformanceKpisSync,
 } from "../jobs/cacheRefreshJobs.js";
 
@@ -259,6 +260,17 @@ syncRoutes.post("/api/sync/extended-grace", requireLogin, async (_req, res) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Extended grace sync failed. Last known-good data is still being served.", detail: message });
+  }
+});
+
+// Google Reviews (Top of Mind) — ADDED 2026-07-30, per Jason directly.
+syncRoutes.post("/api/sync/google-reviews", requireLogin, async (_req, res) => {
+  try {
+    await refreshGoogleReviewsCache();
+    res.json({ ok: true, syncedAt: new Date().toISOString() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: "Google Reviews sync failed. Last known-good data is still being served.", detail: message });
   }
 });
 

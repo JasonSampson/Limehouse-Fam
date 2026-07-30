@@ -77,6 +77,7 @@ import {
   type MonthlyCollectionRate,
 } from "../kpi/rentCollection.js";
 import { getCachedMetric, isCacheFresh } from "../db/metricCache.js";
+import { getLatestSnapshot, getSnapshotOnOrBefore } from "../db/googleReviewSnapshots.js";
 import { logError, logWarn } from "../lib/logger.js";
 import { requireLogin } from "../auth/session.js";
 
@@ -598,6 +599,47 @@ dashboardRoutes.get("/api/dashboard/doors", requireLogin, async (_req, res) => {
   } catch (err) {
     logError("GET /api/dashboard/doors failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load doors-added data from Buildium." });
+  }
+});
+
+// Google Reviews (Top of Mind) — ADDED 2026-07-30, per Jason directly. The
+// headline rating/count comes from the 10-min cache the sync job maintains
+// (see refreshGoogleReviewsCache in cacheRefreshJobs.ts); "new reviews this
+// period" is computed separately by diffing today's daily-snapshot row
+// against the nearest snapshot on/before the selected period's start date.
+// newReviewsThisPeriod is null (not 0) when no snapshot exists that far
+// back — tracking only started the day this feature shipped, so any period
+// starting before then has no real baseline to diff against.
+dashboardRoutes.get("/api/dashboard/google-reviews", requireLogin, async (req, res) => {
+  try {
+    const cached = await getCachedMetric("google_reviews_current", "portfolio");
+    if (!cached || cached.value === null) {
+      res.json({ synced: false });
+      return;
+    }
+    const { rating, reviewCount } = cached.value as { rating: number; reviewCount: number };
+
+    const { from } = resolveDateRangeFromQuery(req.query.period);
+    const periodStartDate = from.slice(0, 10);
+    const [latestSnapshot, baselineSnapshot] = await Promise.all([
+      getLatestSnapshot(),
+      getSnapshotOnOrBefore(periodStartDate),
+    ]);
+    const newReviewsThisPeriod =
+      latestSnapshot && baselineSnapshot ? latestSnapshot.reviewCount - baselineSnapshot.reviewCount : null;
+
+    res.json({
+      synced: true,
+      rating,
+      reviewCount,
+      newReviewsThisPeriod,
+      stale: !isCacheFresh(cached),
+      cachedAt: cached.fetchedAt,
+      lastError: cached.lastError,
+    });
+  } catch (err) {
+    logError("GET /api/dashboard/google-reviews failed", { error: String(err) });
+    res.status(502).json({ error: "Failed to load cached Google Reviews data." });
   }
 });
 

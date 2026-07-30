@@ -45,6 +45,16 @@ const envSchema = z.object({
   LEADSIMPLE_API_KEY: z.string().optional(),
   LEADSIMPLE_BASE_URL: z.string().url().default("https://api.leadsimple.com/v1"),
 
+  // Optional: Google Reviews tile (Dashboard > Top of Mind). ADDED
+  // 2026-07-30, per Jason directly — reuses the same Google API key already
+  // in use for the separate Map project (must have the Places API enabled).
+  // GOOGLE_PLACE_ID identifies Limehouse Property Management's specific
+  // Google Business listing — confirmed live via a one-time Find Place
+  // lookup: "Limehouse Property Management", 6056 Providence Rd Suite 200,
+  // Virginia Beach, VA 23464 -> ChIJN7QkS36VuokRZ-xMha2XDUw.
+  GOOGLE_PLACES_API_KEY: z.string().optional(),
+  GOOGLE_PLACE_ID: z.string().optional(),
+
   PORT: z.coerce.number().int().positive().default(3100),
   // FIXED 2026-07-30, per Sentinel's security review: this used to default
   // to "development" when unset, which is the WRONG failure direction —
@@ -101,4 +111,9 @@ export function isRentEngineConnected(): boolean {
 export function isLeadSimpleConnected(): boolean {
   const key = loadEnv().LEADSIMPLE_API_KEY;
   return typeof key === "string" && key.length > 0;
+}
+
+export function isGoogleReviewsConnected(): boolean {
+  const env = loadEnv();
+  return typeof env.GOOGLE_PLACES_API_KEY === "string" && env.GOOGLE_PLACES_API_KEY.length > 0 && typeof env.GOOGLE_PLACE_ID === "string" && env.GOOGLE_PLACE_ID.length > 0;
 }

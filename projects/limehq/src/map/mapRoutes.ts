@@ -290,8 +290,12 @@ router.get("/api/properties", async (req, res, next) => {
   try {
     const canView = await hasPermission(req.user.userId, "map.properties.view");
     if (!canView) throw new ApiError(403, "You do not have permission to view Map.");
+    // Same permission key staffRoutes.ts already gates staff-edit actions
+    // on — used here as the "Owner/Admin" signal for the deleted-staff
+    // attribution rule in resolveDisplayNames (mapQueries.ts).
+    const viewerCanSeeFormerStaff = await hasPermission(req.user.userId, "limehq.staff_management.edit");
     const pool = requireMapPool();
-    const properties = await fetchActiveMapProperties(pool);
+    const properties = await fetchActiveMapProperties(pool, viewerCanSeeFormerStaff);
     res.json({ ok: true, properties });
   } catch (err) {
     next(err);
@@ -412,8 +416,9 @@ router.get("/areas", async (req, res, next) => {
   try {
     const { canManage, canActivate } = await requireAreaView(req.user.userId);
     const displayName = await getDisplayName(req.user.userId);
+    const viewerCanSeeFormerStaff = await hasPermission(req.user.userId, "limehq.staff_management.edit");
     const pool = requireMapPool();
-    const areas = await listNamedAreas(pool);
+    const areas = await listNamedAreas(pool, viewerCanSeeFormerStaff);
 
     const config = {
       googleMapsApiKey: loadEnv().GOOGLE_MAPS_API_KEY ?? "",
@@ -447,8 +452,9 @@ router.get("/areas", async (req, res, next) => {
 router.get("/api/areas", async (req, res, next) => {
   try {
     await requireAreaView(req.user.userId);
+    const viewerCanSeeFormerStaff = await hasPermission(req.user.userId, "limehq.staff_management.edit");
     const pool = requireMapPool();
-    const areas = await listNamedAreas(pool);
+    const areas = await listNamedAreas(pool, viewerCanSeeFormerStaff);
     res.json({ ok: true, areas });
   } catch (err) {
     next(err);
@@ -508,8 +514,9 @@ router.get("/api/areas/:id", async (req, res, next) => {
     const id = parseInt(req.params.id ?? "", 10);
     if (isNaN(id)) throw new ApiError(400, "Invalid area ID.");
 
+    const viewerCanSeeFormerStaff = await hasPermission(req.user.userId, "limehq.staff_management.edit");
     const pool = requireMapPool();
-    const area = await getNamedArea(pool, id);
+    const area = await getNamedArea(pool, id, viewerCanSeeFormerStaff);
     if (!area) throw new ApiError(404, "Area not found.");
 
     const [matches, shadowLog] = await Promise.all([

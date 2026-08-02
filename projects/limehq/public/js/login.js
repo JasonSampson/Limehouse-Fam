@@ -22,7 +22,7 @@ form.addEventListener('submit', async (e) => {
     const data = await res.json();
 
     if (res.ok && data.ok) {
-      window.location.href = '/launcher';
+      window.location.href = data.redirect || '/launcher';
     } else if (res.status === 429) {
       const secs = data.retryAfterSeconds ?? 900;
       const mins = Math.ceil(secs / 60);

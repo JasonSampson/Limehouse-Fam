@@ -1,10 +1,12 @@
+import crypto from "node:crypto";
 import express, { Router } from "express";
 import { z } from "zod";
 import { getAppPool } from "../db/pool.js";
-import { hashPassword } from "../auth/password.js";
-import { hasPermission } from "../auth/permissions.js";
+import { hashPassword, validatePasswordStrength } from "../auth/password.js";
+import { hasPermission, getPermissionBreakdown, type PermissionBreakdown } from "../auth/permissions.js";
 import { requireSession } from "../auth/requireSession.js";
 import { ApiError } from "../lib/apiError.js";
+import { writeAuditLog } from "../lib/auditLog.js";
 
 const router = Router();
 
@@ -104,6 +106,18 @@ const SHARED_CSS = `
   }
 
   .nav-right { display: flex; align-items: center; gap: 1rem; }
+  .page-tabs {
+    display: flex; gap: 0.5rem; padding: 0 2rem; background: #fff;
+    border-bottom: 1px solid #e5e5e5;
+  }
+  .page-tab {
+    padding: 0.9rem 0.25rem; margin: 0 0.75rem;
+    font-size: 0.9rem; font-weight: 600; color: #666;
+    text-decoration: none; border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .page-tab:hover { color: #333; }
+  .page-tab.active { color: #009344; border-bottom-color: #009344; }
   .user-menu { position: relative; }
   .user-menu-trigger {
     background: none; border: none; font-family: 'Quicksand', sans-serif;
@@ -410,6 +424,14 @@ const SHARED_CSS = `
     margin: 0;
     font-weight: 500;
   }
+  .perm-source {
+    font-size: 0.72rem;
+    margin-left: auto;
+    padding-left: 0.5rem;
+    white-space: nowrap;
+  }
+  .perm-source-role { color: #999; }
+  .perm-source-override { color: #b6742e; font-weight: 600; }
   .save-btn {
     width: auto;
     margin-top: 0;
@@ -436,7 +458,13 @@ const SHARED_CSS = `
   }
 `;
 
-function layout(title: string, displayName: string, content: string): string {
+function layout(title: string, displayName: string, content: string, showManageRoles = false): string {
+  const tabBar = showManageRoles
+    ? `<div class="page-tabs">
+        <a href="/staff" class="page-tab active">Staff</a>
+        <a href="/roles" class="page-tab">Roles</a>
+      </div>`
+    : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -462,6 +490,7 @@ function layout(title: string, displayName: string, content: string): string {
       </div>
     </div>
   </nav>
+  ${tabBar}
   <main class="main">
     ${content}
   </main>
@@ -478,7 +507,10 @@ const createStaffSchema = z.object({
   display_name: z.string().trim().min(1, "Name is required"),
   email: z.string().trim().email("Enter a valid email address"),
   role_template_id: z.coerce.number().int().positive("Role is required"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  // Length/complexity itself is checked by the shared validatePasswordStrength()
+  // in the route handler (src/auth/password.ts) so the error message can list
+  // every missing requirement, not just fail on the first zod rule.
+  password: z.string().min(1, "Password is required"),
 });
 
 const updateStaffSchema = z.object({
@@ -509,6 +541,11 @@ interface StaffRow {
   // Carried over from the old dashboard "Manage Staff" screen, per Jason
   // directly, when that screen was retired in favor of this one.
   last_login_at: string | null;
+  // Soft-delete marker (migration 0012). Non-null means this account was
+  // "deleted" — fetchAllStaff excludes these; fetchOneStaff still returns
+  // them so the delete-confirmation page and audit trail can read the row,
+  // but every other route that receives a deleted target treats it as 404.
+  deleted_at: string | null;
 }
 
 async function fetchRoles(): Promise<RoleTemplate[]> {
@@ -524,9 +561,10 @@ async function fetchAllStaff(): Promise<StaffRow[]> {
   const result = await pool.query<StaffRow>(
     `SELECT u.id, u.display_name, u.email, u.active,
             u.role_template_id, rt.name AS role_name, rt.system_role_key,
-            u.last_login_at
+            u.last_login_at, u.deleted_at
      FROM users u
      JOIN role_templates rt ON rt.id = u.role_template_id
+     WHERE u.deleted_at IS NULL
      ORDER BY u.display_name`,
   );
   return result.rows;
@@ -537,7 +575,7 @@ async function fetchOneStaff(id: number): Promise<StaffRow | null> {
   const result = await pool.query<StaffRow>(
     `SELECT u.id, u.display_name, u.email, u.active,
             u.role_template_id, rt.name AS role_name, rt.system_role_key,
-            u.last_login_at
+            u.last_login_at, u.deleted_at
      FROM users u
      JOIN role_templates rt ON rt.id = u.role_template_id
      WHERE u.id = $1`,
@@ -572,14 +610,17 @@ router.get("/", async (req, res, next) => {
       throw new ApiError(403, "You do not have permission to manage staff.");
     }
     const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
-    const [displayName, staff] = await Promise.all([
+    const canDelete = await hasPermission(req.user.userId, "limehq.staff_management.delete");
+    const [displayName, staff, canManageRoles] = await Promise.all([
       getDisplayName(req.user.userId),
       fetchAllStaff(),
+      hasPermission(req.user.userId, "limehq.role_management.view"),
     ]);
 
     const rows = staff
       .map((u) => {
         const isOwner = u.system_role_key === "owner";
+        const isSelf = u.id === req.user.userId;
         const activeBadge = u.active
           ? `<span class="badge badge-active">Active</span>`
           : `<span class="badge badge-inactive">Inactive</span>`;
@@ -591,6 +632,20 @@ router.get("/", async (req, res, next) => {
         const permBtn = !isOwner
           ? `<a href="/staff/${esc(u.id)}/permissions" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Permissions</a>`
           : "";
+        // "Lost my phone" reset — the ONLY recovery path for non-Owner
+        // staff (no backup codes). Same permission gate as Edit; never
+        // shown for the Owner row (mirrors the isOwner guard already used
+        // for editBtn/deleteBtn above).
+        const reset2faBtn =
+          !isOwner && canEdit
+            ? `<a href="/staff/${esc(u.id)}/reset-2fa" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Reset 2FA</a>`
+            : "";
+        // Can't delete the Owner account or your own account (locking
+        // yourself out isn't recoverable from inside this same UI).
+        const deleteBtn =
+          !isOwner && !isSelf && canDelete
+            ? `<a href="/staff/${esc(u.id)}/delete" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem;color:#dc2626;border-color:#fca5a5">Delete</a>`
+            : "";
         return `
       <tr>
         <td>${esc(u.display_name)}</td>
@@ -598,7 +653,7 @@ router.get("/", async (req, res, next) => {
         <td>${esc(u.role_name)}${ownerBadge}</td>
         <td>${activeBadge}</td>
         <td>${esc(formatLastLogin(u.last_login_at))}</td>
-        <td style="text-align:right;white-space:nowrap;display:flex;gap:0.4rem;justify-content:flex-end">${editBtn}${permBtn}</td>
+        <td style="text-align:right;white-space:nowrap;display:flex;gap:0.4rem;justify-content:flex-end">${editBtn}${permBtn}${reset2faBtn}${deleteBtn}</td>
       </tr>`;
       })
       .join("");
@@ -607,12 +662,23 @@ router.get("/", async (req, res, next) => {
       ? `<a href="/staff/new" class="btn-primary">+ Add Staff</a>`
       : "";
 
+    const deletedBanner =
+      req.query["deleted"] === "1"
+        ? `<div class="success-banner">Staff member deleted.</div>`
+        : "";
+    const reset2faBanner =
+      req.query["reset2fa"] === "1"
+        ? `<div class="success-banner">Two-factor authentication reset. They'll be asked to set it up again next time they sign in.</div>`
+        : "";
+
     const content = `
       <div class="card">
         <div class="page-header">
           <h1 class="page-title">Manage Staff</h1>
           ${addBtn}
         </div>
+        ${deletedBanner}
+        ${reset2faBanner}
         <table class="staff-table">
           <thead>
             <tr>
@@ -630,7 +696,7 @@ router.get("/", async (req, res, next) => {
         </table>
       </div>`;
 
-    res.send(layout("Manage Staff", displayName, content));
+    res.send(layout("Manage Staff", displayName, content, canManageRoles));
   } catch (err) {
     next(err);
   }
@@ -688,8 +754,8 @@ function addStaffForm(
         <div class="form-group">
           <label for="password">Temporary Password</label>
           <input type="password" id="password" name="password"
-                 required autocomplete="new-password" minlength="8"
-                 placeholder="8 characters minimum"/>
+                 required autocomplete="new-password" minlength="12"
+                 placeholder="12+ characters, incl. uppercase, number, symbol"/>
         </div>
         <div class="form-actions">
           <button type="submit" class="btn-primary">Add Staff Member</button>
@@ -730,6 +796,25 @@ router.post("/", async (req, res, next) => {
     }
 
     const { display_name, email, role_template_id, password } = parsed.data;
+
+    const strength = validatePasswordStrength(password);
+    if (!strength.valid) {
+      const [displayName, roles] = await Promise.all([
+        getDisplayName(req.user.userId),
+        fetchRoles(),
+      ]);
+      res
+        .status(400)
+        .send(
+          layout(
+            "Add Staff Member",
+            displayName,
+            addStaffForm(roles, req.body as Record<string, string>, strength.errors.join(" ")),
+          ),
+        );
+      return;
+    }
+
     const passwordHash = await hashPassword(password);
     const pool = getAppPool();
 
@@ -794,7 +879,7 @@ router.get("/:id/edit", async (req, res, next) => {
       fetchRoles(),
     ]);
 
-    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
     if (target.system_role_key === "owner") {
       throw new ApiError(403, "The Owner account cannot be edited.");
     }
@@ -882,16 +967,6 @@ async function fetchCatalog(): Promise<CatalogRow[]> {
   return r.rows;
 }
 
-async function fetchUserGrantedKeys(userId: number): Promise<Set<string>> {
-  const pool = getAppPool();
-  const r = await pool.query<{ permission_key: string }>(
-    `SELECT permission_key FROM user_permission_overrides
-     WHERE user_id = $1 AND granted = true`,
-    [userId],
-  );
-  return new Set(r.rows.map((x) => x.permission_key));
-}
-
 async function fetchRoleTemplatesWithPerms(): Promise<RoleTemplateWithPerms[]> {
   const pool = getAppPool();
   const roles = await pool.query<{ id: number; name: string; system_role_key: string | null }>(
@@ -922,9 +997,8 @@ const MODULE_LABEL: Record<string, string> = {
 
 function buildPermissionsChecklist(
   catalog: CatalogRow[],
-  grantedKeys: Set<string>,
+  breakdown: PermissionBreakdown,
   canEdit: boolean,
-  userId: number,
 ): string {
   const moduleOrder: string[] = [];
   const byModule = new Map<string, CatalogRow[]>();
@@ -940,15 +1014,28 @@ function buildPermissionsChecklist(
     const label = MODULE_LABEL[mod] ?? mod.replace(/_/g, " ");
     const items = (byModule.get(mod) ?? [])
       .map((p) => {
-        const checked = grantedKeys.has(p.permission_key) ? " checked" : "";
+        const checked = breakdown.effectiveKeys.has(p.permission_key) ? " checked" : "";
         const disabled = !canEdit ? " disabled" : "";
         const fieldName = `perm_${p.permission_key}`;
+
+        // A personal override "counts" as an exception only when its value
+        // actually differs from the role's own default — an override row
+        // that happens to match the role isn't shown as an exception.
+        const hasOverride = breakdown.overrides.has(p.permission_key);
+        const overrideGranted = breakdown.overrides.get(p.permission_key);
+        const roleGranted = breakdown.roleGrantedKeys.has(p.permission_key);
+        const isException = hasOverride && overrideGranted !== roleGranted;
+        const sourceTag = isException
+          ? `<span class="perm-source perm-source-override">(individual override)</span>`
+          : `<span class="perm-source perm-source-role">(from role)</span>`;
+
         return `
           <div class="perm-row">
             <input type="checkbox" id="${esc(fieldName)}" name="${esc(fieldName)}"
                    value="on"${checked}${disabled}
                    data-key="${esc(p.permission_key)}"/>
             <label for="${esc(fieldName)}">${esc(p.label)}</label>
+            ${sourceTag}
           </div>`;
       })
       .join("");
@@ -975,15 +1062,16 @@ router.get("/:id/permissions", async (req, res, next) => {
     const id = parseInt(req.params.id ?? "", 10);
     if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
 
-    const [displayName, target, catalog, grantedKeys, roleTemplates] = await Promise.all([
+    const [displayName, target, catalog, roleTemplates] = await Promise.all([
       getDisplayName(req.user.userId),
       fetchOneStaff(id),
       fetchCatalog(),
-      fetchUserGrantedKeys(id),
       fetchRoleTemplatesWithPerms(),
     ]);
 
-    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
+
+    const breakdown = await getPermissionBreakdown(id, target.role_template_id);
 
     const isOwner = target.system_role_key === "owner";
     const isNew = req.query["new"] === "1";
@@ -1012,7 +1100,7 @@ router.get("/:id/permissions", async (req, res, next) => {
 
     const checklist = isOwner
       ? ""
-      : buildPermissionsChecklist(catalog, grantedKeys, canEdit, id);
+      : buildPermissionsChecklist(catalog, breakdown, canEdit);
 
     const templateDropdown = !isOwner && canEdit
       ? `<div class="template-bar">
@@ -1079,24 +1167,41 @@ router.post("/:id/permissions", async (req, res, next) => {
     if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
 
     const target = await fetchOneStaff(id);
-    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
     if (target.system_role_key === "owner") throw new ApiError(403, "Owner permissions cannot be edited.");
 
     const catalog = await fetchCatalog();
     const body = req.body as Record<string, string>;
     const pool = getAppPool();
 
+    // Only the role baseline matters here (not any prior override) — the
+    // submitted state is compared against what the CURRENT role grants so
+    // that user_permission_overrides only ever holds genuine exceptions.
+    const breakdown = await getPermissionBreakdown(id, target.role_template_id);
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       for (const row of catalog) {
         const isGranted = body[`perm_${row.permission_key}`] === "on";
-        await client.query(
-          `INSERT INTO user_permission_overrides (user_id, permission_key, granted)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (user_id, permission_key) DO UPDATE SET granted = $3, updated_at = now()`,
-          [id, row.permission_key, isGranted],
-        );
+        const roleDefault = breakdown.roleGrantedKeys.has(row.permission_key);
+        if (isGranted === roleDefault) {
+          // Matches the role's default — drop any stale override so this
+          // permission cleanly falls back to "inherited from role."
+          await client.query(
+            `DELETE FROM user_permission_overrides
+             WHERE user_id = $1 AND permission_key = $2`,
+            [id, row.permission_key],
+          );
+        } else {
+          // Genuine exception — record it as a personal override.
+          await client.query(
+            `INSERT INTO user_permission_overrides (user_id, permission_key, granted)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, permission_key) DO UPDATE SET granted = $3, updated_at = now()`,
+            [id, row.permission_key, isGranted],
+          );
+        }
       }
       await client.query("COMMIT");
     } catch (err) {
@@ -1129,7 +1234,7 @@ router.get("/:id/reset-password", async (req, res, next) => {
       fetchOneStaff(id),
     ]);
 
-    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
     if (target.system_role_key === "owner") throw new ApiError(403, "The Owner password cannot be reset here.");
 
     res.send(layout("Reset Password", displayName, resetPasswordForm(target, null)));
@@ -1153,8 +1258,8 @@ function resetPasswordForm(target: StaffRow, errorMsg: string | null): string {
         <div class="form-group">
           <label for="new_password">New Password</label>
           <input type="password" id="new_password" name="new_password"
-                 required autocomplete="new-password" minlength="8"
-                 placeholder="8 characters minimum"/>
+                 required autocomplete="new-password" minlength="12"
+                 placeholder="12+ characters, incl. uppercase, number, symbol"/>
         </div>
         <div class="form-actions">
           <button type="submit" class="btn-primary">Set New Password</button>
@@ -1177,13 +1282,14 @@ router.post("/:id/reset-password", async (req, res, next) => {
     if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
 
     const target = await fetchOneStaff(id);
-    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
     if (target.system_role_key === "owner") throw new ApiError(403, "The Owner password cannot be reset here.");
 
     const newPassword = String((req.body as Record<string, string>).new_password ?? "").trim();
-    if (newPassword.length < 8) {
+    const strength = validatePasswordStrength(newPassword);
+    if (!strength.valid) {
       const displayName = await getDisplayName(req.user.userId);
-      res.status(400).send(layout("Reset Password", displayName, resetPasswordForm(target, "Password must be at least 8 characters.")));
+      res.status(400).send(layout("Reset Password", displayName, resetPasswordForm(target, strength.errors.join(" "))));
       return;
     }
 
@@ -1216,7 +1322,7 @@ router.post("/:id", async (req, res, next) => {
 
     // Re-fetch to verify the target hasn't become owner in the meantime.
     const target = await fetchOneStaff(id);
-    if (!target) throw new ApiError(404, "Staff member not found.");
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
     if (target.system_role_key === "owner") {
       throw new ApiError(403, "The Owner account cannot be edited.");
     }
@@ -1288,6 +1394,212 @@ router.post("/:id", async (req, res, next) => {
     }
 
     res.redirect(302, "/staff");
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// GET /staff/:id/delete  — delete confirmation page                   //
+// ------------------------------------------------------------------ //
+// Soft-delete only (migration 0012) — see that migration's comment for why
+// a hard DELETE isn't safe here. This is a stronger action than deactivate,
+// so — matching the reset-password confirm-page precedent above — it gets
+// its own page with an explicit confirm step rather than a single click.
+
+function deleteStaffForm(target: StaffRow, errorMsg: string | null): string {
+  return `
+    <div class="card" style="max-width:480px">
+      <div class="page-header">
+        <h1 class="page-title">Delete Staff Member</h1>
+      </div>
+      <p style="font-size:0.9rem;color:#555;margin-bottom:1.25rem">
+        This will remove <strong>${esc(target.display_name)}</strong> from Manage Staff and
+        permanently disable their sign-in. This cannot be undone from this screen.
+        Their name stays attached to any historical records they created (e.g. Map
+        flags) for attribution — visible only to Owner/Admin viewers once deleted.
+      </p>
+      ${errorMsg ? `<div class="error-banner">${esc(errorMsg)}</div>` : ""}
+      <form method="POST" action="/staff/${esc(target.id)}/delete">
+        <div class="form-actions">
+          <button type="submit" class="btn-primary" style="background:#dc2626">Delete ${esc(target.display_name)}</button>
+          <a href="/staff" class="btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>`;
+}
+
+router.get("/:id/delete", async (req, res, next) => {
+  try {
+    const canDelete = await hasPermission(req.user.userId, "limehq.staff_management.delete");
+    if (!canDelete) throw new ApiError(403, "You do not have permission to delete staff.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+    if (id === req.user.userId) throw new ApiError(403, "You cannot delete your own account.");
+
+    const [displayName, target] = await Promise.all([
+      getDisplayName(req.user.userId),
+      fetchOneStaff(id),
+    ]);
+
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") throw new ApiError(403, "The Owner account cannot be deleted.");
+
+    res.send(layout("Delete Staff Member", displayName, deleteStaffForm(target, null)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// POST /staff/:id/delete  — apply soft delete                        //
+// ------------------------------------------------------------------ //
+
+router.post("/:id/delete", async (req, res, next) => {
+  try {
+    const canDelete = await hasPermission(req.user.userId, "limehq.staff_management.delete");
+    if (!canDelete) throw new ApiError(403, "You do not have permission to delete staff.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+    if (id === req.user.userId) throw new ApiError(403, "You cannot delete your own account.");
+
+    const target = await fetchOneStaff(id);
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") throw new ApiError(403, "The Owner account cannot be deleted.");
+
+    // Overwrite password_hash with a random, unguessable value rather than
+    // clearing it — some code paths may not null-check password_hash before
+    // calling bcrypt.compare, so a NULL could throw instead of safely
+    // failing. A random hash always fails verifyPassword() cleanly, and
+    // deleted_at / active=false already block the account before password
+    // check is ever reached anyway (belt-and-suspenders).
+    const unusablePasswordHash = await hashPassword(crypto.randomBytes(32).toString("hex"));
+
+    const pool = getAppPool();
+    await pool.query(
+      `UPDATE users
+       SET deleted_at    = now(),
+           active        = false,
+           password_hash = $1,
+           updated_at    = now()
+       WHERE id = $2`,
+      [unusablePasswordHash, id],
+    );
+
+    await writeAuditLog({
+      actorUserId: req.user.userId,
+      action: "staff.delete",
+      targetType: "user",
+      targetId: id,
+      detail: { email: target.email, display_name: target.display_name, role_name: target.role_name },
+    });
+
+    res.redirect(302, "/staff?deleted=1");
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// GET /staff/:id/reset-2fa  — "lost my phone" confirmation page       //
+// ------------------------------------------------------------------ //
+// The only recovery path for non-Owner staff — there are deliberately no
+// backup codes (Jason rejected them). Gated by the same
+// limehq.staff_management.edit permission used for other staff-management
+// actions on this page; never usable on the Owner row (mirrors the isOwner
+// guard already used elsewhere in this file for edit/delete). A stronger-
+// than-deactivate action, so it gets its own confirm step rather than a
+// bare one-click link — same precedent as delete/reset-password above.
+
+function reset2faForm(target: StaffRow, errorMsg: string | null): string {
+  return `
+    <div class="card" style="max-width:480px">
+      <div class="page-header">
+        <h1 class="page-title">Reset Two-Factor Authentication</h1>
+      </div>
+      <p style="font-size:0.9rem;color:#555;margin-bottom:1.25rem">
+        This clears <strong>${esc(target.display_name)}</strong>'s authenticator enrollment and signs
+        them out of any existing session immediately. The next time they sign in, they'll be
+        required to set up two-factor authentication again from scratch.
+      </p>
+      ${errorMsg ? `<div class="error-banner">${esc(errorMsg)}</div>` : ""}
+      <form method="POST" action="/staff/${esc(target.id)}/reset-2fa">
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">Reset 2FA for ${esc(target.display_name)}</button>
+          <a href="/staff" class="btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>`;
+}
+
+router.get("/:id/reset-2fa", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to reset two-factor authentication.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+
+    const [displayName, target] = await Promise.all([
+      getDisplayName(req.user.userId),
+      fetchOneStaff(id),
+    ]);
+
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") {
+      throw new ApiError(403, "The Owner's two-factor authentication cannot be reset here — see the Owner email-recovery flow instead.");
+    }
+
+    res.send(layout("Reset 2FA", displayName, reset2faForm(target, null)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// POST /staff/:id/reset-2fa  — apply the reset                        //
+// ------------------------------------------------------------------ //
+
+router.post("/:id/reset-2fa", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.staff_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to reset two-factor authentication.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid staff ID.");
+
+    const target = await fetchOneStaff(id);
+    if (!target || target.deleted_at) throw new ApiError(404, "Staff member not found.");
+    if (target.system_role_key === "owner") {
+      throw new ApiError(403, "The Owner's two-factor authentication cannot be reset here — see the Owner email-recovery flow instead.");
+    }
+
+    const pool = getAppPool();
+    // Bumping session_version invalidates any of their already-issued
+    // sessions immediately (requireSession.ts compares it against the
+    // JWT's stamped value on every request).
+    await pool.query(
+      `UPDATE users
+       SET totp_secret          = NULL,
+           totp_enabled_at      = NULL,
+           totp_failed_attempts = 0,
+           session_version      = session_version + 1,
+           updated_at           = now()
+       WHERE id = $1`,
+      [id],
+    );
+
+    await writeAuditLog({
+      actorUserId: req.user.userId,
+      action: "staff.reset_2fa",
+      targetType: "user",
+      targetId: id,
+      detail: { email: target.email, display_name: target.display_name },
+    });
+
+    res.redirect(302, "/staff?reset2fa=1");
   } catch (err) {
     next(err);
   }

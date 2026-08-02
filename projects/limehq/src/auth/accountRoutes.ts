@@ -2,7 +2,7 @@ import { Router } from "express";
 import express from "express";
 import { z } from "zod";
 import { requireSession } from "./requireSession.js";
-import { verifyPassword, hashPassword } from "./password.js";
+import { verifyPassword, hashPassword, validatePasswordStrength } from "./password.js";
 import { getAppPool } from "../db/pool.js";
 
 export const accountRouter = Router();
@@ -96,8 +96,8 @@ function renderPage(displayName: string, successMsg: string | null, errorMsg: st
       </div>
       <div class="form-group">
         <label for="new_password">New password</label>
-        <input type="password" id="new_password" name="new_password" autocomplete="new-password" required />
-        <p class="hint">Minimum 8 characters.</p>
+        <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="12" />
+        <p class="hint">Minimum 12 characters, including an uppercase letter, a number, and a symbol.</p>
       </div>
       <div class="form-group">
         <label for="confirm_password">Confirm new password</label>
@@ -112,7 +112,9 @@ function renderPage(displayName: string, successMsg: string | null, errorMsg: st
 
 const changePasswordSchema = z.object({
   current_password: z.string().min(1, "Current password is required."),
-  new_password: z.string().min(8, "New password must be at least 8 characters."),
+  // Length/complexity is checked in full by validatePasswordStrength() below
+  // so every missing requirement can be reported, not just the first one.
+  new_password: z.string().min(1, "New password is required."),
   confirm_password: z.string().min(1, "Please confirm your new password."),
 });
 
@@ -151,6 +153,12 @@ accountRouter.post("/account/password", requireSession, async (req, res, next) =
 
     if (new_password !== confirm_password) {
       res.send(renderPage(displayName, null, "New passwords don't match."));
+      return;
+    }
+
+    const strength = validatePasswordStrength(new_password);
+    if (!strength.valid) {
+      res.send(renderPage(displayName, null, strength.errors.join(" ")));
       return;
     }
 

@@ -5,6 +5,9 @@ import { verifyPassword } from "./password.js";
 import {
   createSessionToken,
   verifySessionToken,
+  createPending2faToken,
+  pending2faCookieOptions,
+  PENDING_2FA_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
 } from "./session.js";
@@ -46,9 +49,10 @@ router.post("/login", async (req, res, next) => {
       active: boolean;
       failed_login_attempts: number;
       locked_until: Date | null;
+      totp_enabled_at: Date | null;
     }>(
       `SELECT id, email, display_name, password_hash, active,
-              failed_login_attempts, locked_until
+              failed_login_attempts, locked_until, totp_enabled_at
        FROM users
        WHERE email = $1`,
       [email],
@@ -98,7 +102,10 @@ router.post("/login", async (req, res, next) => {
       return;
     }
 
-    // Step 2 — issue session. Reset lockout state and record the login.
+    // Step 2 — password is correct. Reset the PASSWORD lockout state and
+    // record the login, but do NOT touch totp_failed_attempts here — that
+    // counter only resets on a correct TOTP code (src/auth/totpRoutes.ts),
+    // so a leaked password alone never buys unlimited free code guesses.
     await pool.query(
       `UPDATE users
        SET failed_login_attempts = 0,
@@ -109,16 +116,15 @@ router.post("/login", async (req, res, next) => {
       [user.id],
     );
 
-    const token = await createSessionToken({
-      userId: user.id,
-      email: user.email,
-      authenticatedAt: Date.now(),
-    });
-
-    res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions);
+    // 2FA is mandatory, no exemptions (including Owner) — a real session is
+    // never issued directly from a password check. Issue a short-lived
+    // pending-2FA token instead and send the browser to whichever TOTP step
+    // applies: setup (never enrolled) or code entry (already enrolled).
+    const pendingToken = await createPending2faToken(user.id);
+    res.cookie(PENDING_2FA_COOKIE_NAME, pendingToken, pending2faCookieOptions());
     res.json({
       ok: true,
-      user: { id: user.id, email: user.email, displayName: user.display_name },
+      redirect: user.totp_enabled_at ? "/auth/totp" : "/account/totp/setup",
     });
   } catch (err) {
     next(err);
@@ -153,8 +159,8 @@ router.post("/reauth", requireSession, async (req, res, next) => {
     }
 
     const pool = getAppPool();
-    const userResult = await pool.query<{ password_hash: string }>(
-      `SELECT password_hash FROM users WHERE id = $1`,
+    const userResult = await pool.query<{ password_hash: string; session_version: number }>(
+      `SELECT password_hash, session_version FROM users WHERE id = $1`,
       [req.user.userId],
     );
 
@@ -169,14 +175,20 @@ router.post("/reauth", requireSession, async (req, res, next) => {
       return;
     }
 
-    // Re-issue the session with a fresh authenticatedAt timestamp.
+    // Re-issue the session with a fresh authenticatedAt timestamp (resets
+    // the 8-hour absolute cap too, same as a fresh login) and a fresh
+    // lastActivityAt. sessionVersion carries forward unchanged — reauth
+    // proves the same identity again, it isn't a 2FA reset.
+    const now = Date.now();
     const token = await createSessionToken({
       userId: req.user.userId,
       email: req.user.email,
-      authenticatedAt: Date.now(),
+      authenticatedAt: now,
+      sessionVersion: user.session_version,
+      lastActivityAt: now,
     });
 
-    res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions);
+    res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions());
     res.json({ ok: true });
   } catch (err) {
     next(err);

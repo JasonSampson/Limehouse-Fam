@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { loadEnv } from "./config/env.js";
 import { logInfo, logError } from "./lib/appLogger.js";
 import { authRouter } from "./auth/authRoutes.js";
+import { devLoginRoutes } from "./auth/devLoginRoutes.js"; // TEMPORARY — see that file's header comment. Delete both before committing.
 import { staffRouter } from "./staff/staffRoutes.js";
 import { rolesRouter } from "./roles/rolesRoutes.js";
 import { mapRouter } from "./map/mapRoutes.js";
@@ -14,6 +15,8 @@ import { ApiError } from "./lib/apiError.js";
 import { requireSession } from "./auth/requireSession.js";
 import { SESSION_COOKIE_NAME } from "./auth/session.js";
 import { accountRouter } from "./auth/accountRoutes.js";
+import { totpRouter } from "./auth/totpRoutes.js";
+import { recoveryRouter } from "./auth/recoveryRoutes.js";
 import { hasPermission } from "./auth/permissions.js";
 import { getAppPool } from "./db/pool.js";
 
@@ -75,6 +78,14 @@ app.get("/health", (_req, res) => {
 // Auth routes: login, logout, re-auth, me, handoff.
 app.use("/auth", authRouter);
 
+// TEMPORARY — see devLoginRoutes.ts's header comment. Only ever registered
+// when NODE_ENV is exactly "development"; in any other environment this
+// route simply doesn't exist (404), even if this file somehow shipped.
+// Delete this block and devLoginRoutes.ts before committing.
+if (env.NODE_ENV === "development") {
+  app.use(devLoginRoutes);
+}
+
 // Staff management routes — protected, session-required.
 app.use("/staff", staffRouter);
 
@@ -87,6 +98,12 @@ app.use("/map", mapRouter);
 
 // Account self-service (change password) — protected, session-required.
 app.use("/", accountRouter);
+
+// TOTP setup/verification (forced 2FA flow) and Owner-only email recovery —
+// reached only via a pending-2FA token or a recovery link, neither of which
+// is a full session, so these are NOT behind requireSession.
+app.use("/", totpRouter);
+app.use("/", recoveryRouter);
 
 // Static files (login page, fonts, etc.) served before catch-all routes.
 const publicDir = path.join(__dirname, "..", "public");

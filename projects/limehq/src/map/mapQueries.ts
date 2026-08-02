@@ -11,9 +11,20 @@ import { isPointInPolygon, validateBoundary, type LatLng } from "./pointInPolygo
  * public.users — a table Map's own pool (map_staff_app) cannot see, by
  * design (schema.md's two-way fence). Anything that needs to show "who
  * flagged this" / "who activated this" calls this against getAppPool()
- * instead, and joins in application code. */
+ * instead, and joins in application code.
+ *
+ * Also the single place that applies the "deleted staff member" attribution
+ * rule (per staff-delete feature, migration 0012's soft-delete column):
+ * an Owner/Admin viewer sees "Name (former staff member)"; anyone else sees
+ * nothing identifying (an em dash) — the deleted person's name is not
+ * exposed to non-admin staff. `viewerCanSeeFormerStaff` should be the same
+ * gate already used elsewhere for admin-only staff actions
+ * (limehq.staff_management.edit via hasPermission — see staffRoutes.ts's
+ * canEdit), passed in by the caller so this function doesn't need its own
+ * copy of that permission check. */
 async function resolveDisplayNames(
   userIds: Array<string | number | null | undefined>,
+  viewerCanSeeFormerStaff: boolean,
 ): Promise<Map<number, string>> {
   const map = new Map<number, string>();
   // Every id this function receives is a bigint FK (flagged_by_user_id,
@@ -29,11 +40,17 @@ async function resolveDisplayNames(
   ].filter((id) => Number.isFinite(id) && id > 0);
   if (ids.length === 0) return map;
   const pool = getAppPool();
-  const result = await pool.query<{ id: number; display_name: string }>(
-    `SELECT id, display_name FROM users WHERE id = ANY($1::bigint[])`,
+  const result = await pool.query<{ id: number; display_name: string; deleted_at: string | null }>(
+    `SELECT id, display_name, deleted_at FROM users WHERE id = ANY($1::bigint[])`,
     [ids],
   );
-  for (const row of result.rows) map.set(Number(row.id), row.display_name);
+  for (const row of result.rows) {
+    if (row.deleted_at) {
+      map.set(Number(row.id), viewerCanSeeFormerStaff ? `${row.display_name} (former staff member)` : "—");
+    } else {
+      map.set(Number(row.id), row.display_name);
+    }
+  }
   return map;
 }
 
@@ -116,7 +133,7 @@ export function reasonCodeLabel(code: string): string {
  * application code is simpler to read and reason about than one query
  * producing a fan-out of duplicate rows).
  */
-export async function fetchActiveMapProperties(pool: Pool): Promise<MapProperty[]> {
+export async function fetchActiveMapProperties(pool: Pool, viewerCanSeeFormerStaff: boolean): Promise<MapProperty[]> {
   const propertiesResult = await pool.query<{
     id: number;
     address_line1: string;
@@ -345,7 +362,7 @@ export async function fetchActiveMapProperties(pool: Pool): Promise<MapProperty[
 
   // Exclusions: resolve "who flagged it" against LimeHQ's own users table.
   const flaggerIds = exclusionsResult.rows.map((e) => e.flagged_by_user_id);
-  const displayNames = await resolveDisplayNames(flaggerIds);
+  const displayNames = await resolveDisplayNames(flaggerIds, viewerCanSeeFormerStaff);
   const exclusionByProperty = new Map<number, MapExclusion>();
   for (const e of exclusionsResult.rows) {
     exclusionByProperty.set(Number(e.property_id), {
@@ -433,7 +450,7 @@ export interface NamedArea {
   retiredAt: string | null;
 }
 
-export async function listNamedAreas(pool: Pool): Promise<NamedArea[]> {
+export async function listNamedAreas(pool: Pool, viewerCanSeeFormerStaff: boolean): Promise<NamedArea[]> {
   const result = await pool.query<{
     id: number;
     area_name: string;
@@ -458,7 +475,7 @@ export async function listNamedAreas(pool: Pool): Promise<NamedArea[]> {
     r.activated_by_user_id,
     r.retired_by_user_id,
   ]);
-  const names = await resolveDisplayNames(userIds);
+  const names = await resolveDisplayNames(userIds, viewerCanSeeFormerStaff);
 
   return result.rows.map((r) => ({
     id: r.id,
@@ -474,8 +491,12 @@ export async function listNamedAreas(pool: Pool): Promise<NamedArea[]> {
   }));
 }
 
-export async function getNamedArea(pool: Pool, id: number): Promise<NamedArea | null> {
-  const areas = await listNamedAreas(pool);
+export async function getNamedArea(
+  pool: Pool,
+  id: number,
+  viewerCanSeeFormerStaff: boolean,
+): Promise<NamedArea | null> {
+  const areas = await listNamedAreas(pool, viewerCanSeeFormerStaff);
   return areas.find((a) => a.id === id) ?? null;
 }
 

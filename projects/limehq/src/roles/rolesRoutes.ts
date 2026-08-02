@@ -1,8 +1,9 @@
 import express, { Router } from "express";
 import { getAppPool } from "../db/pool.js";
-import { hasPermission } from "../auth/permissions.js";
+import { assertNotOwnerRole, hasPermission } from "../auth/permissions.js";
 import { requireSession } from "../auth/requireSession.js";
 import { ApiError } from "../lib/apiError.js";
+import { logWarn } from "../lib/appLogger.js";
 
 const router = Router();
 
@@ -92,12 +93,18 @@ const SHARED_CSS = `
   }
 
   .nav-right { display: flex; align-items: center; gap: 1rem; }
-  .nav-link {
-    font-size: 0.875rem; font-weight: 600; color: #009344;
-    text-decoration: none; padding: 0.3rem 0;
-    border-bottom: 2px solid transparent; transition: border-color 0.15s;
+  .page-tabs {
+    display: flex; gap: 0.5rem; padding: 0 2rem; background: #fff;
+    border-bottom: 1px solid #e5e5e5;
   }
-  .nav-link:hover { border-color: #009344; }
+  .page-tab {
+    padding: 0.9rem 0.25rem; margin: 0 0.75rem;
+    font-size: 0.9rem; font-weight: 600; color: #666;
+    text-decoration: none; border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .page-tab:hover { color: #333; }
+  .page-tab.active { color: #009344; border-bottom-color: #009344; }
   .user-menu { position: relative; }
   .user-menu-trigger {
     background: none; border: none; font-family: 'Quicksand', sans-serif;
@@ -250,6 +257,7 @@ const SHARED_CSS = `
   .grid-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    padding-right: 8rem;
   }
   .perm-table {
     width: 100%;
@@ -257,18 +265,37 @@ const SHARED_CSS = `
     font-size: 0.875rem;
   }
   .perm-table th.role-header {
-    font-weight: 700;
-    font-size: 0.8rem;
-    color: #009344;
-    white-space: nowrap;
+    position: relative;
+    overflow: visible;
     padding: 0.5rem 0.4rem 0.75rem;
     border-bottom: 2px solid #eee;
     vertical-align: bottom;
     text-align: left;
-    writing-mode: vertical-lr;
-    transform: rotate(180deg);
-    height: 200px;
+    height: 190px;
     min-width: 32px;
+  }
+  .perm-table th.role-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 2px;
+    height: calc(0.75rem + 1px);
+    background: #009344;
+  }
+  .perm-table .role-header-label {
+    display: inline-block;
+    white-space: nowrap;
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: #009344;
+    border-bottom: 2px solid #009344;
+    padding-bottom: 2px;
+    transform-origin: left bottom;
+    transform: rotate(-50deg);
+    position: absolute;
+    left: 0;
+    bottom: 0.75rem;
   }
   .perm-table th.label-header {
     text-align: left;
@@ -298,6 +325,7 @@ const SHARED_CSS = `
     text-align: center;
     vertical-align: middle;
     border-bottom: 1px solid #eee;
+    border-left: 2px solid #009344;
     padding: 0.4rem 0.5rem;
   }
   .perm-table td.perm-check input[type="checkbox"] {
@@ -329,8 +357,11 @@ function layout(
   content: string,
   showManageStaff: boolean,
 ): string {
-  const manageStaffLink = showManageStaff
-    ? `<a href="/staff" class="nav-link">Manage Staff</a>`
+  const tabBar = showManageStaff
+    ? `<div class="page-tabs">
+        <a href="/staff" class="page-tab">Staff</a>
+        <a href="/roles" class="page-tab active">Roles</a>
+      </div>`
     : "";
   return `<!doctype html>
 <html lang="en">
@@ -346,7 +377,6 @@ function layout(
       <span class="lime-part">lime</span><span class="hq-part">H</span><span class="hq-part q-wrap">Q<svg class="lime-in-q-nav" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="white"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="white"/></svg></span>
     </a>
     <div class="nav-right">
-      ${manageStaffLink}
       <div class="user-menu">
         <button class="user-menu-trigger" id="user-menu-btn" aria-haspopup="true" aria-expanded="false">
           ${esc(displayName)} <span class="user-menu-caret">▾</span>
@@ -358,6 +388,7 @@ function layout(
       </div>
     </div>
   </nav>
+  ${tabBar}
   <main class="main">
     ${content}
   </main>
@@ -384,6 +415,7 @@ interface RoleTemplateRow {
   id: number;
   name: string;
   system_role_key: string | null;
+  team_performance_category: string | null;
 }
 
 interface RoleTemplatePermissionRow {
@@ -410,11 +442,46 @@ async function fetchRoleTemplates(): Promise<RoleTemplateRow[]> {
   const pool = getAppPool();
   // Owner first, then all others alphabetically.
   const result = await pool.query<RoleTemplateRow>(
-    `SELECT id, name, system_role_key
+    `SELECT id, name, system_role_key, team_performance_category
      FROM role_templates
      ORDER BY (CASE WHEN system_role_key = 'owner' THEN 0 ELSE 1 END), name`,
   );
   return result.rows;
+}
+
+async function fetchOneRoleTemplate(id: number): Promise<RoleTemplateRow | null> {
+  const pool = getAppPool();
+  const result = await pool.query<RoleTemplateRow>(
+    `SELECT id, name, system_role_key, team_performance_category
+     FROM role_templates WHERE id = $1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+// Dashboard's Team Performance category options — dashboard_kpi_definitions
+// lives in the SAME shared Supabase Postgres instance's public schema,
+// just owned by the Dashboard app, not LimeHQ. LimeHQ's own DATABASE_URL
+// (a superuser connection per this project's .env) can read it directly;
+// no separate credentials needed. Queried live rather than hardcoded so a
+// new category Dashboard adds later shows up here without a LimeHQ
+// deploy — see migration 0014's comment for the full reasoning.
+async function fetchDashboardKpiCategories(): Promise<string[]> {
+  const pool = getAppPool();
+  try {
+    const result = await pool.query<{ role: string }>(
+      `SELECT DISTINCT role FROM dashboard_kpi_definitions ORDER BY role`,
+    );
+    return result.rows.map((r) => r.role);
+  } catch (err) {
+    // Defensive only: if Dashboard's table is ever unreachable (wrong
+    // DATABASE_URL, table renamed, etc.) don't take down the whole Roles
+    // page over a field that's allowed to be "None" anyway.
+    logWarn("fetchDashboardKpiCategories: could not query dashboard_kpi_definitions", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
 }
 
 async function fetchGrantedPermissions(): Promise<RoleTemplatePermissionRow[]> {
@@ -457,7 +524,10 @@ function buildGrid(
 
   // Table header row
   const headerCells = roles
-    .map((r) => `<th class="role-header">${esc(r.name)}</th>`)
+    .map(
+      (r) =>
+        `<th class="role-header"><span class="role-header-label">${esc(r.name)}</span></th>`,
+    )
     .join("");
   const thead = `<thead><tr><th class="label-header">Permission</th>${headerCells}</tr></thead>`;
 
@@ -651,11 +721,51 @@ router.get("/", async (req, res, next) => {
       ? `<a href="/roles/new" class="btn-primary" style="font-size:0.875rem;padding:0.5rem 1rem;margin-top:0;width:auto">+ New Role</a>`
       : "";
 
+    const rolesListRows = roles
+      .map((r) => {
+        const isOwner = r.system_role_key === "owner";
+        const ownerBadge = isOwner ? ` <span class="badge badge-owner">Owner</span>` : "";
+        const editLink =
+          !isOwner && canEdit
+            ? `<a href="/roles/${esc(r.id)}/edit" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Edit</a>`
+            : "";
+        return `
+      <tr>
+        <td>${esc(r.name)}${ownerBadge}</td>
+        <td>${esc(r.team_performance_category ?? "—")}</td>
+        <td style="text-align:right">${editLink}</td>
+      </tr>`;
+      })
+      .join("");
+
+    const renamedBanner =
+      req.query["renamed"] === "1"
+        ? `<div class="success-banner">Role updated.</div>`
+        : "";
+
     const content = `
+      <div class="card" style="margin-bottom:1.5rem">
+        <div class="page-header">
+          <h1 class="page-title">Role Templates</h1>
+          ${newRoleBtn}
+        </div>
+        ${renamedBanner}
+        <table class="staff-table">
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>Team Performance Category</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rolesListRows}
+          </tbody>
+        </table>
+      </div>
       <div class="card">
         <div class="page-header">
           <h1 class="page-title">Roles &amp; Permissions</h1>
-          ${newRoleBtn}
         </div>
         ${successBanner}
         ${formOpen}
@@ -743,6 +853,164 @@ router.post("/", async (req, res, next) => {
     }
 
     res.redirect(302, "/roles?saved=1");
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------------ //
+// Edit-role form (rename + Team Performance Category)                //
+// ------------------------------------------------------------------ //
+
+function categoryOptions(categories: string[], selected: string | null): string {
+  const opts = categories
+    .map((c) => `<option value="${esc(c)}"${c === selected ? " selected" : ""}>${esc(c)}</option>`)
+    .join("\n");
+  return `<option value=""${selected === null ? " selected" : ""}>None</option>\n${opts}`;
+}
+
+function editRoleForm(
+  target: RoleTemplateRow,
+  categories: string[],
+  errorMsg: string | null,
+): string {
+  return `
+    <div class="card" style="max-width:480px">
+      <div class="page-header">
+        <h1 class="page-title">Edit Role</h1>
+      </div>
+      ${errorMsg ? `<div class="error-banner">${esc(errorMsg)}</div>` : ""}
+      <form method="POST" action="/roles/${esc(target.id)}/edit">
+        <div class="form-group">
+          <label for="name">Role Name</label>
+          <input type="text" id="name" name="name" required
+                 value="${esc(target.name)}" maxlength="60" autocomplete="off"/>
+        </div>
+        <div class="form-group">
+          <label for="team_performance_category">Team Performance Category</label>
+          <select id="team_performance_category" name="team_performance_category">
+            ${categoryOptions(categories, target.team_performance_category)}
+          </select>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">Save Changes</button>
+          <a href="/roles" class="btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>`;
+}
+
+router.get("/:id/edit", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.role_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to edit roles.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid role ID.");
+
+    const [displayName, canManageStaff, target, categories] = await Promise.all([
+      getDisplayName(req.user.userId),
+      hasPermission(req.user.userId, "limehq.staff_management.view"),
+      fetchOneRoleTemplate(id),
+      fetchDashboardKpiCategories(),
+    ]);
+
+    if (!target) throw new ApiError(404, "Role not found.");
+    // The Owner role's own description says it "cannot be edited or
+    // deleted" — assertNotOwnerRole (src/auth/permissions.ts) is the one
+    // existing check for that rule; reused here rather than re-deriving it.
+    assertNotOwnerRole(target.system_role_key);
+
+    res.send(layout("Edit Role", displayName, editRoleForm(target, categories, null), canManageStaff));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/:id/edit", async (req, res, next) => {
+  try {
+    const canEdit = await hasPermission(req.user.userId, "limehq.role_management.edit");
+    if (!canEdit) throw new ApiError(403, "You do not have permission to edit roles.");
+
+    const id = parseInt(req.params.id ?? "", 10);
+    if (isNaN(id)) throw new ApiError(400, "Invalid role ID.");
+
+    const target = await fetchOneRoleTemplate(id);
+    if (!target) throw new ApiError(404, "Role not found.");
+    assertNotOwnerRole(target.system_role_key);
+
+    const body = req.body as Record<string, string>;
+    const name = String(body.name ?? "").trim();
+    // Empty string from the "None" <option> means clear the category.
+    const rawCategory = String(body.team_performance_category ?? "").trim();
+    const teamPerformanceCategory = rawCategory === "" ? null : rawCategory;
+
+    if (!name) {
+      const [categories, displayName, canManageStaff] = await Promise.all([
+        fetchDashboardKpiCategories(),
+        getDisplayName(req.user.userId),
+        hasPermission(req.user.userId, "limehq.staff_management.view"),
+      ]);
+      res.status(400).send(
+        layout(
+          "Edit Role",
+          displayName,
+          editRoleForm({ ...target, name, team_performance_category: teamPerformanceCategory }, categories, "Role name is required."),
+          canManageStaff,
+        ),
+      );
+      return;
+    }
+    if (name.length > 60) {
+      const [categories, displayName, canManageStaff] = await Promise.all([
+        fetchDashboardKpiCategories(),
+        getDisplayName(req.user.userId),
+        hasPermission(req.user.userId, "limehq.staff_management.view"),
+      ]);
+      res.status(400).send(
+        layout(
+          "Edit Role",
+          displayName,
+          editRoleForm({ ...target, name, team_performance_category: teamPerformanceCategory }, categories, "Role name must be 60 characters or less."),
+          canManageStaff,
+        ),
+      );
+      return;
+    }
+
+    const pool = getAppPool();
+    try {
+      await pool.query(
+        `UPDATE role_templates
+         SET name = $1, team_performance_category = $2, updated_at = now()
+         WHERE id = $3`,
+        [name, teamPerformanceCategory, id],
+      );
+    } catch (err: unknown) {
+      if (typeof err === "object" && err !== null && (err as { code?: string }).code === "23505") {
+        const [categories, displayName, canManageStaff] = await Promise.all([
+          fetchDashboardKpiCategories(),
+          getDisplayName(req.user.userId),
+          hasPermission(req.user.userId, "limehq.staff_management.view"),
+        ]);
+        res.status(400).send(
+          layout(
+            "Edit Role",
+            displayName,
+            editRoleForm(
+              { ...target, name, team_performance_category: teamPerformanceCategory },
+              categories,
+              `A role named "${name}" already exists.`,
+            ),
+            canManageStaff,
+          ),
+        );
+        return;
+      }
+      throw err;
+    }
+
+    res.redirect(302, "/roles?renamed=1");
   } catch (err) {
     next(err);
   }

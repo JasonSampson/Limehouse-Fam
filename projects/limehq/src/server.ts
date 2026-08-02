@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import { loadEnv } from "./config/env.js";
 import { logInfo, logError } from "./lib/appLogger.js";
 import { authRouter } from "./auth/authRoutes.js";
-import { devLoginRoutes } from "./auth/devLoginRoutes.js"; // TEMPORARY — see that file's header comment. Delete both before committing.
 import { staffRouter } from "./staff/staffRoutes.js";
 import { rolesRouter } from "./roles/rolesRoutes.js";
 import { mapRouter } from "./map/mapRoutes.js";
@@ -78,11 +77,15 @@ app.get("/health", (_req, res) => {
 // Auth routes: login, logout, re-auth, me, handoff.
 app.use("/auth", authRouter);
 
-// TEMPORARY — see devLoginRoutes.ts's header comment. Only ever registered
-// when NODE_ENV is exactly "development"; in any other environment this
-// route simply doesn't exist (404), even if this file somehow shipped.
-// Delete this block and devLoginRoutes.ts before committing.
+// TEMPORARY — local-only login bypass for testing, never committed (see
+// .gitignore-style convention: this file is intentionally absent from the
+// repo). Dynamic import, not a static one, so production — where the file
+// genuinely does not exist on disk — never tries to resolve this module at
+// all. A static top-level import would fail Node's module resolution even
+// though the mount below is already gated, since ESM resolves imports
+// before any runtime check runs.
 if (env.NODE_ENV === "development") {
+  const { devLoginRoutes } = await import("./auth/devLoginRoutes.js");
   app.use(devLoginRoutes);
 }
 

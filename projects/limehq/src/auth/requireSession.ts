@@ -23,6 +23,26 @@ declare global {
   }
 }
 
+// Browsers tag every request with how it was initiated. A real page load —
+// typing the URL, clicking a link, hitting refresh, or a plain <form>
+// submit — is always "navigate", set by the browser itself and not
+// something client-side JS can override by setting an Accept header. A
+// fetch() call from our own page scripts (Map's data loads, login.js, etc.)
+// is "cors" or "same-origin", never "navigate". This lets a single check
+// send a human refreshing a stale page back to the sign-in screen, while
+// leaving JSON responses intact for JS that already handles a 401 itself.
+function isPageNavigation(req: Request): boolean {
+  return req.headers["sec-fetch-mode"] === "navigate";
+}
+
+function respondUnauthenticated(req: Request, res: Response, message: string): void {
+  if (isPageNavigation(req)) {
+    res.redirect(302, "/");
+    return;
+  }
+  res.status(401).json({ ok: false, error: message });
+}
+
 export async function requireSession(
   req: Request,
   res: Response,
@@ -30,7 +50,7 @@ export async function requireSession(
 ): Promise<void> {
   const token: string | undefined = req.cookies?.[SESSION_COOKIE_NAME];
   if (!token) {
-    res.status(401).json({ ok: false, error: "Not authenticated" });
+    respondUnauthenticated(req, res, "Not authenticated");
     return;
   }
 
@@ -39,7 +59,7 @@ export async function requireSession(
     payload = await verifySessionToken(token);
   } catch {
     res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-    res.status(401).json({ ok: false, error: "Invalid or expired session" });
+    respondUnauthenticated(req, res, "Invalid or expired session");
     return;
   }
 
@@ -49,7 +69,7 @@ export async function requireSession(
   // expiry is pinned to authenticatedAt rather than refreshed here.
   if (isIdleExpired(payload.lastActivityAt)) {
     res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-    res.status(401).json({ ok: false, error: "Invalid or expired session" });
+    respondUnauthenticated(req, res, "Invalid or expired session");
     return;
   }
 
@@ -57,7 +77,7 @@ export async function requireSession(
   if (!user || !user.active) {
     logWarn("requireSession: user not found or inactive", { userId: payload.userId });
     res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-    res.status(401).json({ ok: false, error: "Not authenticated" });
+    respondUnauthenticated(req, res, "Not authenticated");
     return;
   }
 
@@ -70,7 +90,7 @@ export async function requireSession(
       userId: payload.userId,
     });
     res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-    res.status(401).json({ ok: false, error: "Invalid or expired session" });
+    respondUnauthenticated(req, res, "Invalid or expired session");
     return;
   }
 

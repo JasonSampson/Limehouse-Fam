@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { loadEnv } from "../config/env.js";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 8; // 8-hour absolute session cap
-const IDLE_TIMEOUT_SECONDS = 60 * 30; // 30-minute inactivity timeout, checked in requireSession.ts
+const IDLE_TIMEOUT_SECONDS = 60 * 60; // 60-minute inactivity timeout, checked in requireSession.ts
 const PENDING_2FA_TTL_SECONDS = 60 * 5; // 5-minute window to complete TOTP setup/verification
 
 // Nothing about role or permissions lives here — those are re-queried from

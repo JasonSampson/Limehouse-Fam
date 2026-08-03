@@ -72,24 +72,14 @@ const SHARED_CSS = `
     justify-content: space-between;
   }
   .nav-brand {
-    font-family: 'Quicksand', sans-serif;
-    font-weight: 700;
-    font-size: 1.6rem;
+    display: inline-flex;
+    align-items: center;
     text-decoration: none;
-    letter-spacing: -0.3px;
-    line-height: 1;
   }
-  .lime-part { color: #74b62e; }
-  .hq-part   { color: #009344; }
-  .q-wrap { position: relative; display: inline-block; }
-  .lime-in-q-nav {
-    position: absolute;
-    top: 53%;
-    left: 51%;
-    transform: translate(-50%, -50%);
-    width: 15px;
-    height: 15px;
-    pointer-events: none;
+  .nav-brand-logo {
+    height: 44px;
+    width: auto;
+    display: block;
   }
 
   .nav-right { display: flex; align-items: center; gap: 1rem; }
@@ -374,7 +364,7 @@ function layout(
 <body>
   <nav class="nav">
     <a href="/launcher" class="nav-brand">
-      <span class="lime-part">lime</span><span class="hq-part">H</span><span class="hq-part q-wrap">Q<svg class="lime-in-q-nav" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="50" cy="50" r="49" fill="#009344"/><circle cx="50" cy="50" r="43" fill="white"/><circle cx="50" cy="50" r="41" fill="#74b62e"/><line x1="50" y1="9" x2="50" y2="91" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="17" x2="26" y2="83" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="37" x2="11" y2="63" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="89" y1="63" x2="11" y2="37" stroke="white" stroke-width="3.5" stroke-linecap="round"/><line x1="74" y1="83" x2="26" y2="17" stroke="white" stroke-width="3.5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="white"/></svg></span>
+      <img src="/images/limehq-logo.png" alt="LimeHQ" class="nav-brand-logo"/>
     </a>
     <div class="nav-right">
       <div class="user-menu">

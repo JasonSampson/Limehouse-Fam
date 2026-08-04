@@ -91,11 +91,37 @@ export function groupLinesIntoParagraphs(lines: string[]): string[] {
   return paragraphs;
 }
 
+// Two paragraphs get their own one-off visual treatment beyond **bold**,
+// per Jason (2026-08-04). Detected by content match on the raw (pre-HTML)
+// paragraph text rather than a new markdown syntax, since each only ever
+// needs the treatment on its one whole paragraph, never partial/inline —
+// the same reasoning as FIELD_LIST_BLOCK_STARTS above. Inline styles (not
+// a CSS class) so this works identically in the PDF (which does have a
+// <style> block) and the email (which is sent as a bare HTML fragment with
+// no <style> block at all — email clients need inline styles to render
+// reliably regardless).
+//
+// "ITEMIZED CHARGES:" — centered, same font-size as the "NOTICE OF
+// DEFAULT..." header (both already render at the body's own 11pt, so only
+// centering is actually needed). This line was silently DROPPED from the
+// PDF before generateNoticePdf.ts's itemizedHeadingLine fix (same commit)
+// — it was consumed purely as a parse boundary marker and never rendered.
+const CENTERED_PARAGRAPHS = ["**ITEMIZED CHARGES:**"];
+// "YOU MAY AVOID PAYING..." — underlined, on top of its existing bold/caps.
+const UNDERLINED_PARAGRAPH_PREFIXES = ["**YOU MAY AVOID PAYING"];
+
 export function paragraphsToHtml(paragraphs: string[]): string {
   return paragraphs
     .map((p) => {
+      const trimmed = p.trim();
       const html = boldMarkdownToHtml(escapeHtml(p)).replaceAll(SIGNATURE_LINE_BREAK, "<br>");
-      return `<p>${html}</p>`;
+      const styles: string[] = [];
+      if (CENTERED_PARAGRAPHS.includes(trimmed)) styles.push("text-align:center");
+      if (UNDERLINED_PARAGRAPH_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
+        styles.push("text-decoration:underline");
+      }
+      const styleAttr = styles.length > 0 ? ` style="${styles.join(";")}"` : "";
+      return `<p${styleAttr}>${html}</p>`;
     })
     .join("\n");
 }

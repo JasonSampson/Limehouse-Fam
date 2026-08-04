@@ -102,6 +102,14 @@ interface ParsedNoticeBody {
   fromAddressLine1: string; // "6056 Providence Rd, Suite 200"
   fromAddressLine2: string; // "Virginia Beach, VA 23464"
   beforeItemized: string[]; // paragraphs between the header and "ITEMIZED CHARGES:"
+  // The literal "**ITEMIZED CHARGES:**" line itself. Previously used ONLY as
+  // a parse boundary (itemizedHeadingIdx) and silently dropped — it never
+  // appeared anywhere in the rendered PDF, a real gap Jason caught on
+  // 2026-08-04. Now captured and rendered (see buildPrintHtml) through the
+  // same paragraphsToHtml() the email path uses, so its centered/bold
+  // treatment (noticeBodyFormatting.ts's CENTERED_PARAGRAPHS) applies
+  // identically in both places from one source of truth.
+  itemizedHeadingLine: string;
   itemized: { rentLine: string; lateFeeLine: string; miscLine: string; totalLine: string };
   betweenTables: string[]; // paragraphs between the itemized table and the fees lines
   fees: { courtCostsLine: string; attorneyFeesLine: string; totalFeesLine: string };
@@ -167,6 +175,7 @@ function parseNoticeBody(renderedBody: string): ParsedNoticeBody {
     fromAddressLine1: lines[fromLineIdx + 1].trim(),
     fromAddressLine2: lines[fromLineIdx + 2].trim(),
     beforeItemized,
+    itemizedHeadingLine: lines[itemizedHeadingIdx].trim(),
     itemized: {
       rentLine: lines[rentLineIdx].trim(),
       lateFeeLine: lines[lateFeeLineIdx].trim(),
@@ -298,6 +307,8 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
   </table>
 
   ${paragraphsToHtml(parsed.beforeItemized)}
+
+  ${paragraphsToHtml([parsed.itemizedHeadingLine])}
 
   <table class="grid">
     <tr>${tableGridCell(itemizedRent.label)}${tableGridCell(itemizedRent.value)}</tr>

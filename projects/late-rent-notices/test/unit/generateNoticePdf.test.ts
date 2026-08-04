@@ -88,6 +88,35 @@ describe("generateNoticePdf — real PDF generation with realistic merge fields"
     expect(text).toContain("RESIDENT IS HEREBY NOTIFIED");
   }, 30000);
 
+  // Jason's correction, 2026-08-04: this line was completely absent from
+  // the rendered PDF before generateNoticePdf.ts's itemizedHeadingLine fix
+  // (same commit) — it was consumed purely as a parse boundary marker and
+  // never actually output. Mason flagged the pre-fix behavior as a real
+  // compliance gap: 55.1-1245 requires the itemized charges to be
+  // identified, and a notice missing that heading stands on worse footing
+  // if ever challenged.
+  it("actually renders the ITEMIZED CHARGES heading (previously silently dropped)", async () => {
+    const pdf = await generateNoticePdf(realFields, INITIAL_SUBJECT_LINE);
+    const { text } = await extractPdfText(pdf);
+    expect(text).toContain("ITEMIZED CHARGES");
+  }, 30000);
+
+  it("no longer contains the Buildium tenant portal sentence (reverted to attorney's verbatim wording)", async () => {
+    const pdf = await generateNoticePdf(realFields, INITIAL_SUBJECT_LINE);
+    const { text } = await extractPdfText(pdf);
+    expect(text).not.toContain("Buildium tenant portal");
+    expect(text).not.toContain("As a convenience");
+  }, 30000);
+
+  it("certifies mailing under 55.1-1202, not the old emailed/Lease-Section-46 wording", async () => {
+    const pdf = await generateNoticePdf(realFields, INITIAL_SUBJECT_LINE);
+    const { text } = await extractPdfText(pdf);
+    expect(text).toContain("55.1-1202");
+    expect(text).toContain("was mailed to the Tenant(s)");
+    expect(text).not.toContain("Lease Section 46");
+    expect(text).not.toContain("was emailed to the Tenant(s)");
+  }, 30000);
+
   it("does not double-HTML-escape a merge field value containing an apostrophe or ampersand", async () => {
     const fields = { ...realFields, tenant_name: `O'Brien & Sons` };
     const pdf = await generateNoticePdf(fields, INITIAL_SUBJECT_LINE);
@@ -134,6 +163,29 @@ describe("buildNoticePrintHtml — HTML structure (no browser launch, fast)", ()
   it("keeps the BY:/company signature block on two lines via <br>, not run together", () => {
     const html = buildNoticePrintHtml(realFields, INITIAL_SUBJECT_LINE);
     expect(html).toMatch(/BY: Casey Nguyen \(Authorized Agent\)<br>Limehouse Property Management/);
+  });
+
+  it("centers the ITEMIZED CHARGES heading, matching the email's treatment (shared paragraphsToHtml)", () => {
+    const html = buildNoticePrintHtml(realFields, INITIAL_SUBJECT_LINE);
+    expect(html).toMatch(/<p style="text-align:center"><strong>ITEMIZED CHARGES:<\/strong><\/p>/);
+  });
+
+  it("underlines the YOU MAY AVOID PAYING paragraph, on top of its existing bold/caps", () => {
+    const html = buildNoticePrintHtml(realFields, INITIAL_SUBJECT_LINE);
+    expect(html).toMatch(/<p style="text-decoration:underline"><strong>YOU MAY AVOID PAYING/);
+  });
+
+  it("bolds the whole 'Any partial payment of rent made...' paragraph", () => {
+    const html = buildNoticePrintHtml(realFields, INITIAL_SUBJECT_LINE);
+    expect(html).toContain("<p><strong>Any partial payment of rent made");
+    expect(html).toContain("per 55.1-1250.</strong></p>");
+  });
+
+  it("bolds only the first two sentences of the credit-bureau paragraph", () => {
+    const html = buildNoticePrintHtml(realFields, INITIAL_SUBJECT_LINE);
+    expect(html).toContain(
+      "<strong>Judgements are immediately reported to the credit bureau. Act now to protect your credit.</strong> Please direct your questions"
+    );
   });
 });
 

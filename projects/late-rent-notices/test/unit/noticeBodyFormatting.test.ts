@@ -49,7 +49,10 @@ describe("renderNoticeBodyToHtml — the real 14-day notice body", () => {
 
   it("does not insert any <br> inside prose paragraphs at all — only real paragraph breaks (<p>) separate them", () => {
     const html = renderRealBody();
-    const paragraphs = html.split("\n").filter((line) => line.startsWith("<p>"));
+    // <p[ or <p> — some paragraphs now carry a style attribute (centered/
+    // underlined special cases below), so a bare `<p>` prefix check would
+    // silently skip them.
+    const paragraphs = html.split("\n").filter((line) => /^<p[ >]/.test(line));
     // Exactly the 4 known field-list blocks (header, itemized, fees,
     // signature) legitimately contain <br>; every other paragraph must not.
     const proseParagraphsWithBr = paragraphs.filter(
@@ -110,6 +113,49 @@ describe("renderNoticeBodyToHtml — the real 14-day notice body", () => {
     expect(html).toContain("<strong>NOTICE OF DEFAULT");
     expect(html).toContain("<strong>ITEMIZED CHARGES:</strong>");
     expect(html).not.toContain("**");
+  });
+
+  // Jason's correction on 2026-08-04 after reviewing a real notice: the
+  // Buildium-portal sentence (added 2026-08-01, never approved by the
+  // attorney) is gone, restoring the payment-method paragraph to the
+  // attorney's exact verbatim wording.
+  it("no longer contains the Buildium tenant portal sentence", () => {
+    const html = renderRealBody();
+    expect(html).not.toContain("Buildium tenant portal");
+    expect(html).not.toContain("As a convenience");
+  });
+
+  it("underlines the YOU MAY AVOID PAYING paragraph, on top of its existing bold/caps", () => {
+    const html = renderRealBody();
+    const warningParagraph = html.split("\n").find((line) => line.includes("YOU MAY AVOID PAYING ATTORNEY"));
+    expect(warningParagraph).toBeDefined();
+    expect(warningParagraph).toMatch(/^<p style="text-decoration:underline">/);
+    expect(warningParagraph).toContain("<strong>YOU MAY AVOID PAYING");
+  });
+
+  it("centers the ITEMIZED CHARGES heading", () => {
+    const html = renderRealBody();
+    const heading = html.split("\n").find((line) => line.includes("ITEMIZED CHARGES"));
+    expect(heading).toBeDefined();
+    expect(heading).toMatch(/^<p style="text-align:center">/);
+  });
+
+  it("bolds the whole 'Any partial payment of rent made...' paragraph", () => {
+    const html = renderRealBody();
+    const paragraph = html.split("\n").find((line) => line.includes("Any partial payment of rent made"));
+    expect(paragraph).toBeDefined();
+    expect(paragraph).toMatch(/^<p><strong>Any partial payment of rent made/);
+    expect(paragraph).toContain("per 55.1-1250.</strong></p>");
+  });
+
+  it("bolds only the first two sentences of the credit-bureau paragraph, not the Legal Aid Society sentence", () => {
+    const html = renderRealBody();
+    const paragraph = html.split("\n").find((line) => line.includes("Judgements are immediately"));
+    expect(paragraph).toBeDefined();
+    expect(paragraph).toContain(
+      "<strong>Judgements are immediately reported to the credit bureau. Act now to protect your credit.</strong> Please direct your questions"
+    );
+    expect(paragraph).toContain("Legal Aid Society with any questions at 757-627-5423.");
   });
 
   it("HTML-escapes merge field values (ampersand, apostrophe) exactly once", () => {

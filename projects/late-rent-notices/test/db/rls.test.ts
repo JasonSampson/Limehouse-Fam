@@ -369,6 +369,69 @@ describe("Row-level security", () => {
     });
   });
 
+  // Crashed the live server on 2026-08-04: the fallback decision-maker
+  // (Jason) opened a draft notice assigned to someone else, the live-
+  // balance re-check found it already paid and tried to void it, and RLS
+  // rejected the write — an unhandled error that took the whole Node
+  // process down for every user (migrations 0048, 0049). 0048 alone wasn't
+  // enough: WITH CHECK governs the new row, but for an UPDATE under a
+  // FOR ALL policy Postgres ALSO requires the new row to satisfy USING,
+  // proven by direct experiment against the live database (forcing WITH
+  // CHECK to a literal `true` still failed; only widening USING too let
+  // the write through). These tests pin both requirements down together so
+  // a future edit narrowing either clause alone reintroduces the crash
+  // immediately, in CI, instead of on the next live drafting morning.
+  describe("fallback decision-maker can void (but not otherwise touch) a draft not assigned to them (migrations 0048, 0049)", () => {
+    it("the fallback role CAN transition someone else's draft to voided", async () => {
+      const notFallbackId = await seedPmUser(superuser, { email: "fallback-void@limehousepm.com", role: "pm", isFallbackDecisionMaker: true });
+      const lateCycleId = await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-08-01" });
+      const noticeId = await seedNotice(superuser, {
+        lateCycleId,
+        leaseId: leaseB,
+        letterTemplateId,
+        assignedPmId: pmB, // NOT the fallback-role viewer — this is the exact scenario that crashed
+        status: "draft",
+      });
+
+      await withTestPmScope({ pmUserId: notFallbackId, pmRole: "pm", isFallbackDecisionMaker: true }, (client) =>
+        client.query(
+          `UPDATE notices SET status = 'voided', voided_at = now(), voided_reason = $1, amount_due_at_send = 0
+           WHERE id = $2 AND status = 'draft'`,
+          ["paid off before send", noticeId]
+        )
+      );
+
+      const check = await superuser.query("SELECT status FROM notices WHERE id = $1", [noticeId]);
+      expect(check.rows[0].status).toBe("voided");
+    });
+
+    it("a plain PM (not the fallback role, not the assignee) CANNOT void someone else's draft", async () => {
+      const lateCycleId = await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-08-02" });
+      const noticeId = await seedNotice(superuser, {
+        lateCycleId,
+        leaseId: leaseB,
+        letterTemplateId,
+        assignedPmId: pmB,
+        status: "draft",
+      });
+
+      // pmA is a plain 'pm', not flagged as the fallback decision-maker,
+      // and not assigned this notice — the write must silently affect zero
+      // rows (RLS filters it out of the UPDATE's own WHERE-visible set),
+      // not error and not succeed.
+      await withTestPmScope({ pmUserId: pmA, pmRole: "pm", isFallbackDecisionMaker: false }, (client) =>
+        client.query(
+          `UPDATE notices SET status = 'voided', voided_at = now(), voided_reason = $1, amount_due_at_send = 0
+           WHERE id = $2 AND status = 'draft'`,
+          ["should not apply", noticeId]
+        )
+      );
+
+      const check = await superuser.query("SELECT status FROM notices WHERE id = $1", [noticeId]);
+      expect(check.rows[0].status).toBe("draft");
+    });
+  });
+
   beforeEach(() => {
     // Each `it` above is written to be independent of ordering within its
     // describe block via fresh seeds where mutation occurs; shared fixtures

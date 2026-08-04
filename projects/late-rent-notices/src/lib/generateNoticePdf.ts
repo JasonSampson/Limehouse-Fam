@@ -243,10 +243,10 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
     font-size: 11pt;
     font-weight: bold;
     text-align: center;
-    /* One blank-line gap below the title before the TO/FROM header table —
-       per Jason's spacing pass (2026-08-04) after reviewing the first real
-       drafts. 12pt ≈ one 11pt line at this line-height. */
-    margin: 0 0 12pt 0;
+    /* Two blank-line gaps below the title before the TO/FROM header table —
+       Jason's second spacing pass (2026-08-04) doubled the first one.
+       12pt ≈ one 11pt line at this line-height. */
+    margin: 0 0 24pt 0;
   }
   table.grid {
     width: 100%;
@@ -261,13 +261,11 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
        breathing room the original's even 50/50 split gives it. */
     table-layout: fixed;
     border-collapse: collapse;
-    /* No gap above (the original document always butts a table directly up
-       against whatever introduces it — a heading or a sentence ending in a
-       colon — with no blank line first). A full blank-line gap BELOW,
-       though: the original inserts an actual empty paragraph after every
-       one of its three tables before the next paragraph resumes, which
-       reads as a real line break, not the ~3pt sliver this used to have. */
-    margin: 0 0 12pt 0;
+    /* No gap above (the gap BEFORE each table comes from the preceding
+       paragraph's own bottom margin). Two blank-line gaps below — Jason's
+       second spacing pass (2026-08-04) doubled the single gap from the
+       first pass. */
+    margin: 0 0 24pt 0;
   }
   table.grid td {
     width: 50%;
@@ -278,13 +276,11 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
     line-height: 1.08;
   }
   p {
-    /* One blank-line gap between paragraphs (Jason's spacing pass,
-       2026-08-04) — this, plus the tables' own 12pt bottom margin, creates
-       the before/after breathing room he listed around every major
-       paragraph: the gap BEFORE each table comes from the preceding
-       paragraph's bottom margin, the gap AFTER it from the table's own.
-       Single-page fit is locked in by the generateNoticePdf test suite. */
-    margin: 0 0 12pt 0;
+    /* Two blank-line gaps between paragraphs — Jason's second spacing pass
+       (2026-08-04) doubled the first pass's single gap, at every spot he
+       originally listed. Single-page fit is locked in by the
+       generateNoticePdf test suite. */
+    margin: 0 0 24pt 0;
   }
   strong {
     font-weight: bold;

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { formatUnitDisplay } from "../lib/unitDisplay.js";
 
 export const searchRoutes = Router();
@@ -24,7 +25,7 @@ searchRoutes.use(requireSession);
 // Same withPmScope/RLS visibility as every other route: a plain PM only
 // searches within their own assigned doors, admin_assistant/bookkeeping see
 // portfolio-wide, per the existing RLS policies on notices/contact_attempts.
-searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
+searchRoutes.get("/api/search", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   if (q.length < 2) {
@@ -73,4 +74,4 @@ searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
   });
 
   res.json(results);
-});
+}));

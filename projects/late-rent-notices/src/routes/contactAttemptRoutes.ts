@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 import { syncToLeadSimple } from "../integrations/leadSimpleSync.js";
@@ -15,7 +16,7 @@ contactAttemptRoutes.use(requireSession);
 // sees every lease company-wide, a regular PM only sees leases on their
 // assigned doors. No separate ownership check needed here, same pattern as
 // leaseRoutes.ts.
-contactAttemptRoutes.get("/api/contact-attempts", async (req: AuthedRequest, res) => {
+contactAttemptRoutes.get("/api/contact-attempts", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const leaseId = req.query.leaseId ? Number(req.query.leaseId) : undefined;
 
@@ -32,7 +33,7 @@ contactAttemptRoutes.get("/api/contact-attempts", async (req: AuthedRequest, res
   });
 
   res.json({ contactAttempts });
-});
+}));
 
 const createContactAttemptSchema = z.object({
   leaseId: z.number().int().positive(),
@@ -49,7 +50,7 @@ const createContactAttemptSchema = z.object({
 // real source of truth and this route can't drift out of sync with it. A
 // non-admin_assistant PM's INSERT will simply be rejected by Postgres and
 // surfaces here as a query error.
-contactAttemptRoutes.post("/api/contact-attempts", async (req: AuthedRequest, res) => {
+contactAttemptRoutes.post("/api/contact-attempts", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const parsed = createContactAttemptSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -125,4 +126,4 @@ contactAttemptRoutes.post("/api/contact-attempts", async (req: AuthedRequest, re
   }
 
   res.status(201).json(inserted);
-});
+}));

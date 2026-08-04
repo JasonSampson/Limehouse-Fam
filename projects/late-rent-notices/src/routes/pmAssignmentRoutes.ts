@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 
@@ -11,7 +12,7 @@ pmAssignmentRoutes.use(requireSession);
 // Active property managers, for the "assign a PM" dropdown on the
 // dashboard. pm_users has no RLS (every signed-in session already needs to
 // resolve display names for notices/audit context), so this is a plain read.
-pmAssignmentRoutes.get("/api/pm-users", async (req: AuthedRequest, res) => {
+pmAssignmentRoutes.get("/api/pm-users", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const pmUsers = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
@@ -20,7 +21,7 @@ pmAssignmentRoutes.get("/api/pm-users", async (req: AuthedRequest, res) => {
     return result.rows;
   });
   res.json({ pmUsers });
-});
+}));
 
 const createAssignmentSchema = z.object({
   propertyId: z.number().int().positive(),
@@ -37,7 +38,7 @@ const createAssignmentSchema = z.object({
 // accidentally flip it into that same portfolio-wide-visible bucket.
 // Filling an empty slot carries no such risk — it only ever narrows
 // visibility back down for that property, never widens it.
-pmAssignmentRoutes.post("/api/pm-property-assignments", async (req: AuthedRequest, res) => {
+pmAssignmentRoutes.post("/api/pm-property-assignments", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const parsed = createAssignmentSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -105,4 +106,4 @@ pmAssignmentRoutes.post("/api/pm-property-assignments", async (req: AuthedReques
   }
 
   res.status(201).json(inserted);
-});
+}));

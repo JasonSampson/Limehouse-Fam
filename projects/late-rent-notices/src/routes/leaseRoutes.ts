@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 
@@ -14,7 +15,7 @@ leaseRoutes.use(requireSession);
 // first Buildium sync, and overridable here by the assigned PM. RLS on
 // `leases` (migration 0016) already scopes this to leases on properties
 // the signed-in PM is assigned to — no separate ownership check needed.
-leaseRoutes.get("/api/leases", async (req: AuthedRequest, res) => {
+leaseRoutes.get("/api/leases", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const leases = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
@@ -32,14 +33,14 @@ leaseRoutes.get("/api/leases", async (req: AuthedRequest, res) => {
     return result.rows;
   });
   res.json({ leases });
-});
+}));
 
 const gracePeriodSchema = z.object({
   gracePeriodDays: z.number().int().min(0).max(60),
   reason: z.string().min(5),
 });
 
-leaseRoutes.patch("/api/leases/:id/grace-period", async (req: AuthedRequest, res) => {
+leaseRoutes.patch("/api/leases/:id/grace-period", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const leaseId = Number(req.params.id);
   const parsed = gracePeriodSchema.safeParse(req.body);
@@ -89,4 +90,4 @@ leaseRoutes.patch("/api/leases/:id/grace-period", async (req: AuthedRequest, res
   }
 
   res.json(updated);
-});
+}));

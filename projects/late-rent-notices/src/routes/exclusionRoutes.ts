@@ -2,13 +2,14 @@ import { Router } from "express";
 import { z } from "zod";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 
 export const exclusionRoutes = Router();
 exclusionRoutes.use(requireSession);
 
-exclusionRoutes.get("/api/exclusions", async (req: AuthedRequest, res) => {
+exclusionRoutes.get("/api/exclusions", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const exclusions = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
@@ -22,7 +23,7 @@ exclusionRoutes.get("/api/exclusions", async (req: AuthedRequest, res) => {
     return result.rows;
   });
   res.json({ exclusions });
-});
+}));
 
 const createExclusionSchema = z.object({
   leaseId: z.number().int().positive(),
@@ -30,7 +31,7 @@ const createExclusionSchema = z.object({
   reason: z.string().min(5),
 });
 
-exclusionRoutes.post("/api/exclusions", async (req: AuthedRequest, res) => {
+exclusionRoutes.post("/api/exclusions", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const parsed = createExclusionSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -67,9 +68,9 @@ exclusionRoutes.post("/api/exclusions", async (req: AuthedRequest, res) => {
   });
 
   res.status(201).json(exclusion);
-});
+}));
 
-exclusionRoutes.post("/api/exclusions/:id/remove", async (req: AuthedRequest, res) => {
+exclusionRoutes.post("/api/exclusions/:id/remove", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const exclusionId = Number(req.params.id);
 
@@ -105,4 +106,4 @@ exclusionRoutes.post("/api/exclusions/:id/remove", async (req: AuthedRequest, re
     }
   });
   res.status(204).end();
-});
+}));

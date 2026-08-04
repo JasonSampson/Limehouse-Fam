@@ -17,6 +17,7 @@ import { renderNoticeBodyToHtml } from "../lib/noticeBodyFormatting.js";
 import { checkLiveBalanceAndVoidIfStale } from "../lib/staleDraftCheck.js";
 import { fetchAndClassifyLeaseCharges, UnclassifiedChargeBlockedError } from "../lib/noticeLineItems.js";
 import { calculateLateness } from "../lib/lateness.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const noticeRoutes = Router();
 noticeRoutes.use(requireSession);
@@ -26,7 +27,7 @@ noticeRoutes.use(requireSession);
 // transaction only — RLS (migration 0016) does the actual filtering, this
 // route does not add its own WHERE pm_id = ... clause, by design: the
 // database is the enforcement point, not application code.
-noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
+noticeRoutes.get("/api/notices", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const notices = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
@@ -59,7 +60,7 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
     return result.rows.map((r) => ({ ...r, unit_display: formatUnitDisplay(r.unit_label, r.multi_unit) }));
   });
   res.json({ notices });
-});
+}));
 
 // "Late but no notice drafted yet" — leases the daily job (see
 // dailyLatenessCheck.ts) has already determined are past their grace period
@@ -85,7 +86,7 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
 // leases -> pm_property_assignments) are what actually restrict a plain PM
 // to their own doors, while admin_assistant/bookkeeping see portfolio-wide
 // per their own RLS policies (migrations 0027/0033).
-noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
+noticeRoutes.get("/api/late-no-notice", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const lateNoNotice = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
@@ -117,7 +118,7 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
     return result.rows.map((r) => ({ ...r, unit_display: formatUnitDisplay(r.unit_label, r.multi_unit) }));
   });
   res.json({ lateNoNotice });
-});
+}));
 
 // Detail/preview for one notice. Same withPmScope + RLS pattern as the list
 // route above — no extra WHERE pm_id clause here either, RLS on `notices`
@@ -144,7 +145,7 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
 // stale-draft protection); a preview showing a different, "more current"
 // number than what Send will actually re-verify against would be more
 // confusing than useful here.
-noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
+noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const noticeId = Number(req.params.id);
   if (!Number.isInteger(noticeId) || noticeId <= 0) {
@@ -447,7 +448,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
     return;
   }
   res.json({ notice: detail });
-});
+}));
 
 // Print-formatted PDF preview/download for one notice — lets a PM see and
 // print the EXACT document that would be attached at send time (matching
@@ -464,7 +465,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
 // this PDF combines all of them into one tenant_name line (matching
 // sendNotice.ts's single-email-to-all-tenants design), not one PDF per
 // recipient.
-noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
+noticeRoutes.get("/api/notices/:id/pdf", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const noticeId = Number(req.params.id);
   if (!Number.isInteger(noticeId) || noticeId <= 0) {
@@ -666,7 +667,7 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
     console.error("notice PDF generation failed", err instanceof Error ? err.message : err);
     res.status(500).json({ error: "PDF generation failed unexpectedly." });
   }
-});
+}));
 
 const sendBodySchema = z.object({
   ledgerVerified: z.literal(true, {
@@ -674,7 +675,7 @@ const sendBodySchema = z.object({
   }),
 });
 
-noticeRoutes.post("/api/notices/:id/send", async (req: AuthedRequest, res) => {
+noticeRoutes.post("/api/notices/:id/send", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const noticeId = Number(req.params.id);
   const parsed = sendBodySchema.safeParse(req.body);
@@ -714,11 +715,11 @@ noticeRoutes.post("/api/notices/:id/send", async (req: AuthedRequest, res) => {
     console.error("send notice failed", err instanceof Error ? err.message : err);
     res.status(500).json({ error: "Send failed unexpectedly. Check with Jason before retrying." });
   }
-});
+}));
 
 const voidBodySchema = z.object({ reason: z.string().min(5) });
 
-noticeRoutes.post("/api/notices/:id/void", async (req: AuthedRequest, res) => {
+noticeRoutes.post("/api/notices/:id/void", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const noticeId = Number(req.params.id);
   const parsed = voidBodySchema.safeParse(req.body);
@@ -752,7 +753,7 @@ noticeRoutes.post("/api/notices/:id/void", async (req: AuthedRequest, res) => {
     });
   });
   res.status(204).end();
-});
+}));
 
 const fallbackSendBodySchema = z.object({ ledgerVerified: z.literal(true) });
 
@@ -760,7 +761,7 @@ const fallbackSendBodySchema = z.object({ ledgerVerified: z.literal(true) });
 // "override" in code, schema, or UI. Requires: fresh re-auth (checked
 // here, not just assumed from session validity), ledger verification, and
 // is hard-capped by the DB trigger on fallback_events.
-noticeRoutes.post("/api/notices/:id/send-as-fallback", async (req: AuthedRequest, res) => {
+noticeRoutes.post("/api/notices/:id/send-as-fallback", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   if (!session.isFallbackDecisionMaker) {
     res.status(403).json({ error: "Your account is not authorized to use the fallback decision-maker action." });
@@ -823,7 +824,7 @@ noticeRoutes.post("/api/notices/:id/send-as-fallback", async (req: AuthedRequest
     console.error("fallback send failed", err instanceof Error ? err.message : err);
     res.status(500).json({ error: "Fallback send failed unexpectedly. Check with Jason before retrying." });
   }
-});
+}));
 
 // zod's built-in email() check — the same primitive already used for
 // GRAPH_SENDER_MAILBOX/JASON_ALERT_EMAIL (src/config/env.ts) and the
@@ -835,7 +836,7 @@ const resendBodySchema = z.object({ email: z.string().email() });
 // corrected address — see resendBouncedRecipient's doc comment in
 // sendNotice.ts for why this doesn't go back through the normal draft->sent
 // send() path.
-noticeRoutes.post("/api/notices/:id/recipients/:recipientId/resend", async (req: AuthedRequest, res) => {
+noticeRoutes.post("/api/notices/:id/recipients/:recipientId/resend", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const noticeId = Number(req.params.id);
   const recipientId = Number(req.params.recipientId);
@@ -863,4 +864,4 @@ noticeRoutes.post("/api/notices/:id/recipients/:recipientId/resend", async (req:
     console.error("resend bounced recipient failed", err instanceof Error ? err.message : err);
     res.status(500).json({ error: "Resend failed unexpectedly. Check with Jason before retrying." });
   }
-});
+}));

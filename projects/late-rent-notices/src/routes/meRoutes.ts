@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { loadEnv } from "../config/env.js";
 
 export const meRoutes = Router();
@@ -13,7 +14,7 @@ meRoutes.use(requireSession);
 // already reads on every request, and returns only display-safe fields.
 // It does NOT return isFallbackDecisionMaker-granting power, just whether
 // the flag is set, so the UI can decide whether to show the fallback panel.
-meRoutes.get("/api/me", async (req: AuthedRequest, res) => {
+meRoutes.get("/api/me", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
   const env = loadEnv();
   const me = await withPmScope(session.pmUserId, async (client) => {
@@ -33,4 +34,4 @@ meRoutes.get("/api/me", async (req: AuthedRequest, res) => {
     shadowMode: env.SHADOW_MODE,
     limehqUrl: env.LIMEHQ_URL,
   });
-});
+}));

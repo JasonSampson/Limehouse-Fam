@@ -12,7 +12,15 @@ export interface LatenessInput {
 export interface LatenessResult {
   isLate: boolean;
   dueDate: Date; // the most recent due date on or before today
-  daysLate: number; // days past due date + grace period; 0 if not yet past grace
+  // Days since the DUE DATE (not since grace expired) once late; 0 if not
+  // yet past grace. This number renders on the legal notice as
+  // "(N days past due)", so it must match the plain-English meaning a
+  // tenant or judge would read: rent due Aug 1 + 3-day grace, checked
+  // Aug 4 → late, and "3 days past due" — not "0 days past due", which
+  // the first live drafting run (2026-08-04) produced when this counted
+  // from the grace threshold instead. The grace period decides WHEN a
+  // tenant becomes late, never how MANY days late they are.
+  daysLate: number;
   qualifiesForNotice: boolean; // isLate AND balance > deMinimisThreshold
 }
 
@@ -47,9 +55,10 @@ export function calculateLateness(input: LatenessInput): LatenessResult {
   const daysPastLateThreshold = Math.floor(
     (input.today.getTime() - lateThreshold.getTime()) / msPerDay
   );
+  const daysSinceDueDate = Math.floor((input.today.getTime() - dueDate.getTime()) / msPerDay);
 
   const isLate = daysPastLateThreshold >= 0 && input.balance > 0;
-  const daysLate = isLate ? daysPastLateThreshold : 0;
+  const daysLate = isLate ? daysSinceDueDate : 0;
   const qualifiesForNotice = isLate && input.balance > input.deMinimisThreshold;
 
   return { isLate, dueDate, daysLate, qualifiesForNotice };

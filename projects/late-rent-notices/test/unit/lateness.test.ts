@@ -49,7 +49,13 @@ describe("calculateLateness", () => {
         deMinimisThreshold: DE_MINIMIS,
       });
       expect(result.isLate).toBe(true);
-      expect(result.daysLate).toBe(0);
+      // daysLate counts from the DUE DATE, not from when grace expired —
+      // it renders on the notice as "(N days past due)", and on day 4 the
+      // rent is plainly 3 days past due. The first live drafting run
+      // (2026-08-04) printed "0 days past due" under the old
+      // grace-threshold counting, which is wrong on the face of a legal
+      // notice.
+      expect(result.daysLate).toBe(3);
       expect(result.qualifiesForNotice).toBe(true);
     });
 
@@ -58,11 +64,11 @@ describe("calculateLateness", () => {
         rentDueDay: 1,
         gracePeriodDays: 3,
         balance: 1500,
-        today: new Date("2026-07-14T12:00:00Z"), // 10 days after the day-4 threshold
+        today: new Date("2026-07-14T12:00:00Z"),
         deMinimisThreshold: DE_MINIMIS,
       });
       expect(result.isLate).toBe(true);
-      expect(result.daysLate).toBe(10);
+      expect(result.daysLate).toBe(13); // July 14 is 13 days past the July 1 due date
     });
   });
 
@@ -87,7 +93,7 @@ describe("calculateLateness", () => {
         deMinimisThreshold: DE_MINIMIS,
       });
       expect(result.isLate).toBe(true);
-      expect(result.daysLate).toBe(0);
+      expect(result.daysLate).toBe(5); // day 6 = 5 days past the July 1 due date
     });
 
     it("same due date/today, standard grace is late but inherited grace is not — proves the two are independent", () => {

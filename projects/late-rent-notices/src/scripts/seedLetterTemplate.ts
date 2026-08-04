@@ -22,6 +22,7 @@ import {
   INITIAL_TEMPLATE_VERSION,
   INITIAL_SUBJECT_LINE,
   INITIAL_BODY_MARKDOWN,
+  CURRENT_VERSION_SUMMARY,
 } from "../templates/initialLetterTemplate.js";
 
 async function main(): Promise<void> {
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
         INITIAL_BODY_MARKDOWN,
         activate,
         systemPm.rows[0].id,
-        "v4: restructured header to a faithful 3-row/2-column TO/FROM table matching the attorney's original document exactly, and removed the invented 'Property:'/'Date of Notice:' lines that never existed in that document. No substantive clause changed; Mason reviewed the header change only.",
+        CURRENT_VERSION_SUMMARY,
       ]
     );
     await client.query("COMMIT");

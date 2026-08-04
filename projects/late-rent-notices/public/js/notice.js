@@ -418,11 +418,17 @@
               <button id="send-btn" class="btn-primary" disabled>Review &amp; Send</button>
               ${voidButtonHtml}
             </div>
-            <p class="field-hint" style="margin-top:10px;">
-              This system is in <strong>shadow mode</strong>. Clicking Send will run every real check (balance re-verification,
-              stale-draft protection, audit logging) but will <strong>not actually email the tenant</strong>. You'll see exactly
-              what shadow mode reports below.
-            </p>
+            ${
+              me.shadowMode
+                ? `<p class="field-hint" style="margin-top:10px;">
+                     This system is in <strong>shadow mode</strong>. Clicking Send will run every real check (balance re-verification,
+                     stale-draft protection, audit logging) but will <strong>not actually email the tenant</strong>. You'll see exactly
+                     what shadow mode reports below.
+                   </p>`
+                : `<p class="field-hint" style="margin-top:10px;">
+                     Clicking Send will <strong>really email this tenant</strong> — this is not a test.
+                   </p>`
+            }
             ${!canReviewAndSend && canFallbackSend ? `<p class="field-hint">Voiding isn't available here for a fallback send — only the PM this draft is assigned to can void it.</p>` : ""}
           </div>
         `;

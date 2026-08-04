@@ -62,6 +62,16 @@
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
 export const INITIAL_TEMPLATE_VERSION = 8;
 
+// One-line summary of the CURRENT version's change, stored as
+// letter_templates.change_summary by seedLetterTemplate.ts. Judge caught
+// this drifting stale on 2026-08-04: that script had a hardcoded v4
+// description that silently kept getting reused for v5 through v8's rows,
+// leaving the database's own audit trail wrong for every version since v4.
+// Living right next to INITIAL_TEMPLATE_VERSION makes it much harder to
+// bump one without the other.
+export const CURRENT_VERSION_SUMMARY =
+  "v8: dropped the redundant '(N days past due)' parenthetical from the TOTAL DUE LANDLORD line — the amount and as-of date already establish it's past due. No other wording changed from v7.";
+
 // v5 changes from v4, per Jason on 2026-08-04 after reviewing the first
 // real drafts: (1) the unit label is dropped from the subject line — the
 // property/unit still appears in the notice header block, the dashboard

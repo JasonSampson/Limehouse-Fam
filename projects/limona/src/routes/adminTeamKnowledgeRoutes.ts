@@ -5,18 +5,19 @@ import { requireAdmin } from "../auth/middleware.js";
 import { embedQuery, toVectorLiteral } from "../rag/embeddings.js";
 import { createTeamKnowledgeEntry } from "../services/teamKnowledgeService.js";
 import { logError } from "../lib/logger.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const adminTeamKnowledgeRoutes = Router();
 adminTeamKnowledgeRoutes.use(requireAdmin);
 
-adminTeamKnowledgeRoutes.get("/api/admin/team-knowledge", async (_req, res) => {
+adminTeamKnowledgeRoutes.get("/api/admin/team-knowledge", asyncHandler(async (_req, res) => {
   const result = await getPool().query(
     `SELECT id, question, answer, created_at, updated_at, created_by_name
      FROM team_knowledge
      ORDER BY created_at DESC`
   );
   res.json({ entries: result.rows });
-});
+}));
 
 const createSchema = z.object({
   question: z.string().min(1, "A question is required."),
@@ -26,7 +27,7 @@ const createSchema = z.object({
 // The question text is embedded with the SAME local model used for document
 // chunks (src/rag/embeddings.ts) so retrieve.ts can compare Team Knowledge
 // entries and document chunks on one common distance scale.
-adminTeamKnowledgeRoutes.post("/api/admin/team-knowledge", async (req, res) => {
+adminTeamKnowledgeRoutes.post("/api/admin/team-knowledge", asyncHandler(async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -41,12 +42,12 @@ adminTeamKnowledgeRoutes.post("/api/admin/team-knowledge", async (req, res) => {
     logError("Team Knowledge create failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Failed to save this entry." });
   }
-});
+}));
 
 // Re-embeds the question on edit (same as create) since retrieve.ts matches
 // staff questions against this stored embedding — an edited question with a
 // stale embedding would keep matching on its old wording.
-adminTeamKnowledgeRoutes.patch("/api/admin/team-knowledge/:id", async (req, res) => {
+adminTeamKnowledgeRoutes.patch("/api/admin/team-knowledge/:id", asyncHandler(async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -71,9 +72,9 @@ adminTeamKnowledgeRoutes.patch("/api/admin/team-knowledge/:id", async (req, res)
     logError("Team Knowledge update failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Failed to update this entry." });
   }
-});
+}));
 
-adminTeamKnowledgeRoutes.delete("/api/admin/team-knowledge/:id", async (req, res) => {
+adminTeamKnowledgeRoutes.delete("/api/admin/team-knowledge/:id", asyncHandler(async (req, res) => {
   const result = await getPool().query("DELETE FROM team_knowledge WHERE id = $1 RETURNING id", [
     req.params.id,
   ]);
@@ -82,4 +83,4 @@ adminTeamKnowledgeRoutes.delete("/api/admin/team-knowledge/:id", async (req, res
     return;
   }
   res.json({ ok: true });
-});
+}));

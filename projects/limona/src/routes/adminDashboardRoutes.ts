@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getPool } from "../db/pool.js";
 import { requireAdmin } from "../auth/middleware.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const adminDashboardRoutes = Router();
 adminDashboardRoutes.use(requireAdmin);
@@ -9,7 +10,7 @@ adminDashboardRoutes.use(requireAdmin);
 // sidebar nav count badges (Document Library, Assets, Team Knowledge, Reporting).
 // The Users stat was removed when Limona's local users table was dropped — staff
 // management now lives in LimeHQ.
-adminDashboardRoutes.get("/api/admin/dashboard-stats", async (_req, res) => {
+adminDashboardRoutes.get("/api/admin/dashboard-stats", asyncHandler(async (_req, res) => {
   const [documentsResult, queriesResult, assetsResult, teamKnowledgeResult] = await Promise.all([
     getPool().query("SELECT count(*)::int AS count FROM documents WHERE status = 'ready'"),
     getPool().query(
@@ -32,4 +33,4 @@ adminDashboardRoutes.get("/api/admin/dashboard-stats", async (_req, res) => {
     teamKnowledgeCount: teamKnowledgeResult.rows[0].count,
     // teamMembers removed — user management is now handled in LimeHQ
   });
-});
+}));

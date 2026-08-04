@@ -7,34 +7,35 @@ import { getPool } from "../db/pool.js";
 import { requireAdmin } from "../auth/middleware.js";
 import { ingestAsset, absoluteAssetOriginalPath } from "../rag/assetIngest.js";
 import { logError } from "../lib/logger.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { upload } from "../lib/uploadConfig.js";
 
 export const adminAssetRoutes = Router();
 adminAssetRoutes.use(requireAdmin);
 
-adminAssetRoutes.get("/api/admin/assets", async (_req, res) => {
+adminAssetRoutes.get("/api/admin/assets", asyncHandler(async (_req, res) => {
   const result = await getPool().query(
     `SELECT id, filename, description, category, size_bytes, created_at, updated_at
      FROM assets ORDER BY created_at DESC`
   );
   res.json({ assets: result.rows });
-});
+}));
 
 // Mirrors GET /api/admin/categories in adminDocumentRoutes.ts, but reads from
 // the assets table — Assets and Document Library have always used separate,
 // independent category sets (different tables/concepts), so this must not be
 // merged with the documents endpoint even though the shape is identical.
-adminAssetRoutes.get("/api/admin/asset-categories", async (_req, res) => {
+adminAssetRoutes.get("/api/admin/asset-categories", asyncHandler(async (_req, res) => {
   const result = await getPool().query("SELECT DISTINCT category FROM assets ORDER BY category");
   res.json({ categories: result.rows.map((r) => r.category) });
-});
+}));
 
 const uploadFieldsSchema = z.object({
   description: z.string().min(1, "A description is required."),
   category: z.string().min(1, "A category is required."),
 });
 
-adminAssetRoutes.post("/api/admin/assets/upload", upload.single("file"), async (req, res) => {
+adminAssetRoutes.post("/api/admin/assets/upload", upload.single("file"), asyncHandler(async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded." });
     return;
@@ -61,10 +62,10 @@ adminAssetRoutes.post("/api/admin/assets/upload", upload.single("file"), async (
     logError("Asset upload failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: err instanceof Error ? err.message : "Upload failed." });
   }
-});
+}));
 
 // Same "always get your exact original file back" guarantee as documents.
-adminAssetRoutes.get("/api/admin/assets/:id/download", async (req, res) => {
+adminAssetRoutes.get("/api/admin/assets/:id/download", asyncHandler(async (req, res) => {
   const result = await getPool().query("SELECT filename, storage_path FROM assets WHERE id = $1", [
     req.params.id,
   ]);
@@ -79,14 +80,14 @@ adminAssetRoutes.get("/api/admin/assets/:id/download", async (req, res) => {
     return;
   }
   res.download(absPath, row.filename);
-});
+}));
 
 const assetCategorySchema = z.object({ category: z.string().min(1, "A category is required.") });
 
 // Mirrors adminDocumentRoutes.ts's PATCH /:id/category exactly (same shape,
 // same error handling) — an asset must always belong to some category, same
 // as documents, so empty string is rejected here too.
-adminAssetRoutes.patch("/api/admin/assets/:id/category", async (req, res) => {
+adminAssetRoutes.patch("/api/admin/assets/:id/category", asyncHandler(async (req, res) => {
   const parsed = assetCategorySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -101,14 +102,14 @@ adminAssetRoutes.patch("/api/admin/assets/:id/category", async (req, res) => {
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 // Unlike upload time (where a description is required), once an asset exists
 // an admin can clear its description back out entirely — same reasoning as
 // documents' equivalent route, so no .min(1) here.
 const assetDescriptionSchema = z.object({ description: z.string() });
 
-adminAssetRoutes.patch("/api/admin/assets/:id/description", async (req, res) => {
+adminAssetRoutes.patch("/api/admin/assets/:id/description", asyncHandler(async (req, res) => {
   const parsed = assetDescriptionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -123,7 +124,7 @@ adminAssetRoutes.patch("/api/admin/assets/:id/description", async (req, res) => 
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 // Unlike documents (soft-delete via 'superseded' status, since retrieval
 // must keep working around re-uploads), assets have no retrieval/versioning
@@ -131,14 +132,14 @@ adminAssetRoutes.patch("/api/admin/assets/:id/description", async (req, res) => 
 // (matches the "nothing here deletes bytes" convention from documents) since
 // disk cleanup was never asked for and deleting the wrong file has real
 // downside with no corresponding benefit at this scale.
-adminAssetRoutes.delete("/api/admin/assets/:id", async (req, res) => {
+adminAssetRoutes.delete("/api/admin/assets/:id", asyncHandler(async (req, res) => {
   const result = await getPool().query("DELETE FROM assets WHERE id = $1 RETURNING id", [req.params.id]);
   if (result.rows.length === 0) {
     res.status(404).json({ error: "Asset not found." });
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 // Assets have no file_ext column (unlike documents) since they accept any
 // file type on upload — the extension is derived from the stored filename
@@ -187,7 +188,7 @@ ${bodyHtml}
 // That fallback is the important safety property here — e.g. an uploaded
 // .html file must never be piped back with Content-Disposition: inline,
 // since that would execute in this app's own origin.
-adminAssetRoutes.get("/api/admin/assets/:id/preview", async (req, res) => {
+adminAssetRoutes.get("/api/admin/assets/:id/preview", asyncHandler(async (req, res) => {
   const result = await getPool().query("SELECT filename, storage_path FROM assets WHERE id = $1", [
     req.params.id,
   ]);
@@ -272,4 +273,4 @@ adminAssetRoutes.get("/api/admin/assets/:id/preview", async (req, res) => {
     logError("Asset preview failed", { assetId: req.params.id, error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Failed to render preview." });
   }
-});
+}));

@@ -12,7 +12,7 @@ import { adminAssetRoutes } from "./routes/adminAssetRoutes.js";
 import { adminTeamKnowledgeRoutes } from "./routes/adminTeamKnowledgeRoutes.js";
 import { adminReportingRoutes } from "./routes/adminReportingRoutes.js";
 import { chatRoutes } from "./routes/chatRoutes.js";
-import { logInfo } from "./lib/logger.js";
+import { logInfo, logError } from "./lib/logger.js";
 
 const env = loadEnv();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,6 +48,38 @@ app.use(adminDashboardRoutes);
 app.use(adminAssetRoutes);
 app.use(adminTeamKnowledgeRoutes);
 app.use(adminReportingRoutes);
+
+// Catch-all error handler — MUST be registered last (Express identifies an
+// error-handling middleware purely by its 4-argument signature) and MUST
+// have all 4 params even though `next` is unused, or Express treats it as
+// a normal middleware and skips it entirely. Every route handler above is
+// wrapped in asyncHandler (src/lib/asyncHandler.ts), which forwards any
+// thrown/rejected error here via next(err) instead of letting it become an
+// unhandled promise rejection. Without this, one bad request (a database
+// hiccup, a PDF that trips a parsing edge case, anything) crashed the
+// ENTIRE server for every user — the same failure shape found in
+// late-rent-notices on 2026-08-04. This turns that into a normal error
+// response for the one request that hit it; everyone else keeps working.
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  logError("unhandled route error", { message, path: req.path, method: req.method });
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Something went wrong on our end. Nothing was changed — please try again." });
+});
+
+// Last-resort backstop for anything that manages to bypass asyncHandler
+// entirely (middleware itself throwing, a background job's own unawaited
+// promise) — log it and keep the process running instead of letting Node's
+// default behavior (crash on unhandled rejection since Node 15) take the
+// whole site down. This does not replace asyncHandler; it's defense in
+// depth for the one class of error asyncHandler can't see.
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  logError("unhandled promise rejection — process kept running", { message });
+});
+process.on("uncaughtException", (err) => {
+  logError("uncaught exception — process kept running", { message: err.message });
+});
 
 app.listen(env.PORT, () => {
   logInfo("limona server listening", { port: env.PORT, chatConnected: isChatConnected() });

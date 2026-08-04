@@ -2,6 +2,7 @@ import { Router } from "express";
 import { jwtVerify } from "jose";
 import { loadEnv } from "../config/env.js";
 import { createSessionCookieValue, sessionCookieOptions, SESSION_COOKIE_NAME } from "../auth/session.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const authRoutes = Router();
 
@@ -14,7 +15,7 @@ export const authRoutes = Router();
 // NOTE(users-table): Limona's local users table has been dropped via migration
 // 0009_drop_users.ts. Any Limona-local user rows need to be re-provisioned as
 // staff accounts in LimeHQ.
-authRoutes.post("/auth/limehq-callback", async (req, res) => {
+authRoutes.post("/auth/limehq-callback", asyncHandler(async (req, res) => {
   const token = req.body.token;
   if (typeof token !== "string") {
     res.status(400).send("Invalid sign-in link.");
@@ -42,7 +43,7 @@ authRoutes.post("/auth/limehq-callback", async (req, res) => {
   } catch {
     res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
   }
-});
+}));
 
 // Redirect any direct login attempts to LimeHQ — it's the only login path.
 // The local /api/auth/login endpoint has been removed (BLOCKER 3).

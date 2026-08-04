@@ -8,12 +8,13 @@ import { requireAdmin } from "../auth/middleware.js";
 import { ingestDocument, absoluteOriginalPath } from "../rag/ingest.js";
 import { extToSupportedExt } from "../rag/extractText.js";
 import { logError } from "../lib/logger.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { upload } from "../lib/uploadConfig.js";
 
 export const adminDocumentRoutes = Router();
 adminDocumentRoutes.use(requireAdmin);
 
-adminDocumentRoutes.get("/api/admin/documents", async (req, res) => {
+adminDocumentRoutes.get("/api/admin/documents", asyncHandler(async (req, res) => {
   const category = typeof req.query.category === "string" && req.query.category !== "" ? req.query.category : undefined;
   const result = await getPool().query(
     `
@@ -26,16 +27,16 @@ adminDocumentRoutes.get("/api/admin/documents", async (req, res) => {
     [category ?? null]
   );
   res.json({ documents: result.rows });
-});
+}));
 
 // Categories are now just free-form text on documents (matching how assets
 // already worked) rather than a fixed 7-row lookup table — this returns
 // whatever category strings are actually in use so the admin UI can offer
 // them (e.g. as a datalist), not a fixed reference list.
-adminDocumentRoutes.get("/api/admin/categories", async (_req, res) => {
+adminDocumentRoutes.get("/api/admin/categories", asyncHandler(async (_req, res) => {
   const result = await getPool().query("SELECT DISTINCT category FROM documents ORDER BY category");
   res.json({ categories: result.rows.map((r) => r.category) });
-});
+}));
 
 // Accepts an empty/missing value as "not provided" (multipart form fields
 // arrive as strings, so an unfilled date input often comes through as "")
@@ -64,7 +65,7 @@ const SUPPORTED_EXTENSIONS_MESSAGE = "Only .pdf, .docx, .xlsx, .csv, .txt, and .
 // Single-file upload. Bulk upload (below) reuses this same ingest path per
 // file so there is exactly one place that knows how to go from bytes on
 // the wire to a ready, searchable document.
-adminDocumentRoutes.post("/api/admin/documents/upload", upload.single("file"), async (req, res) => {
+adminDocumentRoutes.post("/api/admin/documents/upload", upload.single("file"), asyncHandler(async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded." });
     return;
@@ -99,7 +100,7 @@ adminDocumentRoutes.post("/api/admin/documents/upload", upload.single("file"), a
     logError("Upload failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: err instanceof Error ? err.message : "Upload failed." });
   }
-});
+}));
 
 const bulkUploadFieldsSchema = z.object({
   category: z.string().min(1, "A category is required."),
@@ -112,7 +113,7 @@ const bulkUploadFieldsSchema = z.object({
 // where a whole folder maps to one category at a time. Each file ingests
 // independently — one bad file (e.g. a corrupted PDF) doesn't fail the whole
 // batch.
-adminDocumentRoutes.post("/api/admin/documents/bulk-upload", upload.array("files", 100), async (req, res) => {
+adminDocumentRoutes.post("/api/admin/documents/bulk-upload", upload.array("files", 100), asyncHandler(async (req, res) => {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   if (files.length === 0) {
     res.status(400).json({ error: "No files uploaded." });
@@ -147,11 +148,11 @@ adminDocumentRoutes.post("/api/admin/documents/bulk-upload", upload.array("files
   }
 
   res.json({ results });
-});
+}));
 
 const recategorizeSchema = z.object({ category: z.string().min(1, "A category is required.") });
 
-adminDocumentRoutes.patch("/api/admin/documents/:id/category", async (req, res) => {
+adminDocumentRoutes.patch("/api/admin/documents/:id/category", asyncHandler(async (req, res) => {
   const parsed = recategorizeSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -166,7 +167,7 @@ adminDocumentRoutes.patch("/api/admin/documents/:id/category", async (req, res) 
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 const documentCreatedAtSchema = z.object({
   documentCreatedAt: z
@@ -178,7 +179,7 @@ const documentCreatedAtSchema = z.object({
 // Modeled directly on the category-patch route above — same shape/error
 // handling, just a different column. Lets an admin set or clear (via null)
 // the "this document is dated ___" field after upload.
-adminDocumentRoutes.patch("/api/admin/documents/:id/document-created-at", async (req, res) => {
+adminDocumentRoutes.patch("/api/admin/documents/:id/document-created-at", asyncHandler(async (req, res) => {
   const parsed = documentCreatedAtSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -193,7 +194,7 @@ adminDocumentRoutes.patch("/api/admin/documents/:id/document-created-at", async 
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 // Unlike upload time (where a description is required), once a document
 // exists an admin can clear its description back out entirely — so, unlike
@@ -202,7 +203,7 @@ const descriptionSchema = z.object({ description: z.string() });
 
 // Modeled directly on the category-patch route above — same shape/error
 // handling, just a different column.
-adminDocumentRoutes.patch("/api/admin/documents/:id/description", async (req, res) => {
+adminDocumentRoutes.patch("/api/admin/documents/:id/description", asyncHandler(async (req, res) => {
   const parsed = descriptionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -217,13 +218,13 @@ adminDocumentRoutes.patch("/api/admin/documents/:id/description", async (req, re
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 // "Remove" here means the document stops appearing/being retrievable —
 // marking it superseded-with-no-replacement is simplest and consistent with
 // the "don't hard-delete automatically" rule already used for re-uploads.
 // The original file stays on disk untouched; nothing here deletes bytes.
-adminDocumentRoutes.delete("/api/admin/documents/:id", async (req, res) => {
+adminDocumentRoutes.delete("/api/admin/documents/:id", asyncHandler(async (req, res) => {
   const result = await getPool().query(
     "UPDATE documents SET status = 'superseded' WHERE id = $1 AND status = 'ready' RETURNING id",
     [req.params.id]
@@ -233,12 +234,12 @@ adminDocumentRoutes.delete("/api/admin/documents/:id", async (req, res) => {
     return;
   }
   res.json({ ok: true });
-});
+}));
 
 // Hard requirement from the approved spec: every uploaded document must be
 // downloadable back in its original, untouched form at any time. This reads
 // the exact bytes written at upload time — no re-rendering, no re-export.
-adminDocumentRoutes.get("/api/admin/documents/:id/download", async (req, res) => {
+adminDocumentRoutes.get("/api/admin/documents/:id/download", asyncHandler(async (req, res) => {
   const result = await getPool().query(
     "SELECT filename, storage_path FROM documents WHERE id = $1",
     [req.params.id]
@@ -254,7 +255,7 @@ adminDocumentRoutes.get("/api/admin/documents/:id/download", async (req, res) =>
     return;
   }
   res.download(absPath, row.filename);
-});
+}));
 
 function htmlPage(bodyHtml: string): string {
   return `<!DOCTYPE html>
@@ -278,7 +279,7 @@ ${bodyHtml}
 // same requireAdmin guard, same on-disk file the /download route reads, but
 // branches on file_ext to decide how to render it since only pdf/txt/md can
 // be sent to the browser as-is.
-adminDocumentRoutes.get("/api/admin/documents/:id/preview", async (req, res) => {
+adminDocumentRoutes.get("/api/admin/documents/:id/preview", asyncHandler(async (req, res) => {
   const result = await getPool().query(
     "SELECT filename, storage_path, file_ext FROM documents WHERE id = $1",
     [req.params.id]
@@ -337,4 +338,4 @@ adminDocumentRoutes.get("/api/admin/documents/:id/preview", async (req, res) => 
     logError("Document preview failed", { documentId: req.params.id, error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Failed to render preview." });
   }
-});
+}));

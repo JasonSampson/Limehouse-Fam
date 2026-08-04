@@ -6,6 +6,7 @@ import { isChatConnected, isAnthropicConnected } from "../config/env.js";
 import { retrieveRelevantChunks, retrieveTeamKnowledgeMatch, retrieveLoosestChunks } from "../rag/retrieve.js";
 import { generateAnswer } from "../rag/generateAnswer.js";
 import { logError } from "../lib/logger.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const chatRoutes = Router();
 chatRoutes.use(requireAuth);
@@ -22,20 +23,20 @@ chatRoutes.get("/api/chat/status", (_req, res) => {
 // Conversation history is per-user only — never shared across staff (see
 // chat_conversations.user_id). Ordered by updated_at so the sitting you're
 // actively adding to always floats to the top.
-chatRoutes.get("/api/chat/conversations", async (req, res) => {
+chatRoutes.get("/api/chat/conversations", asyncHandler(async (req, res) => {
   const result = await getPool().query(
     `SELECT id, title, updated_at FROM chat_conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 50`,
     [req.user!.id]
   );
   res.json({ conversations: result.rows });
-});
+}));
 
 // Replays one past conversation's transcript. Citations weren't stored
 // separately (see migration 0014) — they're rebuilt here the same way
 // Reporting's Most Common Questions does: look up which documents the
 // cited chunks belong to, or "Team Knowledge" when top_chunk_ids is null on
 // an answered row.
-chatRoutes.get("/api/chat/conversations/:id", async (req, res) => {
+chatRoutes.get("/api/chat/conversations/:id", asyncHandler(async (req, res) => {
   const pool = getPool();
   const convCheck = await pool.query(`SELECT id FROM chat_conversations WHERE id = $1 AND user_id = $2`, [
     req.params.id,
@@ -76,7 +77,7 @@ chatRoutes.get("/api/chat/conversations/:id", async (req, res) => {
   }
 
   res.json({ messages });
-});
+}));
 
 const askSchema = z.object({
   question: z.string().min(1).max(2000),
@@ -86,7 +87,7 @@ const askSchema = z.object({
   conversationId: z.string().uuid().optional().nullable(),
 });
 
-chatRoutes.post("/api/chat/ask", async (req, res) => {
+chatRoutes.post("/api/chat/ask", asyncHandler(async (req, res) => {
   if (!isChatConnected()) {
     res.status(503).json({
       error:
@@ -202,4 +203,4 @@ chatRoutes.post("/api/chat/ask", async (req, res) => {
     logError("Chat ask failed", { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: "Something went wrong answering that question. Please try again." });
   }
-});
+}));

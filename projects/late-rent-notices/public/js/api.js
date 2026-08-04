@@ -115,9 +115,14 @@ async function initLayout(activeTab) {
       <a href="${escapeHtml(me.limehqUrl)}/launcher" class="brand-link" style="display:inline-flex;align-items:center;text-decoration:none">
         <img src="/images/limehq-logo.png" alt="LimeHQ" style="height:44px;width:auto;display:block" />
       </a>
-      <div class="who">
-        ${escapeHtml(me.displayName)} &middot; ${escapeHtml(roleLabel)}
-        <button id="logout-btn" type="button">Sign out</button>
+      <div class="user-menu">
+        <button class="user-menu-trigger" id="user-menu-btn" type="button" aria-haspopup="true" aria-expanded="false">
+          ${escapeHtml(me.displayName)} <span class="user-menu-caret">&#9662;</span>
+        </button>
+        <div class="user-menu-dropdown" id="user-menu-dropdown">
+          <span class="user-menu-role">${escapeHtml(roleLabel)}</span>
+          <button class="user-menu-item user-menu-signout" id="logout-btn" type="button">Sign out</button>
+        </div>
       </div>
     </header>
     ${me.shadowMode ? `<div class="shadow-banner">SHADOW MODE: this system is in test mode. No notices are actually emailed to tenants, no matter what a button says.</div>` : ""}
@@ -136,6 +141,20 @@ async function initLayout(activeTab) {
   document.getElementById("logout-btn").addEventListener("click", async () => {
     await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
     window.location.href = "/login.html";
+  });
+
+  // Same open/close behavior as LimeHQ's own user menu (public/js/nav.js
+  // there): click the name to toggle, click anywhere else to close.
+  const menuBtn = document.getElementById("user-menu-btn");
+  const menuDropdown = document.getElementById("user-menu-dropdown");
+  menuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menuDropdown.classList.toggle("open");
+    menuBtn.setAttribute("aria-expanded", String(menuDropdown.classList.contains("open")));
+  });
+  document.addEventListener("click", () => {
+    menuDropdown.classList.remove("open");
+    menuBtn.setAttribute("aria-expanded", "false");
   });
 
   document.getElementById("nav-search-form").addEventListener("submit", (e) => {

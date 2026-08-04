@@ -60,15 +60,85 @@ header.topbar .brand small {
   font-size: 0.72rem;
 }
 
-header.topbar .who {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  text-align: right;
+/* Account menu — matches LimeHQ's own top-right user menu exactly (same
+   font, colors, and dropdown behavior), so it reads as the same component
+   whether you're looking at LimeHQ itself or a page it handed you off to. */
+@font-face {
+  font-family: 'Quicksand';
+  src: url('/fonts/Quicksand-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Quicksand';
+  src: url('/fonts/Quicksand-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Quicksand';
+  src: url('/fonts/Quicksand-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
 }
 
-header.topbar .who button {
-  margin-left: 8px;
+.user-menu { position: relative; font-family: 'Quicksand', sans-serif; }
+.user-menu-trigger {
+  background: none;
+  border: none;
+  font-family: 'Quicksand', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #333;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 7px;
 }
+.user-menu-trigger:hover { background: #f0f4f0; }
+.user-menu-caret { font-size: 0.65rem; color: #888; }
+.user-menu-role {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #888;
+  padding: 0.4rem 0.875rem 0.3rem;
+}
+.user-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  background: #fff;
+  border: 1px solid #e0e8e0;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  min-width: 175px;
+  z-index: 100;
+  padding: 0.3rem;
+  display: none;
+}
+.user-menu-dropdown.open { display: block; }
+.user-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.875rem;
+  border-radius: 7px;
+  font-family: 'Quicksand', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #333;
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.user-menu-item:hover { background: #f0f4f0; color: #333; }
+.user-menu-signout { color: #dc2626; }
+.user-menu-signout:hover { background: #fef2f2; }
 
 .shadow-banner {
   background: var(--amber-bg);

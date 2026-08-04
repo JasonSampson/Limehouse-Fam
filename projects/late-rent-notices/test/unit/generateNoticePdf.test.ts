@@ -73,7 +73,6 @@ describe("generateNoticePdf — real PDF generation with realistic merge fields"
     expect(text).toContain("$91.00");
     expect(text).toContain("$600.00");
     expect(text).toContain("$691.00");
-    expect(text).toContain("6 days past due");
     expect(text).toContain("55.1-1245");
     expect(text).toContain("55.1-1251");
     // No leftover unrendered placeholders.
@@ -86,6 +85,14 @@ describe("generateNoticePdf — real PDF generation with realistic merge fields"
     expect(text).not.toContain("**");
     expect(text).toContain("YOU MAY AVOID PAYING ATTORNEY'S FEES");
     expect(text).toContain("RESIDENT IS HEREBY NOTIFIED");
+  }, 30000);
+
+  it("no longer shows a days-past-due count on the TOTAL DUE LANDLORD line (Jason, 2026-08-04)", async () => {
+    const pdf = await generateNoticePdf(realFields, INITIAL_SUBJECT_LINE);
+    const { text } = await extractPdfText(pdf);
+    expect(text).not.toContain("days past due");
+    expect(text).toContain("TOTAL DUE LANDLORD AS OF");
+    expect(text).toContain("$1,875.50");
   }, 30000);
 
   // Jason's correction, 2026-08-04: this line was completely absent from

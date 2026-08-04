@@ -120,10 +120,10 @@ describe("renderTemplate — subject-line-not-escaped behavior (escapeForHtml: f
   });
 });
 
-describe("renderTemplate — full initial notice letter (v7, actual attorney-sourced template)", () => {
+describe("renderTemplate — full initial notice letter (v8, actual attorney-sourced template)", () => {
   it("is the expected template key/version this test suite is pinned against", () => {
     expect(INITIAL_TEMPLATE_KEY).toBe("14_day_pay_or_quit");
-    expect(INITIAL_TEMPLATE_VERSION).toBe(7);
+    expect(INITIAL_TEMPLATE_VERSION).toBe(8);
   });
 
   it("renders the full body with realistic tenant data and contains every populated field's value", () => {
@@ -151,7 +151,10 @@ describe("renderTemplate — full initial notice letter (v7, actual attorney-sou
     expect(rendered).toContain("Marcus &amp; Aaliyah Johnson");
     expect(rendered).toContain("Bldg C, Apt 204");
     expect(rendered).toContain("$1,875.50");
-    expect(rendered).toContain("6 days past due");
+    // days_late is no longer referenced anywhere in the notice body (Jason,
+    // 2026-08-04) — the "TOTAL DUE LANDLORD" line dropped its "(N days
+    // past due)" parenthetical as redundant.
+    expect(rendered).not.toContain("days past due");
     expect(rendered).toContain("Casey Nguyen");
     expect(rendered).toContain("55.1-1245");
     expect(rendered).toContain("55.1-1251");

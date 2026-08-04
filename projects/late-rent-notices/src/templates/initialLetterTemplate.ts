@@ -60,7 +60,7 @@
 // testing this rendered output end-to-end, then Judge's review — has passed.
 // It is safe to load in shadow mode, where Send is a no-op.
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
-export const INITIAL_TEMPLATE_VERSION = 7;
+export const INITIAL_TEMPLATE_VERSION = 8;
 
 // v5 changes from v4, per Jason on 2026-08-04 after reviewing the first
 // real drafts: (1) the unit label is dropped from the subject line — the
@@ -102,6 +102,13 @@ export const INITIAL_TEMPLATE_VERSION = 7;
 //     (underline, centered/header-sized) from generateNoticePdf.ts and
 //     noticeBodyFormatting.ts, not from markdown syntax here, since only
 //     one paragraph each ever needs it.
+//
+// v8 changes from v7, per Jason on 2026-08-04: the "TOTAL DUE LANDLORD AS
+// OF {{notice_date}}" line drops its "({{days_late}} days past due)"
+// parenthetical — the notice already establishes it's past due; restating
+// a day count there was redundant. days_late is still computed and used
+// elsewhere (the dashboard, the API) — only this one line stopped
+// referencing it.
 export const INITIAL_SUBJECT_LINE = "NOTICE OF DEFAULT — FAILURE TO PAY RENT";
 
 // v4 change from v3: the header block was restructured to match the actual
@@ -139,7 +146,7 @@ charges as itemized below:
 Rent for the Month(s) of {{due_date}}: {{rent_amount_due}}
 Late Charges for Month(s) of {{due_date}}: {{late_fee_amount_due}}
 Miscellaneous Charges: {{misc_amount_due}}
-TOTAL DUE LANDLORD AS OF {{notice_date}} ({{days_late}} days past due): {{amount_due}}
+TOTAL DUE LANDLORD AS OF {{notice_date}}: {{amount_due}}
 
 If you fail to pay the total amount due within 14 days of this written
 notice from the Landlord, the Landlord may terminate the rental agreement

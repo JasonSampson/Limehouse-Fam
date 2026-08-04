@@ -23,7 +23,8 @@ const realFields: MergeFields = {
   days_late: "6",
   due_date: "2026-07-01",
   notice_date: "2026-07-07",
-  property_address: "4210 Tidewater Dr, Norfolk, VA 23509",
+  property_address: "4210 Tidewater Dr, Bldg C, Apt 204",
+  property_address_line2: "Norfolk, VA 23509",
   pm_name: "Casey Nguyen",
   rent_amount_due: formatCurrency(1700),
   late_fee_amount_due: formatCurrency(129.55),
@@ -59,8 +60,11 @@ describe("generateNoticePdf — real PDF generation with realistic merge fields"
     const { text } = await extractPdfText(pdf);
 
     expect(text).toContain("Marcus & Aaliyah Johnson");
-    expect(text).toContain("Bldg C, Apt 204");
-    expect(text).toContain("4210 Tidewater Dr, Norfolk, VA 23509");
+    // Two-line mailing address (Jason, 2026-08-04): street + unit, then
+    // city/state/ZIP on the line below — checked separately since they're
+    // now two distinct table cells, not one concatenated string.
+    expect(text).toContain("4210 Tidewater Dr, Bldg C, Apt 204");
+    expect(text).toContain("Norfolk, VA 23509");
     expect(text).toContain("Casey Nguyen");
     expect(text).toContain("$1,875.50");
     expect(text).toContain("$1,700.00");

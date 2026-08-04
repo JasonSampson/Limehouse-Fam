@@ -96,8 +96,8 @@ interface ParsedNoticeBody {
   // tenant info on the left, Limehouse's name/address on the right, line
   // for line. See buildPrintHtml for how these six lines become that table.
   toName: string; // "TO: {tenant_name}"
-  toPropertyAddress: string; // "{property_address}"
-  toUnitLabel: string; // "{unit_label}"
+  toAddressLine1: string; // "{property_address}" — street, plus unit where one displays
+  toAddressLine2: string; // "{property_address_line2}" — city, state, ZIP
   fromName: string; // "FROM: Limehouse Property Management"
   fromAddressLine1: string; // "6056 Providence Rd, Suite 200"
   fromAddressLine2: string; // "Virginia Beach, VA 23464"
@@ -144,13 +144,14 @@ function parseNoticeBody(renderedBody: string): ParsedNoticeBody {
       throw new NoticeBodyParseError(`expected line "${name}" not found in rendered notice body`);
     }
   }
-  // The header is exactly six lines: TO:, property address, unit label,
-  // FROM:, address line 1, address line 2 — in that fixed order. If a
-  // future template edit changes that shape, fail loudly rather than
-  // silently misplacing a line into the wrong table cell.
+  // The header is exactly six lines: TO:, tenant's address line 1 (street +
+  // unit), tenant's address line 2 (city/state/ZIP), FROM:, address line 1,
+  // address line 2 — in that fixed order. If a future template edit changes
+  // that shape, fail loudly rather than silently misplacing a line into the
+  // wrong table cell.
   if (fromLineIdx !== toLineIdx + 3) {
     throw new NoticeBodyParseError(
-      `expected exactly 2 lines (property address, unit label) between "TO:" and "FROM:", found ${fromLineIdx - toLineIdx - 1}`
+      `expected exactly 2 lines (address line 1, address line 2) between "TO:" and "FROM:", found ${fromLineIdx - toLineIdx - 1}`
     );
   }
 
@@ -160,8 +161,8 @@ function parseNoticeBody(renderedBody: string): ParsedNoticeBody {
 
   return {
     toName: lines[toLineIdx].trim(),
-    toPropertyAddress: lines[toLineIdx + 1].trim(),
-    toUnitLabel: lines[toLineIdx + 2].trim(),
+    toAddressLine1: lines[toLineIdx + 1].trim(),
+    toAddressLine2: lines[toLineIdx + 2].trim(),
     fromName: lines[fromLineIdx].trim(),
     fromAddressLine1: lines[fromLineIdx + 1].trim(),
     fromAddressLine2: lines[fromLineIdx + 2].trim(),
@@ -292,8 +293,8 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
 
   <table class="grid">
     <tr>${tableGridCell(parsed.toName)}${tableGridCell(parsed.fromName)}</tr>
-    <tr>${tableGridCell(parsed.toPropertyAddress)}${tableGridCell(parsed.fromAddressLine1)}</tr>
-    <tr>${tableGridCell(parsed.toUnitLabel)}${tableGridCell(parsed.fromAddressLine2)}</tr>
+    <tr>${tableGridCell(parsed.toAddressLine1)}${tableGridCell(parsed.fromAddressLine1)}</tr>
+    <tr>${tableGridCell(parsed.toAddressLine2)}${tableGridCell(parsed.fromAddressLine2)}</tr>
   </table>
 
   ${paragraphsToHtml(parsed.beforeItemized)}

@@ -5,7 +5,14 @@ export interface MergeFields {
   days_late: string;
   due_date: string;
   notice_date: string;
+  // Two-line mailing-address format Jason requires (2026-08-04): line 1 is
+  // the street plus unit ("2642 East Ocean View Avenue, Unit B2" — or just
+  // the street at a single-family home, no unit line), line 2 is city,
+  // state, and ZIP ("Norfolk, VA 23518"). Together they fill the two blank
+  // lines under "TO:" in the letter header, mirroring Limehouse's own two
+  // address lines under "FROM:".
   property_address: string;
+  property_address_line2: string;
   pm_name: string;
   // Itemized breakdown (migration 0038 / notice_line_items), computed from
   // real classified Buildium charge lines at send time — see sendNotice.ts.

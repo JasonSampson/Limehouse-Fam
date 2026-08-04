@@ -8,7 +8,7 @@ import {
   UnclassifiedChargeBlockedError,
 } from "./noticeLineItems.js";
 import { renderTemplate, formatCurrency, formatDateMMDDYYYY, type MergeFields } from "../templates/renderTemplate.js";
-import { formatUnitDisplay } from "./unitDisplay.js";
+import { formatUnitDisplay, formatMailingAddressLines } from "./unitDisplay.js";
 import { sendGraphMail, sendPmNotificationEmail } from "../email/graphMailer.js";
 import { generateNoticePdf } from "./generateNoticePdf.js";
 import { renderNoticeBodyToHtml } from "./noticeBodyFormatting.js";
@@ -107,6 +107,10 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     unit_label: string;
     multi_unit: boolean;
     property_address: string;
+    address_line1: string;
+    city: string;
+    state: string;
+    postal_code: string;
     rent_due_day: number;
     grace_period_days: number;
     assigned_pm_name: string;
@@ -120,6 +124,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     `SELECT l.buildium_lease_id, l.unit_label, l.rent_due_day, l.grace_period_days,
             (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
             (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+            p.address_line1, p.city, p.state, p.postal_code,
             pm.display_name AS assigned_pm_name, pm.email AS assigned_pm_email
      FROM leases l
      JOIN properties p ON p.id = l.property_id
@@ -129,6 +134,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   );
   const lease = leaseResult.rows[0];
   const unitDisplay = formatUnitDisplay(lease.unit_label, lease.multi_unit);
+  const mailingAddress = formatMailingAddressLines(lease.address_line1, lease.city, lease.state, lease.postal_code, unitDisplay);
 
   // Step 1: stale-draft protection. Live balance, not the cached draft
   // figure. Shared with noticeRoutes.ts's review-page route (see
@@ -263,14 +269,16 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   const mergeFields: MergeFields = {
     tenant_name: formatTenantNameList(toRecipients.map((r) => r.full_name ?? "Tenant")),
     // "Unit B2" at a multi-unit property, blank at a single-family house —
-    // see unitDisplay.ts. A blank leaves the header block's third line
-    // empty, same as the attorney's original blank form cell.
+    // see unitDisplay.ts. Folded into property_address (line 1) below, not
+    // rendered as its own header line.
     unit_label: unitDisplay,
     amount_due: formatCurrency(liveBalance.balance),
     days_late: String(daysLate),
     due_date: formatDateMMDDYYYY(dueDate),
     notice_date: formatDateMMDDYYYY(new Date()),
-    property_address: lease.property_address,
+    // Standard two-line mailing address — see formatMailingAddressLines.
+    property_address: mailingAddress.line1,
+    property_address_line2: mailingAddress.line2,
     pm_name: lease.assigned_pm_name,
     // Real computed itemized amounts (migration 0038 / notice_line_items),
     // classified fresh above at send time.
@@ -569,11 +577,16 @@ export async function resendBouncedRecipient(
     unit_label: string;
     multi_unit: boolean;
     property_address: string;
+    address_line1: string;
+    city: string;
+    state: string;
+    postal_code: string;
     assigned_pm_name: string;
   }>(
     `SELECT l.unit_label,
             (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
             (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+            p.address_line1, p.city, p.state, p.postal_code,
             pm.display_name AS assigned_pm_name
      FROM leases l
      JOIN properties p ON p.id = l.property_id
@@ -583,6 +596,7 @@ export async function resendBouncedRecipient(
   );
   const lease = leaseResult.rows[0];
   const unitDisplay = formatUnitDisplay(lease.unit_label, lease.multi_unit);
+  const mailingAddress = formatMailingAddressLines(lease.address_line1, lease.city, lease.state, lease.postal_code, unitDisplay);
 
   const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
     "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
@@ -636,7 +650,8 @@ export async function resendBouncedRecipient(
     // Original notice date, not today — this is a redelivery of the same
     // already-sent legal document, not a new notice.
     notice_date: formatDateMMDDYYYY(notice.sent_at),
-    property_address: lease.property_address,
+    property_address: mailingAddress.line1,
+    property_address_line2: mailingAddress.line2,
     pm_name: lease.assigned_pm_name,
     rent_amount_due: formatCurrency(sumBucket("rent")),
     late_fee_amount_due: formatCurrency(sumBucket("late_fee")),

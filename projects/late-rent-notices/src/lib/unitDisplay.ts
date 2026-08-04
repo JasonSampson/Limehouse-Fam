@@ -20,3 +20,25 @@ export function formatUnitDisplay(unitLabel: string, multiUnit: boolean): string
   if (!multiUnit && label === "1") return "";
   return `Unit ${label}`;
 }
+
+// Standard two-line mailing address, per Jason (2026-08-04):
+//   "2642 East Ocean View Avenue, Unit B2"
+//   "Norfolk, VA 23518"
+// Used identically by the notice letter (PDF + email) everywhere it's
+// built — sendNotice.ts (initial send + resend) and noticeRoutes.ts
+// (preview + PDF-download routes) — so the format can't drift between
+// them. unitDisplay is the already-computed formatUnitDisplay() result
+// (blank at a single-family home); it folds into line 1 with a comma,
+// never onto its own line.
+export function formatMailingAddressLines(
+  addressLine1: string,
+  city: string,
+  state: string,
+  postalCode: string,
+  unitDisplay: string
+): { line1: string; line2: string } {
+  return {
+    line1: unitDisplay ? `${addressLine1}, ${unitDisplay}` : addressLine1,
+    line2: `${city}, ${state} ${postalCode}`,
+  };
+}

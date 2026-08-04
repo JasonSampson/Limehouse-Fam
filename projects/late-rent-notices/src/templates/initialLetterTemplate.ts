@@ -65,7 +65,7 @@
 // testing this rendered output end-to-end, then Judge's review — has passed.
 // It is safe to load in shadow mode, where Send is a no-op.
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
-export const INITIAL_TEMPLATE_VERSION = 5;
+export const INITIAL_TEMPLATE_VERSION = 6;
 
 // v5 changes from v4, per Jason on 2026-08-04 after reviewing the first
 // real drafts: (1) the unit label is dropped from the subject line — the
@@ -75,6 +75,13 @@ export const INITIAL_TEMPLATE_VERSION = 5;
 // in the signature block. No substantive legal wording changed — the
 // paragraph-spacing changes Jason asked for in the same breath live in
 // generateNoticePdf.ts's print CSS, not in this text.
+//
+// v6 changes from v5, same day: the tenant's address block becomes a
+// standard two-line mailing address — "{street}, {Unit X}" then
+// "{city}, {state} {zip}" — instead of "{street}, {city}, {state}" on one
+// line and a lone unit label on the next (which was also missing the ZIP
+// entirely). property_address now carries the combined street+unit line;
+// property_address_line2 is new.
 export const INITIAL_SUBJECT_LINE = "NOTICE OF DEFAULT — FAILURE TO PAY RENT";
 
 // v4 change from v3: the header block was restructured to match the actual
@@ -98,7 +105,7 @@ export const INITIAL_BODY_MARKDOWN = `
 
 TO: {{tenant_name}}
 {{property_address}}
-{{unit_label}}
+{{property_address_line2}}
 FROM: Limehouse Property Management
 6056 Providence Rd, Suite 200
 Virginia Beach, VA 23464

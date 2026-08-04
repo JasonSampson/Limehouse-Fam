@@ -9,7 +9,7 @@ import { addBusinessDays } from "../lib/businessCalendar.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
 import { renderTemplate, formatCurrency, formatDateMMDDYYYY, type MergeFields } from "../templates/renderTemplate.js";
-import { formatUnitDisplay } from "../lib/unitDisplay.js";
+import { formatUnitDisplay, formatMailingAddressLines } from "../lib/unitDisplay.js";
 import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../lib/config.js";
 import { generateNoticePdf, NoticeBodyParseError, ChromeNotFoundError } from "../lib/generateNoticePdf.js";
 import { formatTenantNameList } from "../lib/sendNotice.js";
@@ -175,6 +175,10 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       grace_period_days: number;
       property_name: string;
       property_address: string;
+      address_line1: string;
+      city: string;
+      state: string;
+      postal_code: string;
       assigned_pm_name: string;
     }>(
       `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
@@ -184,6 +188,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
               (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
               p.name AS property_name,
               (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+              p.address_line1, p.city, p.state, p.postal_code,
               pm.display_name AS assigned_pm_name
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
@@ -348,14 +353,23 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
     // One combined render for every "to" recipient on the lease, matching
     // sendNotice.ts's single-email-to-all-tenants design — tenant_name is a
     // joined list ("Jane Doe and John Doe"), not one render per tenant.
+    const previewUnitDisplay = formatUnitDisplay(notice.unit_label, notice.multi_unit);
+    const previewMailingAddress = formatMailingAddressLines(
+      notice.address_line1,
+      notice.city,
+      notice.state,
+      notice.postal_code,
+      previewUnitDisplay
+    );
     const mergeFields: MergeFields = {
       tenant_name: formatTenantNameList(toRecipients.map((r) => r.full_name ?? "Tenant")),
-      unit_label: formatUnitDisplay(notice.unit_label, notice.multi_unit),
+      unit_label: previewUnitDisplay,
       amount_due: formatCurrency(Number(amountDue)),
       days_late: String(daysLate),
       due_date: formatDateMMDDYYYY(dueDateSource),
       notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
-      property_address: notice.property_address,
+      property_address: previewMailingAddress.line1,
+      property_address_line2: previewMailingAddress.line2,
       pm_name: notice.assigned_pm_name,
       rent_amount_due: formatCurrency(sumBucket("rent")),
       late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
@@ -477,6 +491,10 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
         rent_due_day: number;
         grace_period_days: number;
         property_address: string;
+        address_line1: string;
+        city: string;
+        state: string;
+        postal_code: string;
         assigned_pm_name: string;
       }>(
         `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
@@ -485,6 +503,7 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
                 l.unit_label, l.buildium_lease_id, l.rent_due_day, l.grace_period_days,
                 (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
                 (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
+                p.address_line1, p.city, p.state, p.postal_code,
                 pm.display_name AS assigned_pm_name
          FROM notices n
          JOIN leases l ON l.id = n.lease_id
@@ -570,14 +589,23 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
       const { amount: courtCosts } = await getEstimatedCourtCosts(client);
       const { amount: attorneyFees } = await getEstimatedAttorneyFees(client);
 
+      const pdfUnitDisplay = formatUnitDisplay(notice.unit_label, notice.multi_unit);
+      const pdfMailingAddress = formatMailingAddressLines(
+        notice.address_line1,
+        notice.city,
+        notice.state,
+        notice.postal_code,
+        pdfUnitDisplay
+      );
       const mergeFields: MergeFields = {
         tenant_name: formatTenantNameList(recipientsResult.rows.map((r) => r.full_name ?? "Tenant")),
-        unit_label: formatUnitDisplay(notice.unit_label, notice.multi_unit),
+        unit_label: pdfUnitDisplay,
         amount_due: formatCurrency(Number(amountDue)),
         days_late: String(daysLate),
         due_date: formatDateMMDDYYYY(dueDateSource),
         notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
-        property_address: notice.property_address,
+        property_address: pdfMailingAddress.line1,
+        property_address_line2: pdfMailingAddress.line2,
         pm_name: notice.assigned_pm_name,
         rent_amount_due: formatCurrency(sumBucket("rent")),
         late_fee_amount_due: formatCurrency(sumBucket("late_fee")),

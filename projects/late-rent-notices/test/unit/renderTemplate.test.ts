@@ -14,7 +14,8 @@ const baseFields: MergeFields = {
   days_late: "10",
   due_date: "July 2026",
   notice_date: "July 15, 2026",
-  property_address: "123 Main St, Norfolk, VA 23508",
+  property_address: "123 Main St, Unit 4B",
+  property_address_line2: "Norfolk, VA 23508",
   pm_name: "Alex Rivera",
   rent_amount_due: "$1,350.00",
   late_fee_amount_due: "$150.00",
@@ -119,10 +120,10 @@ describe("renderTemplate — subject-line-not-escaped behavior (escapeForHtml: f
   });
 });
 
-describe("renderTemplate — full initial notice letter (v5, actual attorney-sourced template)", () => {
+describe("renderTemplate — full initial notice letter (v6, actual attorney-sourced template)", () => {
   it("is the expected template key/version this test suite is pinned against", () => {
     expect(INITIAL_TEMPLATE_KEY).toBe("14_day_pay_or_quit");
-    expect(INITIAL_TEMPLATE_VERSION).toBe(5);
+    expect(INITIAL_TEMPLATE_VERSION).toBe(6);
   });
 
   it("renders the full body with realistic tenant data and contains every populated field's value", () => {
@@ -133,7 +134,10 @@ describe("renderTemplate — full initial notice letter (v5, actual attorney-sou
       days_late: "6",
       due_date: "07/01/2026",
       notice_date: "07/07/2026",
-      property_address: "4210 Tidewater Dr, Norfolk, VA 23509",
+      // Standard two-line mailing address (Jason, 2026-08-04): street +
+      // unit on line 1, city/state/ZIP on line 2.
+      property_address: "4210 Tidewater Dr, Bldg C, Apt 204",
+      property_address_line2: "Norfolk, VA 23509",
       pm_name: "Casey Nguyen",
       rent_amount_due: formatCurrency(1700),
       late_fee_amount_due: formatCurrency(129.55),

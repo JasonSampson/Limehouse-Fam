@@ -121,6 +121,12 @@ function makeFakeClient(): PoolClient {
     if (sql.includes("FROM notice_recipients")) {
       return { rows: recipientRows };
     }
+    if (sql.includes("FROM pm_users")) {
+      // The sending staff member's identity — arrives via their LimeHQ
+      // login and resolves to this pm_users row. The live-mode test below
+      // asserts the Graph send goes out FROM this person's own mailbox.
+      return { rows: [{ display_name: "Alex Rivera", email: "alex@limehousepm.com" }] };
+    }
     // UPDATE notices / notice_recipients. rowCount: 1 matches real pg
     // behavior for an UPDATE that actually affects the target row —
     // checkLiveBalanceAndVoidIfStale (staleDraftCheck.ts) reads rowCount to
@@ -222,6 +228,10 @@ describe("sendNotice — shadow mode guard (legal 14-Day Notice send)", () => {
     expect(sendGraphMailMock).toHaveBeenCalledWith(
       expect.objectContaining({
         toRecipients: [{ email: "tenant@example.com" }],
+        // Jason's decision: the notice goes out FROM the staff member who
+        // clicked Send (their own Microsoft 365 mailbox), not a shared
+        // compliance address — identity flows in via their LimeHQ login.
+        senderMailbox: "alex@limehousepm.com",
       })
     );
     expect(result).toEqual({ sent: true, voided: false });

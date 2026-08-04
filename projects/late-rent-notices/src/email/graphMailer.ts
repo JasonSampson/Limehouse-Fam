@@ -61,6 +61,15 @@ export interface GraphSendMailRequest {
   toRecipients: GraphRecipient[];
   ccRecipients: GraphRecipient[];
   attachments?: GraphAttachment[];
+  // Mailbox to send FROM. When set (the 14-day notice path passes the
+  // sending staff member's own address — Jason's decision: notices come
+  // from the person who clicked Send, whose identity arrives via their
+  // LimeHQ login), the mail goes out as that person. When omitted,
+  // system-originated mail (PM bounce/reminder notifications) falls back
+  // to the shared GRAPH_SENDER_MAILBOX. Every candidate mailbox must be
+  // covered by the Entra application access policy — see README "Graph
+  // setup" — or Graph rejects the send.
+  senderMailbox?: string;
 }
 
 export interface GraphSendResult {
@@ -105,8 +114,9 @@ export async function sendGraphMail(req: GraphSendMailRequest): Promise<GraphSen
   const env = loadEnv();
   try {
     const token = await getGraphAccessToken();
+    const senderMailbox = req.senderMailbox ?? env.GRAPH_SENDER_MAILBOX;
     const res = await fetch(
-      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(env.GRAPH_SENDER_MAILBOX)}/sendMail`,
+      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderMailbox)}/sendMail`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

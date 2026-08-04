@@ -299,11 +299,24 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
   const pdfFilename = `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
 
+  // The notice goes out FROM the staff member who clicked Send — their
+  // identity (including this email) arrived via their LimeHQ login and is
+  // the same pm_users row the session resolved. Jason's decision: a tenant
+  // sees the actual person handling their notice, not a shared mailbox.
+  // Their limehousepm.com address must match their Microsoft 365 mailbox
+  // (LimeHQ Staff & Permissions is the source of truth for that email).
+  const senderResult = await client.query<{ display_name: string; email: string }>(
+    "SELECT display_name, email FROM pm_users WHERE id = $1",
+    [params.sendingPmId]
+  );
+  const sender = senderResult.rows[0];
+
   const result = await sendGraphMail({
     subject,
     bodyHtml,
     toRecipients: toRecipients.map((r) => ({ email: r.email_address })),
     ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
+    senderMailbox: sender?.email,
     attachments: [
       {
         name: pdfFilename,
@@ -377,10 +390,6 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   // logged; any failure here (LeadSimple outage, rate limit, no matching
   // Deal) is logged and must never fail or roll back the send itself.
   try {
-    const senderResult = await client.query<{ display_name: string }>(
-      "SELECT display_name FROM pm_users WHERE id = $1",
-      [params.sendingPmId]
-    );
     const mirror = await mirrorNoticeToLeadSimple({
       noticeId: params.noticeId,
       recipientEmails: toRecipients.map((r) => r.email_address),
@@ -388,7 +397,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
       subject,
       amountDue: formatCurrency(liveBalance.balance),
       deliveryStatus: finalDeliveryStatus,
-      sentByPmName: senderResult.rows[0]?.display_name ?? `PM ${params.sendingPmId}`,
+      sentByPmName: sender?.display_name ?? `PM ${params.sendingPmId}`,
       sentAtIso: new Date().toISOString(),
       pdf: noticePdf,
       pdfFilename,

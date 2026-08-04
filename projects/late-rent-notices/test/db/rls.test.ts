@@ -432,6 +432,61 @@ describe("Row-level security", () => {
     });
   });
 
+  // Found live on 2026-08-04, later the same day as migrations 0048/0049:
+  // "View PDF" 404'd with "Notice not found or not visible to you." for a
+  // notice that had legitimately auto-voided while a fallback-role viewer
+  // was reviewing it. `notices` itself was visible (0048/0049 covered
+  // that) — but the detail/PDF routes JOIN notices to leases, and
+  // migration 0047's leases/lease_tenants fallback branch only ever
+  // matched `notices.status = 'draft'`, never 'voided', so the JOIN
+  // silently dropped the row. Migration 0050 fixes this the same way
+  // 0048/0049 fixed `notices` itself.
+  describe("fallback decision-maker keeps lease/tenant visibility after a draft auto-voids under them (migration 0050)", () => {
+    it("the JOIN from notices to leases still returns a row once the notice is voided, not just while it's a draft", async () => {
+      const fallbackId = await seedPmUser(superuser, { email: "fallback-voided-join@limehousepm.com", role: "pm", isFallbackDecisionMaker: true });
+      const lateCycleId = await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-08-03" });
+      const noticeId = await seedNotice(superuser, {
+        lateCycleId,
+        leaseId: leaseB,
+        letterTemplateId,
+        assignedPmId: pmB, // NOT the fallback-role viewer
+        status: "draft",
+      });
+      await superuser.query(
+        `UPDATE notices SET status = 'voided', voided_at = now(), voided_reason = 'paid off' WHERE id = $1`,
+        [noticeId]
+      );
+
+      const rows = await withTestPmScope({ pmUserId: fallbackId, pmRole: "pm", isFallbackDecisionMaker: true }, (client) =>
+        client.query("SELECT n.id, l.id AS lease_id FROM notices n JOIN leases l ON l.id = n.lease_id WHERE n.id = $1", [
+          noticeId,
+        ])
+      );
+      expect(rows.rows).toHaveLength(1);
+      expect(Number(rows.rows[0].lease_id)).toBe(leaseB);
+    });
+
+    it("a plain PM (not the fallback role) still gets nothing from that same JOIN", async () => {
+      const lateCycleId = await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-08-04" });
+      const noticeId = await seedNotice(superuser, {
+        lateCycleId,
+        leaseId: leaseB,
+        letterTemplateId,
+        assignedPmId: pmB,
+        status: "draft",
+      });
+      await superuser.query(
+        `UPDATE notices SET status = 'voided', voided_at = now(), voided_reason = 'paid off' WHERE id = $1`,
+        [noticeId]
+      );
+
+      const rows = await withTestPmScope({ pmUserId: pmA, pmRole: "pm", isFallbackDecisionMaker: false }, (client) =>
+        client.query("SELECT n.id FROM notices n JOIN leases l ON l.id = n.lease_id WHERE n.id = $1", [noticeId])
+      );
+      expect(rows.rows).toEqual([]);
+    });
+  });
+
   beforeEach(() => {
     // Each `it` above is written to be independent of ordering within its
     // describe block via fresh seeds where mutation occurs; shared fixtures

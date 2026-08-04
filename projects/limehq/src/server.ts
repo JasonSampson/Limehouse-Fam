@@ -447,6 +447,22 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ ok: false, error: "Internal server error" });
 });
 
+// Last-resort backstop for anything that manages to bypass every route
+// handler's own try/catch (middleware itself throwing, a background job's
+// own unawaited promise) — log it and keep the process running instead of
+// letting Node's default behavior (crash on unhandled rejection since Node
+// 15) take the whole site down. Same failure shape found in
+// late-rent-notices on 2026-08-04, applied here as defense in depth even
+// though every route in this app already forwards its own errors via
+// next(err) to the catch-all middleware above.
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  logError("unhandled promise rejection — process kept running", { message });
+});
+process.on("uncaughtException", (err) => {
+  logError("uncaught exception — process kept running", { message: err.message });
+});
+
 app.listen(env.PORT, () => {
   logInfo("limehq server listening", { port: env.PORT });
 });

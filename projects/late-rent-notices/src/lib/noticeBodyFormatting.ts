@@ -53,7 +53,18 @@ export function boldMarkdownToHtml(escapedText: string): string {
 // by paragraphsToHtml.
 export const SIGNATURE_LINE_BREAK = "\x00";
 
-const FIELD_LIST_BLOCK_STARTS = ["TO:", "BY:", "Rent for the Month", "Court Costs:"];
+const FIELD_LIST_BLOCK_STARTS = ["TO:", "FROM:", "BY:", "Rent for the Month", "Court Costs:"];
+
+// "FROM:" also forces a paragraph break BEFORE it, splitting the header's
+// single TO+FROM field-list block into two separate paragraphs — a
+// one-paragraph gap between the tenant's address and Limehouse's, in the
+// EMAIL only (Jason, 2026-08-04). The PDF is untouched: generateNoticePdf.ts
+// never runs this header region through groupLinesIntoParagraphs at all —
+// it slices toName/toAddressLine1/toAddressLine2/fromName/fromAddressLine1/
+// fromAddressLine2 out by fixed index and places them straight into the
+// TO/FROM table's own cells, where a "paragraph space" concept doesn't
+// apply the same way.
+const FORCE_PARAGRAPH_BREAK_BEFORE = ["FROM:"];
 
 export function groupLinesIntoParagraphs(lines: string[]): string[] {
   const paragraphs: string[] = [];
@@ -66,11 +77,15 @@ export function groupLinesIntoParagraphs(lines: string[]): string[] {
     current = [];
   };
   for (const line of lines) {
-    if (line.trim().length === 0) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
       flush();
       continue;
     }
-    current.push(line.trim());
+    if (FORCE_PARAGRAPH_BREAK_BEFORE.some((prefix) => trimmed.startsWith(prefix))) {
+      flush();
+    }
+    current.push(trimmed);
   }
   flush();
   return paragraphs;

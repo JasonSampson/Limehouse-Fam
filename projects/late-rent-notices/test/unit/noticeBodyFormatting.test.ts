@@ -53,18 +53,36 @@ describe("renderNoticeBodyToHtml — the real 14-day notice body", () => {
     // Exactly the 4 known field-list blocks (header, itemized, fees,
     // signature) legitimately contain <br>; every other paragraph must not.
     const proseParagraphsWithBr = paragraphs.filter(
-      (p) => p.includes("<br>") && !/^<p>(TO:|BY:|Rent for the Month|Court Costs:)/.test(p)
+      (p) => p.includes("<br>") && !/^<p>(TO:|FROM:|BY:|Rent for the Month|Court Costs:)/.test(p)
     );
     expect(proseParagraphsWithBr).toEqual([]);
   });
 
-  it("keeps the TO/FROM header block as six separate lines (not run together into one sentence)", () => {
+  // TO and FROM render as two SEPARATE paragraphs, not one six-line block —
+  // a one-paragraph gap between the tenant's address and Limehouse's
+  // (Jason, 2026-08-04), matching how every other paragraph break in this
+  // email is a distinct <p>. The PDF is unaffected — it never routes this
+  // header region through groupLinesIntoParagraphs (see that function's
+  // FORCE_PARAGRAPH_BREAK_BEFORE comment).
+  it("splits the TO and FROM address blocks into two separate paragraphs, each keeping its own three lines", () => {
     const html = renderRealBody();
-    const headerParagraph = html.split("\n").find((line) => line.startsWith("<p>TO:"));
-    expect(headerParagraph).toBeDefined();
-    expect(headerParagraph!.match(/<br>/g)).toHaveLength(5); // 6 lines = 5 breaks
-    expect(headerParagraph).toContain("Marcus &amp; Aaliyah Johnson<br>4210 Tidewater Dr");
-    expect(headerParagraph).toContain("FROM: Limehouse Property Management<br>6056 Providence Rd");
+    const lines = html.split("\n");
+    const toParagraph = lines.find((line) => line.startsWith("<p>TO:"));
+    const fromParagraph = lines.find((line) => line.startsWith("<p>FROM:"));
+
+    expect(toParagraph).toBeDefined();
+    expect(toParagraph!.match(/<br>/g)).toHaveLength(2); // 3 lines = 2 breaks
+    expect(toParagraph).toContain("Marcus &amp; Aaliyah Johnson<br>4210 Tidewater Dr");
+    expect(toParagraph).not.toContain("FROM:");
+
+    expect(fromParagraph).toBeDefined();
+    expect(fromParagraph!.match(/<br>/g)).toHaveLength(2); // 3 lines = 2 breaks
+    expect(fromParagraph).toContain("FROM: Limehouse Property Management<br>6056 Providence Rd");
+
+    // The two are genuinely separate paragraph elements, giving the email
+    // client its own default spacing between them — not one block with an
+    // extra <br> in the middle.
+    expect(toParagraph).not.toBe(fromParagraph);
   });
 
   it("keeps the itemized charges block as four separate lines", () => {

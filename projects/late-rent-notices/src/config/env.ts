@@ -59,6 +59,20 @@ const envSchema = z.object({
   // about something being wrong). Create one in Teams: channel -> Connectors
   // (or Workflows, depending on tenant) -> Incoming Webhook -> copy the URL.
   TEAMS_ALERT_WEBHOOK_URL: z.string().url("TEAMS_ALERT_WEBHOOK_URL must be a valid webhook URL"),
+
+  // Optional. When set, every real (non-shadow) notice send is mirrored to
+  // LeadSimple as an outbound-email note + PDF file on the tenant's
+  // existing Deal in the "Buildium Rental Tenants" pipeline — Jason's
+  // explicit design: balance truth lives in Buildium, communication record
+  // lives in LeadSimple, using ONLY structures that already exist in his
+  // account (no new process types, pipelines, or mailboxes). If unset, the
+  // mirror is skipped with a log line; it must never block a send either way.
+  LEADSIMPLE_API_KEY: z.string().optional(),
+  // The "Buildium Rental Tenants" pipeline's id in Jason's account —
+  // discovered live via GET /pipelines on 2026-08-03. Overridable only
+  // because pipeline ids differ per LeadSimple account (e.g. if a separate
+  // test account is ever used); there is no reason to change it otherwise.
+  LEADSIMPLE_TENANTS_PIPELINE_ID: z.string().default("e4d64073-dbf8-422c-bd90-1c63c3cb4eb2"),
 });
 
 export type Env = z.infer<typeof envSchema>;

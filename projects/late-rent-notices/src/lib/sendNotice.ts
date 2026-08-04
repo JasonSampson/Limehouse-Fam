@@ -12,9 +12,10 @@ import { sendGraphMail, sendPmNotificationEmail } from "../email/graphMailer.js"
 import { generateNoticePdf } from "./generateNoticePdf.js";
 import { renderNoticeBodyToHtml } from "./noticeBodyFormatting.js";
 import { checkLiveBalanceAndVoidIfStale } from "./staleDraftCheck.js";
+import { mirrorNoticeToLeadSimple } from "../integrations/leadSimpleClient.js";
 import { writeAuditLog } from "./auditLog.js";
 import { startTrace } from "./trace.js";
-import { logInfo } from "./appLogger.js";
+import { logInfo, logWarn } from "./appLogger.js";
 
 // Joins tenant names into one readable list for a single combined notice
 // email ("Jane Doe", "Jane Doe and John Doe", "Jane Doe, John Doe, and Mary
@@ -296,6 +297,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   // exhibit — see generateNoticePdf.ts. Built from the SAME mergeFields as
   // the email body above; the wording is never re-typed, only reformatted.
   const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
+  const pdfFilename = `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
 
   const result = await sendGraphMail({
     subject,
@@ -304,7 +306,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
     attachments: [
       {
-        name: `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
+        name: pdfFilename,
         contentType: "application/pdf",
         contentBytes: noticePdf,
       },
@@ -367,6 +369,55 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     retentionPolicy: "retain_7_years_post_tenancy",
     trace,
   });
+
+  // Best-effort LeadSimple mirror (Jason's design: balance truth in
+  // Buildium, communication record in LeadSimple) — an outbound-email note
+  // + the notice PDF on the tenant's existing Deal in the Buildium Rental
+  // Tenants pipeline. Runs strictly AFTER the send is committed and audit-
+  // logged; any failure here (LeadSimple outage, rate limit, no matching
+  // Deal) is logged and must never fail or roll back the send itself.
+  try {
+    const senderResult = await client.query<{ display_name: string }>(
+      "SELECT display_name FROM pm_users WHERE id = $1",
+      [params.sendingPmId]
+    );
+    const mirror = await mirrorNoticeToLeadSimple({
+      noticeId: params.noticeId,
+      recipientEmails: toRecipients.map((r) => r.email_address),
+      recipientNames: toRecipients.map((r) => r.full_name ?? "Tenant"),
+      subject,
+      amountDue: formatCurrency(liveBalance.balance),
+      deliveryStatus: finalDeliveryStatus,
+      sentByPmName: senderResult.rows[0]?.display_name ?? `PM ${params.sendingPmId}`,
+      sentAtIso: new Date().toISOString(),
+      pdf: noticePdf,
+      pdfFilename,
+    });
+    if (mirror.mirrored) {
+      await writeAuditLog(client, {
+        companyId: "limehouse-pm",
+        instanceId: "late-rent-notices",
+        decisionId: `notice-${params.noticeId}`,
+        actorType: "system",
+        actorId: "leadsimple_mirror",
+        eventType: "notice.mirrored_to_leadsimple",
+        eventSummary: `Notice ${params.noticeId} mirrored to LeadSimple deal "${mirror.dealName}" (note + PDF).`,
+        eventData: { dealId: mirror.dealId },
+        contextSnapshot: { noticeId: params.noticeId, leaseId: notice.lease_id },
+        privacyCategory: "Disclosure",
+        regulationTags: [],
+        riskLevel: "low",
+        legalBasis: "internal_record_keeping",
+        retentionPolicy: "retain_7_years_post_tenancy",
+        trace,
+      });
+    }
+  } catch (err) {
+    logWarn("LeadSimple mirror failed (notice already sent — this only affects the CRM copy)", {
+      noticeId: params.noticeId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return { sent: true, voided: false };
 }

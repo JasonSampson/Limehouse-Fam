@@ -42,6 +42,9 @@ vi.mock("../../src/email/graphMailer.js", () => ({
 vi.mock("../../src/lib/auditLog.js", () => ({
   writeAuditLog: vi.fn(),
 }));
+vi.mock("../../src/integrations/leadSimpleClient.js", () => ({
+  mirrorNoticeToLeadSimple: vi.fn().mockResolvedValue({ mirrored: false, skippedReason: "not_configured" }),
+}));
 vi.mock("../../src/lib/appLogger.js", () => ({
   logInfo: vi.fn(),
   logError: vi.fn(),

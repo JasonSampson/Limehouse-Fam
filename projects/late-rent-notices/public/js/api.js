@@ -72,18 +72,20 @@ function fmtMoney(n) {
   return num.toLocaleString("en-US", { style: "currency", currency: "USD" });
 }
 
+// MM/DD/YYYY everywhere a person sees a date — Jason's standard (matches
+// the notice documents themselves).
 function fmtDate(d) {
   if (!d) return "—";
   const date = new Date(d);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return date.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
 }
 
 function fmtDateTime(d) {
   if (!d) return "—";
   const date = new Date(d);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return date.toLocaleString("en-US", { month: "2-digit", day: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 // Loads /api/me, renders the shared top bar + shadow-mode banner, and

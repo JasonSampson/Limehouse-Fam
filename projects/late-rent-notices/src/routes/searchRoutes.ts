@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
+import { formatUnitDisplay } from "../lib/unitDisplay.js";
 
 export const searchRoutes = Router();
 searchRoutes.use(requireSession);
@@ -36,7 +37,8 @@ searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
     const noticesResult = await client.query(
       `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.amount_due_at_send, n.drafted_at, n.sent_at, n.delivery_status,
-              l.unit_label, p.name AS property_name, p.address_line1, p.is_active AS property_is_active
+              l.unit_label, p.name AS property_name, p.address_line1, p.is_active AS property_is_active,
+              (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
        JOIN properties p ON p.id = l.property_id
@@ -49,7 +51,8 @@ searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
     const contactAttemptsResult = await client.query(
       `SELECT ca.id, ca.lease_id, ca.contact_method, ca.contact_note, ca.outcome,
               ca.promised_pay_date, ca.occurred_at,
-              l.unit_label, p.name AS property_name, p.address_line1, p.is_active AS property_is_active
+              l.unit_label, p.name AS property_name, p.address_line1, p.is_active AS property_is_active,
+              (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit
        FROM contact_attempts ca
        JOIN leases l ON l.id = ca.lease_id
        JOIN properties p ON p.id = l.property_id
@@ -59,7 +62,14 @@ searchRoutes.get("/api/search", async (req: AuthedRequest, res) => {
       [likePattern]
     );
 
-    return { notices: noticesResult.rows, contactAttempts: contactAttemptsResult.rows };
+    const withUnitDisplay = (r: { unit_label: string; multi_unit: boolean }) => ({
+      ...r,
+      unit_display: formatUnitDisplay(r.unit_label, r.multi_unit),
+    });
+    return {
+      notices: noticesResult.rows.map(withUnitDisplay),
+      contactAttempts: contactAttemptsResult.rows.map(withUnitDisplay),
+    };
   });
 
   res.json(results);

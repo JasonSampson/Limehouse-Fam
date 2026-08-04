@@ -63,7 +63,7 @@
                       (n) => `
                       <a href="/notice.html?id=${n.id}" class="notice-row status-${n.status}" style="display:block; text-decoration:none; color:inherit;">
                         <div class="row-top">
-                          <span class="tenant-name">${escapeHtml(n.property_name)} — Unit ${escapeHtml(n.unit_label)}</span>
+                          <span class="tenant-name">${escapeHtml(n.property_name)}${n.unit_display ? " — " + escapeHtml(n.unit_display) : ""}</span>
                           <span>${fmtMoney(n.amount_due_at_send ?? n.amount_due_at_draft)}</span>
                         </div>
                         <div class="row-meta">
@@ -85,7 +85,7 @@
                       (c) => `
                       <div class="notice-row status-${c.outcome === "promised_to_pay" ? "draft" : "sent"}">
                         <div class="row-top">
-                          <span class="tenant-name">${escapeHtml(c.property_name)} — Unit ${escapeHtml(c.unit_label)} &middot; ${methodLabels[c.contact_method] || c.contact_method}</span>
+                          <span class="tenant-name">${escapeHtml(c.property_name)}${c.unit_display ? " — " + escapeHtml(c.unit_display) : ""} &middot; ${methodLabels[c.contact_method] || c.contact_method}</span>
                           <span>${fmtDate(c.occurred_at)}</span>
                         </div>
                         <div class="row-meta">

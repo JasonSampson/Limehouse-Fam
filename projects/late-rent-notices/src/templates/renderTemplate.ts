@@ -70,3 +70,13 @@ export function renderTemplate(
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
 }
+
+// Dates render as MM/DD/YYYY everywhere a person sees them (notices,
+// emails, dashboard) — Jason's standard. Storage stays ISO (YYYY-MM-DD)
+// in the database; this is presentation only. UTC parts, matching how
+// due dates are computed (calculateLateness works in UTC midnight terms).
+export function formatDateMMDDYYYY(date: Date): string {
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${mm}/${dd}/${date.getUTCFullYear()}`;
+}

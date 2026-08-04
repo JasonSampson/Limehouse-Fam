@@ -107,7 +107,7 @@
             .map((n) => `
               <a class="notice-row status-${n.status}" href="/notice.html?id=${n.id}">
                 <div class="row-top">
-                  <span class="tenant-name">${escapeHtml(n.property_name)} — Unit ${escapeHtml(n.unit_label)}</span>
+                  <span class="tenant-name">${escapeHtml(n.property_name)}${n.unit_display ? " — " + escapeHtml(n.unit_display) : ""}</span>
                   <span class="amount">${fmtMoney(n.amount_due_at_draft)}</span>
                 </div>
                 <div class="row-meta">
@@ -159,7 +159,7 @@
               .map((c, idx) => `
                 <div class="notice-row status-draft">
                   <div class="row-top">
-                    <span class="tenant-name">${escapeHtml(c.property_name)} — Unit ${escapeHtml(c.unit_label)}</span>
+                    <span class="tenant-name">${escapeHtml(c.property_name)}${c.unit_display ? " — " + escapeHtml(c.unit_display) : ""}</span>
                     <span class="days-late ${openDurationClass(c.opened_at)}">Stuck ${openDuration(c.opened_at)}</span>
                   </div>
                   <div class="row-meta">

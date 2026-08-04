@@ -8,7 +8,8 @@ import { isReauthFresh } from "../auth/requireFreshReauth.js";
 import { addBusinessDays } from "../lib/businessCalendar.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
-import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
+import { renderTemplate, formatCurrency, formatDateMMDDYYYY, type MergeFields } from "../templates/renderTemplate.js";
+import { formatUnitDisplay } from "../lib/unitDisplay.js";
 import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../lib/config.js";
 import { generateNoticePdf, NoticeBodyParseError, ChromeNotFoundError } from "../lib/generateNoticePdf.js";
 import { formatTenantNameList } from "../lib/sendNotice.js";
@@ -45,14 +46,17 @@ noticeRoutes.get("/api/notices", async (req: AuthedRequest, res) => {
       // dailyLatenessCheck.ts).
       `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
-              l.unit_label, p.name AS property_name
+              l.unit_label, p.name AS property_name,
+              (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
        JOIN properties p ON p.id = l.property_id
        WHERE n.status != 'voided'
        ORDER BY n.drafted_at DESC`
     );
-    return result.rows;
+    // unit_display: "Unit B2" at multi-unit properties, "" at single-family
+    // homes (Buildium's obligatory "1" is noise there) — see unitDisplay.ts.
+    return result.rows.map((r) => ({ ...r, unit_display: formatUnitDisplay(r.unit_label, r.multi_unit) }));
   });
   res.json({ notices });
 });
@@ -96,6 +100,7 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
       // any that already exist from before that property was deactivated.
       `SELECT lc.id AS late_cycle_id, lc.lease_id, lc.due_date, lc.opened_at,
               l.unit_label, l.property_id, p.name AS property_name,
+              (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
               NOT EXISTS (
                 SELECT 1 FROM pm_property_assignments ppa WHERE ppa.property_id = l.property_id
               ) AS needs_pm_assignment
@@ -109,7 +114,7 @@ noticeRoutes.get("/api/late-no-notice", async (req: AuthedRequest, res) => {
          )
        ORDER BY lc.opened_at ASC`
     );
-    return result.rows;
+    return result.rows.map((r) => ({ ...r, unit_display: formatUnitDisplay(r.unit_label, r.multi_unit) }));
   });
   res.json({ lateNoNotice });
 });
@@ -164,6 +169,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       delivery_status: string;
       ledger_verified: boolean;
       unit_label: string;
+      multi_unit: boolean;
       buildium_lease_id: string;
       rent_due_day: number;
       grace_period_days: number;
@@ -175,6 +181,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
               n.amount_due_at_send, n.days_late_at_send, n.voided_reason, n.letter_template_id,
               n.assigned_pm_id, n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
               l.unit_label, l.buildium_lease_id, l.rent_due_day, l.grace_period_days,
+              (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
               p.name AS property_name,
               (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
               pm.display_name AS assigned_pm_name
@@ -343,11 +350,11 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
     // joined list ("Jane Doe and John Doe"), not one render per tenant.
     const mergeFields: MergeFields = {
       tenant_name: formatTenantNameList(toRecipients.map((r) => r.full_name ?? "Tenant")),
-      unit_label: notice.unit_label,
+      unit_label: formatUnitDisplay(notice.unit_label, notice.multi_unit),
       amount_due: formatCurrency(Number(amountDue)),
       days_late: String(daysLate),
-      due_date: dueDateSource.toISOString().slice(0, 10),
-      notice_date: (liveNoticeDate ?? notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
+      due_date: formatDateMMDDYYYY(dueDateSource),
+      notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
       property_address: notice.property_address,
       pm_name: notice.assigned_pm_name,
       rent_amount_due: formatCurrency(sumBucket("rent")),
@@ -373,6 +380,7 @@ noticeRoutes.get("/api/notices/:id", async (req: AuthedRequest, res) => {
       propertyName: notice.property_name,
       propertyAddress: notice.property_address,
       unitLabel: notice.unit_label,
+      unitDisplay: formatUnitDisplay(notice.unit_label, notice.multi_unit),
       assignedPmName: notice.assigned_pm_name,
       amountDueAtDraft: notice.amount_due_at_draft,
       daysLateAtDraft: notice.days_late_at_draft,
@@ -464,6 +472,7 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
         drafted_at: Date;
         sent_at: Date | null;
         unit_label: string;
+        multi_unit: boolean;
         buildium_lease_id: string;
         rent_due_day: number;
         grace_period_days: number;
@@ -474,6 +483,7 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
                 n.amount_due_at_send, n.days_late_at_send, n.letter_template_id,
                 n.drafted_at, n.sent_at,
                 l.unit_label, l.buildium_lease_id, l.rent_due_day, l.grace_period_days,
+                (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
                 (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
                 pm.display_name AS assigned_pm_name
          FROM notices n
@@ -562,11 +572,11 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
 
       const mergeFields: MergeFields = {
         tenant_name: formatTenantNameList(recipientsResult.rows.map((r) => r.full_name ?? "Tenant")),
-        unit_label: notice.unit_label,
+        unit_label: formatUnitDisplay(notice.unit_label, notice.multi_unit),
         amount_due: formatCurrency(Number(amountDue)),
         days_late: String(daysLate),
-        due_date: dueDateSource.toISOString().slice(0, 10),
-        notice_date: (liveNoticeDate ?? notice.sent_at ?? notice.drafted_at).toISOString().slice(0, 10),
+        due_date: formatDateMMDDYYYY(dueDateSource),
+        notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
         property_address: notice.property_address,
         pm_name: notice.assigned_pm_name,
         rent_amount_due: formatCurrency(sumBucket("rent")),
@@ -577,7 +587,14 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
         total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
       };
 
-      return { mergeFields, subjectLine: template.subject_line, unitLabel: notice.unit_label };
+      return {
+        mergeFields,
+        subjectLine: template.subject_line,
+        // Filename identifies by address (plus unit only where one
+        // displays) — mirrors sendNotice.ts's attachment naming, since
+        // single-family homes no longer display a unit at all.
+        filenameBase: `${notice.property_address}${mergeFields.unit_label ? ` ${mergeFields.unit_label}` : ""}`,
+      };
     });
 
     if (!built) {
@@ -596,7 +613,7 @@ noticeRoutes.get("/api/notices/:id/pdf", async (req: AuthedRequest, res) => {
     }
 
     const pdf = await generateNoticePdf(built.mergeFields, built.subjectLine);
-    const filename = `14-Day-Notice-${built.unitLabel.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
+    const filename = `14-Day-Notice-${built.filenameBase.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     res.send(pdf);

@@ -7,7 +7,8 @@ import {
   insertNoticeLineItems,
   UnclassifiedChargeBlockedError,
 } from "./noticeLineItems.js";
-import { renderTemplate, formatCurrency, type MergeFields } from "../templates/renderTemplate.js";
+import { renderTemplate, formatCurrency, formatDateMMDDYYYY, type MergeFields } from "../templates/renderTemplate.js";
+import { formatUnitDisplay } from "./unitDisplay.js";
 import { sendGraphMail, sendPmNotificationEmail } from "../email/graphMailer.js";
 import { generateNoticePdf } from "./generateNoticePdf.js";
 import { renderNoticeBodyToHtml } from "./noticeBodyFormatting.js";
@@ -104,6 +105,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   const leaseResult = await client.query<{
     buildium_lease_id: string;
     unit_label: string;
+    multi_unit: boolean;
     property_address: string;
     rent_due_day: number;
     grace_period_days: number;
@@ -116,6 +118,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     // already exists (properties.is_active only gates whether new notices
     // get drafted in the first place, see dailyLatenessCheck.ts).
     `SELECT l.buildium_lease_id, l.unit_label, l.rent_due_day, l.grace_period_days,
+            (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
             (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
             pm.display_name AS assigned_pm_name, pm.email AS assigned_pm_email
      FROM leases l
@@ -125,6 +128,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     [notice.lease_id, notice.assigned_pm_id]
   );
   const lease = leaseResult.rows[0];
+  const unitDisplay = formatUnitDisplay(lease.unit_label, lease.multi_unit);
 
   // Step 1: stale-draft protection. Live balance, not the cached draft
   // figure. Shared with noticeRoutes.ts's review-page route (see
@@ -258,11 +262,14 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   // roommates/co-signers all see themselves named, not just one tenant.
   const mergeFields: MergeFields = {
     tenant_name: formatTenantNameList(toRecipients.map((r) => r.full_name ?? "Tenant")),
-    unit_label: lease.unit_label,
+    // "Unit B2" at a multi-unit property, blank at a single-family house —
+    // see unitDisplay.ts. A blank leaves the header block's third line
+    // empty, same as the attorney's original blank form cell.
+    unit_label: unitDisplay,
     amount_due: formatCurrency(liveBalance.balance),
     days_late: String(daysLate),
-    due_date: dueDate.toISOString().slice(0, 10),
-    notice_date: new Date().toISOString().slice(0, 10),
+    due_date: formatDateMMDDYYYY(dueDate),
+    notice_date: formatDateMMDDYYYY(new Date()),
     property_address: lease.property_address,
     pm_name: lease.assigned_pm_name,
     // Real computed itemized amounts (migration 0038 / notice_line_items),
@@ -297,7 +304,10 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   // exhibit — see generateNoticePdf.ts. Built from the SAME mergeFields as
   // the email body above; the wording is never re-typed, only reformatted.
   const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
-  const pdfFilename = `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
+  // Filename identifies by address (plus unit only where one displays) —
+  // it can't lean on the unit label alone anymore, since single-family
+  // homes now display no unit at all.
+  const pdfFilename = `14-Day-Notice-${`${lease.property_address}${unitDisplay ? ` ${unitDisplay}` : ""}`.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`;
 
   // The notice goes out FROM the staff member who clicked Send — their
   // identity (including this email) arrived via their LimeHQ login and is
@@ -557,10 +567,12 @@ export async function resendBouncedRecipient(
 
   const leaseResult = await client.query<{
     unit_label: string;
+    multi_unit: boolean;
     property_address: string;
     assigned_pm_name: string;
   }>(
     `SELECT l.unit_label,
+            (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
             (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
             pm.display_name AS assigned_pm_name
      FROM leases l
@@ -570,6 +582,7 @@ export async function resendBouncedRecipient(
     [notice.lease_id, notice.assigned_pm_id]
   );
   const lease = leaseResult.rows[0];
+  const unitDisplay = formatUnitDisplay(lease.unit_label, lease.multi_unit);
 
   const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
     "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
@@ -616,13 +629,13 @@ export async function resendBouncedRecipient(
 
   const mergeFields: MergeFields = {
     tenant_name: formatTenantNameList(allToRecipients.map((r) => r.full_name ?? "Tenant")),
-    unit_label: lease.unit_label,
+    unit_label: unitDisplay,
     amount_due: formatCurrency(Number(notice.amount_due_at_send)),
     days_late: String(notice.days_late_at_send),
-    due_date: dueDate.toISOString().slice(0, 10),
+    due_date: formatDateMMDDYYYY(dueDate),
     // Original notice date, not today — this is a redelivery of the same
     // already-sent legal document, not a new notice.
-    notice_date: notice.sent_at.toISOString().slice(0, 10),
+    notice_date: formatDateMMDDYYYY(notice.sent_at),
     property_address: lease.property_address,
     pm_name: lease.assigned_pm_name,
     rent_amount_due: formatCurrency(sumBucket("rent")),
@@ -645,7 +658,7 @@ export async function resendBouncedRecipient(
     ccRecipients: ccRecipients.map((r) => ({ email: r.email_address })),
     attachments: [
       {
-        name: `14-Day-Notice-${lease.unit_label.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
+        name: `14-Day-Notice-${`${lease.property_address}${unitDisplay ? ` ${unitDisplay}` : ""}`.replace(/[^a-zA-Z0-9]+/g, "-")}.pdf`,
         contentType: "application/pdf",
         contentBytes: noticePdf,
       },

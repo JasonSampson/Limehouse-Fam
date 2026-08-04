@@ -134,7 +134,7 @@
       function renderNotice(notice) {
         content.innerHTML = `
           <p><a href="/index.html">&larr; Back to dashboard</a></p>
-          <h1>${escapeHtml(notice.propertyName)} — Unit ${escapeHtml(notice.unitLabel)}</h1>
+          <h1>${escapeHtml(notice.propertyName)}${notice.unitDisplay ? " — " + escapeHtml(notice.unitDisplay) : ""}</h1>
           <p class="subtitle">Notice #${notice.id} &middot; ${statusBadge(notice)}</p>
           ${
             notice.status === "voided" && notice.voidedReason

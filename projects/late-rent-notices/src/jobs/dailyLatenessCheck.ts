@@ -8,7 +8,7 @@ import { fetchAndClassifyLeaseCharges, insertNoticeLineItems } from "../lib/noti
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace, childSpan } from "../lib/trace.js";
 import { logInfo, logError } from "../lib/appLogger.js";
-import { formatCurrency } from "../templates/renderTemplate.js";
+import { formatCurrency, formatDateMMDDYYYY } from "../templates/renderTemplate.js";
 
 interface LeaseRow {
   id: number;
@@ -395,7 +395,9 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
           propertyId: lease.property_id,
           propertyName,
           amountOwed: balanceRow.balance,
-          dueDate: dueDateStr,
+          // Human-facing (Teams alert body) — MM/DD/YYYY like everything a
+          // person reads; the DB's own due_date stays ISO.
+          dueDate: formatDateMMDDYYYY(lateness.dueDate),
         });
         errors.push(
           `No PM assigned to ${propertyName} (lease ${lease.id}): owes ${formatCurrency(balanceRow.balance)}, ` +

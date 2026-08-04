@@ -12,7 +12,7 @@ import { rentEngineRoutes } from "./api/rentEngineRoutes.js";
 import { authRoutes } from "./api/authRoutes.js";
 import { getSessionUser } from "./auth/session.js";
 import { normalizePath, isGatedHtmlRequest, isAdminOnlyPage } from "./auth/staticPageGate.js";
-import { logInfo } from "./lib/logger.js";
+import { logInfo, logError } from "./lib/logger.js";
 import { startScheduledCacheRefresh } from "./jobs/scheduler.js";
 
 // Serves Tron's static dashboard UI (public/) from this same Express app —
@@ -99,6 +99,47 @@ app.use(teamPerformanceRoutes);
 app.use(ceoViewRoutes);
 app.use(syncRoutes);
 app.use(rentEngineRoutes);
+
+// Catch-all error handler — MUST be registered last (Express identifies an
+// error-handling middleware purely by its 4-argument signature) and MUST
+// have all 4 params even though `next` is unused, or Express treats it as
+// a normal middleware and skips it entirely. Every route handler above is
+// wrapped in asyncHandler (src/lib/asyncHandler.ts), which forwards any
+// thrown/rejected error here via next(err) instead of letting it become an
+// unhandled promise rejection. Without this, one bad request (a Buildium/
+// RentEngine/LeadSimple failure, a database hiccup, anything) crashed the
+// ENTIRE server for every user — same bug late-rent-notices hit on
+// 2026-08-04, fixed there the same way. This turns that into a normal
+// error response for the one request that hit it; everyone else keeps
+// working.
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // FIXED during live verification: logError's own signature is
+  // (message, fields) and spreads fields OVER the message key internally
+  // (src/lib/logger.ts) — a field literally named `message` silently
+  // clobbers the descriptive label passed as the first argument. Every
+  // other logError call in this codebase already avoids this by naming the
+  // field `error`, not `message`; matched that convention here after
+  // confirming live that `{ message }` was swallowing "unhandled route
+  // error" from the logged output.
+  const errorMessage = err instanceof Error ? err.message : String(err);
+  logError("unhandled route error", { error: errorMessage, path: req.path, method: req.method });
+  if (res.headersSent) return;
+  res.status(500).json({ error: "Something went wrong on our end. Nothing was changed — please try again." });
+});
+
+// Last-resort backstop for anything that manages to bypass asyncHandler
+// entirely (middleware itself throwing, a background job's own unawaited
+// promise) — log it and keep the process running instead of letting Node's
+// default behavior (crash on unhandled rejection since Node 15) take the
+// whole site down. This does not replace asyncHandler; it's defense in
+// depth for the one class of error asyncHandler can't see.
+process.on("unhandledRejection", (reason) => {
+  const errorMessage = reason instanceof Error ? reason.message : String(reason);
+  logError("unhandled promise rejection — process kept running", { error: errorMessage });
+});
+process.on("uncaughtException", (err) => {
+  logError("uncaught exception — process kept running", { error: err.message });
+});
 
 app.listen(env.PORT, () => {
   logInfo("limehouse-dashboard API listening", {

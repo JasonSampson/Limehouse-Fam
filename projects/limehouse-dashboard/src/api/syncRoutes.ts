@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { loadEnv, isRentEngineConnected, isLeadSimpleConnected } from "../config/env.js";
 import {
   fetchOutstandingBalances,
@@ -50,7 +51,7 @@ export const syncRoutes = Router();
 // last succeeded (never just "last attempted" — see src/db/syncLog.ts).
 // Frontend uses this to show "RentEngine: not connected" vs "Buildium: last
 // synced 4 minutes ago" instead of guessing.
-syncRoutes.get("/api/sync/status", requireLogin, async (_req, res) => {
+syncRoutes.get("/api/sync/status", requireLogin, asyncHandler(async (_req, res) => {
   try {
     const [buildium, rentEngine, leadSimple] = await Promise.all([
       getLastSuccessfulSync("buildium"),
@@ -66,14 +67,14 @@ syncRoutes.get("/api/sync/status", requireLogin, async (_req, res) => {
     logError("GET /api/sync/status failed", { error: String(err) });
     res.status(500).json({ error: "Failed to load sync status." });
   }
-});
+}));
 
 // Manual "sync now" trigger for the Buildium-backed metric cache tiles.
 // Synchronous (awaits the refresh before responding) — the cache refresh
 // this covers is small enough (delinquency summary + property count) that
 // a background job isn't warranted yet; if that changes, this becomes a
 // fire-and-forget with the sync log row as the only way to check progress.
-syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/now", requireLogin, asyncHandler(async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "metric_cache_refresh");
   try {
     const [balances, properties] = await Promise.all([fetchOutstandingBalances(), fetchProperties()]);
@@ -100,7 +101,7 @@ syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
     logError("Manual sync failed", { syncLogId, error: message });
     res.status(502).json({ error: "Sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // CONFIRMED LIVE 2026-07-03 against Jason's real Buildium account: the
 // rent-collection chart previously computed live on every page load by
@@ -190,7 +191,7 @@ syncRoutes.post("/api/sync/now", requireLogin, async (_req, res) => {
 // in src/jobs/cacheRefreshJobs.ts so the automatic scheduler (scheduler.ts)
 // and this manual "sync now" button call the exact same implementation —
 // this route is now just the HTTP wrapper around it.
-syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/rent-collection", requireLogin, asyncHandler(async (_req, res) => {
   try {
     await refreshRentCollectionCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -198,7 +199,7 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
     const message = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Rent collection sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // Avg SD Withheld / Avg SD Withheld % (Dashboard tab Financials section) —
 // REBUILT 2026-07-10, per Jason directly, matching the vendor's own
@@ -213,7 +214,7 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, async (_req, res) => 
 // REFACTORED 2026-07-18: actual work moved to
 // refreshSecurityDepositWithheldCache in src/jobs/cacheRefreshJobs.ts — see
 // the rent-collection route above for why.
-syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, asyncHandler(async (_req, res) => {
   try {
     await refreshSecurityDepositWithheldCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -223,7 +224,7 @@ syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req
       .status(502)
       .json({ error: "Security deposit withheld sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // Renewal Rate (Top of Mind tile + its drill-down). REBUILT 2026-07-07: per
 // Jason, the real "renewed" signal lives on each lease's Rent recurring-
@@ -239,7 +240,7 @@ syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, async (_req
 // REFACTORED 2026-07-18: actual work moved to refreshRenewalRateCache in
 // src/jobs/cacheRefreshJobs.ts — see the rent-collection route above for
 // why.
-syncRoutes.post("/api/sync/renewal-rate", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/renewal-rate", requireLogin, asyncHandler(async (_req, res) => {
   try {
     await refreshRenewalRateCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -249,11 +250,11 @@ syncRoutes.post("/api/sync/renewal-rate", requireLogin, async (_req, res) => {
       .status(502)
       .json({ error: "Renewal rate sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // Extended Grace (Financials section) — ADDED 2026-07-29, per Jason
 // directly. See src/kpi/extendedNoticeTracking.ts for the full derivation.
-syncRoutes.post("/api/sync/extended-grace", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/extended-grace", requireLogin, asyncHandler(async (_req, res) => {
   try {
     await refreshExtendedGraceCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -261,10 +262,10 @@ syncRoutes.post("/api/sync/extended-grace", requireLogin, async (_req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Extended grace sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // Google Reviews (Top of Mind) — ADDED 2026-07-30, per Jason directly.
-syncRoutes.post("/api/sync/google-reviews", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/google-reviews", requireLogin, asyncHandler(async (_req, res) => {
   try {
     await refreshGoogleReviewsCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -272,7 +273,7 @@ syncRoutes.post("/api/sync/google-reviews", requireLogin, async (_req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Google Reviews sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // Terminated Properties — ADDED 2026-07-10, per Jason directly. See
 // src/kpi/terminatedProperties.ts for the full derivation (real examples:
@@ -283,7 +284,7 @@ syncRoutes.post("/api/sync/google-reviews", requireLogin, async (_req, res) => {
 // candidates LeadSimple identifies first (one Lease Renewal process fetch,
 // then per-property checks only for the handful still flagged), not run
 // across the whole 234-property portfolio.
-syncRoutes.post("/api/sync/terminated-properties", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/terminated-properties", requireLogin, asyncHandler(async (_req, res) => {
   if (!isLeadSimpleConnected()) {
     res.status(409).json({ error: "LeadSimple is not connected." });
     return;
@@ -355,7 +356,7 @@ syncRoutes.post("/api/sync/terminated-properties", requireLogin, async (_req, re
       .status(502)
       .json({ error: "Terminated properties sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // Total Calls / Outbound Texts (Marketing & Showings section). CONFIRMED
 // LIVE 2026-07-03: RentEngine's /calls and /messages endpoints require one
@@ -382,7 +383,7 @@ syncRoutes.post("/api/sync/terminated-properties", requireLogin, async (_req, re
 // scheduler calls it unconditionally on a timer; this route still checks
 // both up front so a manual click gets an honest, specific 409 instead of
 // a silent no-op "success."
-syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
+syncRoutes.post("/api/sync/call-activity", requireLogin, asyncHandler(async (_req, res) => {
   if (!isRentEngineConnected()) {
     res.status(409).json({ error: "RentEngine is not connected." });
     return;
@@ -400,7 +401,7 @@ syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Call activity sync failed. Last known-good data is still being served.", detail: message });
   }
-});
+}));
 
 // CEO View Gross Income / Net Income / Revenue-per-Unit history
 // (dashboard_financial_history, Neo's migration 0008). CONFIRMED LIVE
@@ -422,7 +423,7 @@ syncRoutes.post("/api/sync/call-activity", requireLogin, async (_req, res) => {
 // team-performance-kpis route below, but it exists solely to feed CEO
 // View's Admin-only income charts, so its trigger having a lower bar than
 // the page it serves was still an inconsistency worth closing.
-syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, async (_req, res) => {
+syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "financial_history_sync");
   try {
     const result = await syncFinancialHistory();
@@ -435,7 +436,7 @@ syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, async
     logError("Financial history sync failed", { syncLogId, error: message });
     res.status(502).json({ error: "Financial history sync failed.", detail: message });
   }
-});
+}));
 
 // Team Performance / CEO View KPI snapshots — computes real values for
 // every KPI confirmed live 2026-07-05 (Portfolio Manager: Occupancy, Days
@@ -462,7 +463,7 @@ syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, async
 // route directly with their own valid session and read every other
 // staff member's current performance numbers, defeating the entire
 // Admin-only gate documented on the page routes themselves.
-syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, requireAdmin, async (_req, res) => {
+syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
   try {
     const summary = await runTeamPerformanceKpisSync();
     res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });
@@ -470,5 +471,5 @@ syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, requireAdmin, a
     const message = err instanceof Error ? err.message : String(err);
     res.status(502).json({ error: "Team Performance KPIs sync failed.", detail: message });
   }
-});
+}));
 

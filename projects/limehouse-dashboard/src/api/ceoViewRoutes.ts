@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
 import { periodToSnapshotLabel, periodEnumSchema, type PeriodKey } from "../kpi/period.js";
 import { fetchActiveResidentialUnits, fetchBankAccounts } from "../buildium/client.js";
@@ -22,7 +23,7 @@ export const ceoViewRoutes = Router();
 // defaults to "this_quarter", unlike Dashboard/RentEngine's "this_month".
 const periodQuerySchema = periodEnumSchema.default("this_quarter");
 
-ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, async (req, res) => {
+ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, asyncHandler(async (req, res) => {
   const parsed = periodQuerySchema.safeParse(req.query.period);
   const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
   const snapshotLabel = periodToSnapshotLabel(period);
@@ -33,7 +34,7 @@ ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, async (req,
     logError("GET /api/ceo-view/roles failed", { error: String(err) });
     res.status(500).json({ error: "Failed to load CEO View data." });
   }
-});
+}));
 
 // ============================================================================
 // CEO View income charts: Gross Income / Net Income / Revenue-per-Unit by
@@ -61,7 +62,7 @@ ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, async (req,
 // closed-out properties from the denominator (see
 // src/kpi/terminatedProperties.ts) — those units aren't earning anything
 // right now, so counting them here understated revenue per door.
-ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, async (_req, res) => {
+ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
   try {
     const [monthlyHistory, allUnits, excludedPropertyIds] = await Promise.all([
       getAllFinancialHistory(ACCOUNTING_BASIS),
@@ -97,7 +98,7 @@ ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, async (_re
       error: "Failed to load income data. Try running the financial history sync (POST /api/sync/financial-history).",
     });
   }
-});
+}));
 
 // ============================================================================
 // Account Balances — ADDED 2026-07-26, per Jason directly, for the new CEO
@@ -105,7 +106,7 @@ ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, async (_re
 // Buildium call already used for Reconciliation Accuracy (src/kpi/
 // bookkeeperMetrics.ts) — no new data source, just a different view of it.
 // Alphabetical, matching the confirmed vendor order used there.
-ceoViewRoutes.get("/api/ceo-view/account-balances", requireLogin, requireAdmin, async (_req, res) => {
+ceoViewRoutes.get("/api/ceo-view/account-balances", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
   try {
     const accounts = await fetchBankAccounts();
     const rows = accounts
@@ -117,4 +118,4 @@ ceoViewRoutes.get("/api/ceo-view/account-balances", requireLogin, requireAdmin, 
     logError("GET /api/ceo-view/account-balances failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load bank account balances from Buildium." });
   }
-});
+}));

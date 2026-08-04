@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { z } from "zod";
 import {
   summarizeProspectsBySource,
@@ -48,7 +49,7 @@ export const rentEngineRoutes = Router();
 // normalization guesswork is needed anymore. Falls back to the old
 // raw-prospect approach if the reporting endpoint errors, rather than
 // breaking this tile entirely.
-rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const reportResult = await getOrFetchMarketingSourcesReport(from, to);
@@ -80,7 +81,7 @@ rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, async 
     logError("GET /api/rentengine/prospects-by-source failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load prospect source data from RentEngine." });
   }
-});
+}));
 
 // Marketing & Showings section: New Prospects, Showings Completed
 // (derived from Leasing Funnel status buckets), plus the Leasing Funnel
@@ -93,7 +94,7 @@ rentEngineRoutes.get("/api/rentengine/prospects-by-source", requireLogin, async 
 // whatever period was actually requested and reports it back plainly
 // (`requestedFrom`/`requestedTo`) rather than silently substituting a
 // shorter window while still labeling it "12 months."
-rentEngineRoutes.get("/api/rentengine/leasing-funnel", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/leasing-funnel", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const result = await getOrFetchProspects(from, to);
@@ -118,7 +119,7 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel", requireLogin, async (req,
     logError("GET /api/rentengine/leasing-funnel failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load leasing funnel data from RentEngine." });
   }
-});
+}));
 
 const leasingFunnelStageSchema = z.enum(["prospects", "showingsScheduled", "showingsCompleted", "applications", "moveIns"]);
 
@@ -130,7 +131,7 @@ const leasingFunnelStageSchema = z.enum(["prospects", "showingsScheduled", "show
 // though it duplicates what /api/rentengine/prospects above already
 // returns, so all 5 Leasing Funnel bars go through one consistent
 // implementation instead of the first bar being a special case.
-rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   const stageParsed = leasingFunnelStageSchema.safeParse(req.query.stage);
   if (!stageParsed.success) {
@@ -157,7 +158,7 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, async
     logError("GET /api/rentengine/leasing-funnel/stage failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load prospect data from RentEngine." });
   }
-});
+}));
 
 // Marketing & Showings section: Units on Market.
 // STRUCTURAL (as-of-today, not period-dependent) — RentEngine's /units
@@ -174,7 +175,7 @@ rentEngineRoutes.get("/api/rentengine/leasing-funnel/stage", requireLogin, async
 // Completion Rate now lives on its own route, GET
 // /api/rentengine/completion-rate — see that route's comment below for why
 // it was split out of marketing-activity.
-rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_req, res) => {
+rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, asyncHandler(async (_req, res) => {
   try {
     const result = await getOrFetchUnits();
 
@@ -196,7 +197,7 @@ rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_re
     logError("GET /api/rentengine/units-on-market failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load unit data from RentEngine." });
   }
-});
+}));
 
 // New Prospects, Total Calls, Outbound Texts (Marketing & Showings
 // section) — Total Calls/Outbound Texts are CACHE-BACKED, same pattern as
@@ -244,7 +245,7 @@ rentEngineRoutes.get("/api/rentengine/units-on-market", requireLogin, async (_re
 // directly (isShowingCompleted from client.ts, same filter the
 // /api/rentengine/showings drill-down route already used) instead of
 // either the blanket per-unit sum or the funnel-bucket count.
-rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, prospectsResult, showingsResult] = await Promise.all([
@@ -296,7 +297,7 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
     logError("GET /api/rentengine/marketing-activity failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load marketing activity data from RentEngine." });
   }
-});
+}));
 
 // Avg Days on Market / Median DOM — CORRECTED 2026-07-04. The
 // "genuinely not available" conclusion below was wrong: it was true for
@@ -306,7 +307,7 @@ rentEngineRoutes.get("/api/rentengine/marketing-activity", requireLogin, async (
 // returns days_on_market directly, confirmed live. Cache-backed (same
 // pattern as property-health/rent-collection) since computing this live
 // means ~61 RentEngine calls, one per tracked unit.
-rentEngineRoutes.get("/api/rentengine/days-on-market", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/days-on-market", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const shared = await getOrFetchLeasingPerformanceForAllUnits(from, to);
@@ -332,7 +333,7 @@ rentEngineRoutes.get("/api/rentengine/days-on-market", requireLogin, async (req,
     logError("GET /api/rentengine/days-on-market failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load days-on-market data from RentEngine." });
   }
-});
+}));
 
 // Completion Rate — SPLIT OFF marketing-activity 2026-07-13, per Jason
 // directly. The blanket version (showings summed across every tracked
@@ -344,7 +345,7 @@ rentEngineRoutes.get("/api/rentengine/days-on-market", requireLogin, async (req,
 // was already vendor-confirmed for the Team Performance "Portfolio
 // Assistant KPI" build a day earlier — never wired back to this Dashboard
 // tile until now. Same shared cache as the other RentEngine tiles.
-rentEngineRoutes.get("/api/rentengine/completion-rate", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/completion-rate", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
@@ -376,14 +377,14 @@ rentEngineRoutes.get("/api/rentengine/completion-rate", requireLogin, async (req
     logError("GET /api/rentengine/completion-rate failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load completion rate data from RentEngine." });
   }
-});
+}));
 
 // Completion Rate drill-down — same on-market-for-showing scoping as the
 // summary above, via showingCompletionRateExplainRows, joined with
 // address/status from getOrFetchUnits() (same join pattern as the Units on
 // Market / Days on Market drill-downs). Matches the vendor's exact
 // columns: Address, Status, Scheduled, Completed, Rate.
-rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
@@ -421,7 +422,7 @@ rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, asyn
     logError("GET /api/rentengine/completion-rate/units failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load completion rate data from RentEngine." });
   }
-});
+}));
 
 // ============================================================================
 // Drill-downs added 2026-07-04, per the same batch as dashboardRoutes.ts's
@@ -431,7 +432,7 @@ rentEngineRoutes.get("/api/rentengine/completion-rate/units", requireLogin, asyn
 // New Prospects drill-down — reuses the same fetchProspects call
 // prospects-by-source already makes, just returns the raw rows instead of
 // grouping by source.
-rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const result = await getOrFetchProspects(from, to);
@@ -460,7 +461,7 @@ rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res)
     logError("GET /api/rentengine/prospects failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load prospect data from RentEngine." });
   }
-});
+}));
 
 // Showings Completed drill-down — real per-showing records from
 // /reporting/showings. CORRECTED 2026-07-19, per Jason directly: the old
@@ -475,7 +476,7 @@ rentEngineRoutes.get("/api/rentengine/prospects", requireLogin, async (req, res)
 // ADDED same day, matching the vendor's own "Method" column (Self Guided
 // vs Accompanied) — see isShowingSelfGuided's comment in client.ts for
 // how confident that mapping is.
-rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/showings", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const result = await getOrFetchShowingsReport(from, to);
@@ -510,7 +511,7 @@ rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) 
     logError("GET /api/rentengine/showings failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load showings data from RentEngine." });
   }
-});
+}));
 
 // Total Calls drill-down — CORRECTED 2026-07-19, per Jason directly,
 // against a real vendor screenshot: this used to list real per-call
@@ -524,7 +525,7 @@ rentEngineRoutes.get("/api/rentengine/showings", requireLogin, async (req, res) 
 // status (same join pattern as the Completion Rate / Days on Market
 // drill-downs), address instead of the vendor's bare unit number per
 // Jason directly, sorted by call count descending to match the vendor.
-rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/calls", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
@@ -559,7 +560,7 @@ rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => 
     logError("GET /api/rentengine/calls failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load call data from RentEngine." });
   }
-});
+}));
 
 // Outbound Texts drill-down — ADDED 2026-07-19, per Jason directly,
 // against a real vendor screenshot. The old comment here (removed) argued
@@ -572,7 +573,7 @@ rentEngineRoutes.get("/api/rentengine/calls", requireLogin, async (req, res) => 
 // same pattern as the Total Calls drill-down above. Zero extra RentEngine
 // calls. Address instead of the vendor's bare unit number, per Jason
 // directly.
-rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
@@ -607,7 +608,7 @@ rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, async (req,
     logError("GET /api/rentengine/outbound-texts failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load outbound text data from RentEngine." });
   }
-});
+}));
 
 // Avg Days on Market / Median DOM — share ONE drill-down: the real per-unit
 // leasing-performance rows already being fetched
@@ -621,7 +622,7 @@ rentEngineRoutes.get("/api/rentengine/outbound-texts", requireLogin, async (req,
 // vendor's own drill-down (Address/Status/Health/Days columns; ours only
 // ever showed a bare unit_id). Joined in from getOrFetchUnits() (already fetched
 // elsewhere on this dashboard) by unit id — no extra RentEngine calls.
-rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
@@ -652,7 +653,7 @@ rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, 
     logError("GET /api/rentengine/units/leasing-performance failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load unit performance data from RentEngine." });
   }
-});
+}));
 
 // Units on Market drill-down — ADDED 2026-07-13, per Jason directly. Was
 // sharing the Days on Market drill-down above (which lists EVERY tracked
@@ -663,7 +664,7 @@ rentEngineRoutes.get("/api/rentengine/units/leasing-performance", requireLogin, 
 // list built from getOrFetchUnits() (not the leasing-performance rows) so a
 // brand-new listing that hasn't shown up in a reporting window yet still
 // appears here with "—" days rather than being silently missing.
-rentEngineRoutes.get("/api/rentengine/units/on-market", requireLogin, async (req, res) => {
+rentEngineRoutes.get("/api/rentengine/units/on-market", requireLogin, asyncHandler(async (req, res) => {
   const { from, to } = resolveDateRangeFromQuery(req.query.period);
   try {
     const [shared, unitsResult] = await Promise.all([getOrFetchLeasingPerformanceForAllUnits(from, to), getOrFetchUnits()]);
@@ -695,4 +696,4 @@ rentEngineRoutes.get("/api/rentengine/units/on-market", requireLogin, async (req
     logError("GET /api/rentengine/units/on-market failed", { error: String(err) });
     res.status(502).json({ error: "Failed to load unit data from RentEngine." });
   }
-});
+}));

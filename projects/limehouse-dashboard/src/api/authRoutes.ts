@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { jwtVerify } from "jose";
 import { issueSession, clearSession, requireLogin, type AuthedRequest } from "../auth/session.js";
 import { findByEmail, bumpLastLogin } from "../db/staffUsers.js";
@@ -10,7 +11,7 @@ export const authRoutes = Router();
 // Accepts a short-lived handoff token from LimeHQ and issues a dashboard
 // session. LimeHQ redirects here after a successful login so staff don't
 // need a separate dashboard password.
-authRoutes.post("/auth/limehq-callback", async (req, res) => {
+authRoutes.post("/auth/limehq-callback", asyncHandler(async (req, res) => {
   const token = req.body.token;
   if (typeof token !== "string") {
     res.status(400).send("Invalid sign-in link.");
@@ -40,7 +41,7 @@ authRoutes.post("/auth/limehq-callback", async (req, res) => {
     });
     res.status(401).send("Sign-in link expired or invalid. Return to LimeHQ and try again.");
   }
-});
+}));
 
 // Redirect any direct login attempts to LimeHQ — it's the single front door.
 authRoutes.get("/auth/login", (_req, res) => {

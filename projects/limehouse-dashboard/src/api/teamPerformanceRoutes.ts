@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../lib/asyncHandler.js";
 import { requireLogin, requireAdmin } from "../auth/session.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
 import { periodToSnapshotLabel, resolvePeriod, quarterLabelToDateRange, periodEnumSchema, type PeriodKey } from "../kpi/period.js";
@@ -76,7 +77,7 @@ const QUARTER_LABEL_PATTERN = /^\d{4}-Q[1-4]$/;
 // correctly lands on the REAL current quarter via periodToSnapshotLabel)
 // when no explicit quarter is given, so the page still defaults sensibly
 // on first load.
-teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAdmin, async (req, res) => {
+teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAdmin, asyncHandler(async (req, res) => {
   try {
     const quarterParam = req.query.quarter;
     let snapshotLabel: string;
@@ -126,7 +127,7 @@ teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAd
     logError("GET /api/team-performance/roles failed", { error: String(err) });
     res.status(500).json({ error: "Failed to load Team Performance data." });
   }
-});
+}));
 
 // KPI "explain" drill-down — click a KPI, see the plain-English formula
 // plus the real records behind the number, matching the vendor site's own
@@ -190,7 +191,7 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
 // no stored historical record set to read instead — but the date WINDOW
 // passed into each calculation is now at least the real quarter's bounds
 // instead of an unrelated one.
-teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requireAdmin, async (req, res) => {
+teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requireAdmin, asyncHandler(async (req, res) => {
   const kpiName = req.params.kpiName;
   const formula = KPI_EXPLAIN_FORMULAS[kpiName];
   if (!formula) {
@@ -448,4 +449,4 @@ teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireL
     logError("GET /api/team-performance/kpi-explain failed", { kpiName, error: String(err) });
     res.status(502).json({ error: `Failed to load the data behind "${kpiName}".` });
   }
-});
+}));

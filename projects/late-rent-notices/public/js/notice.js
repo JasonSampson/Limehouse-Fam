@@ -437,6 +437,13 @@
         });
 
         sendBtn.addEventListener("click", async () => {
+          const recipientNames = (notice.toRecipients || []).map((r) => r.tenantName).join(", ") || "the tenant(s) on this lease";
+          const confirmed = window.confirm(
+            `Send this 14-Day Notice to ${recipientNames} for ${fmtMoney(notice.amountDueAtDraft)}?\n\n` +
+              `This cannot be undone once sent.`
+          );
+          if (!confirmed) return;
+
           sendBtn.disabled = true;
           sendBtn.textContent = "Sending…";
           resultBox.innerHTML = "";

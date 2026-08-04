@@ -97,24 +97,32 @@ describe("renderTemplate — XSS-shaped input handling", () => {
 });
 
 describe("renderTemplate — subject-line-not-escaped behavior (escapeForHtml: false)", () => {
+  // As of template v5 the subject line contains no merge fields (Jason
+  // dropped the unit label from it), so the escaping-mode split is proven
+  // against a plain field template instead.
   it("does NOT HTML-escape when escapeForHtml is explicitly false", () => {
     const fields = { ...baseFields, unit_label: `O'Brien's Unit` };
-    const result = renderTemplate(INITIAL_SUBJECT_LINE, fields, { escapeForHtml: false });
-    expect(result).toBe("NOTICE OF DEFAULT — FAILURE TO PAY RENT — O'Brien's Unit");
+    const result = renderTemplate("Unit: {{unit_label}}", fields, { escapeForHtml: false });
+    expect(result).toBe("Unit: O'Brien's Unit");
     expect(result).not.toContain("&#39;");
   });
 
   it("HTML-escapes by default (escapeForHtml omitted) for the same input, proving the two modes actually differ", () => {
     const fields = { ...baseFields, unit_label: `O'Brien's Unit` };
-    const result = renderTemplate(INITIAL_SUBJECT_LINE, fields);
+    const result = renderTemplate("Unit: {{unit_label}}", fields);
     expect(result).toContain("&#39;");
+  });
+
+  it("the v5 subject line is a constant with no merge fields and no unit label", () => {
+    expect(INITIAL_SUBJECT_LINE).toBe("NOTICE OF DEFAULT — FAILURE TO PAY RENT");
+    expect(INITIAL_SUBJECT_LINE).not.toMatch(/\{\{/);
   });
 });
 
-describe("renderTemplate — full initial notice letter (v4, actual attorney-sourced template)", () => {
+describe("renderTemplate — full initial notice letter (v5, actual attorney-sourced template)", () => {
   it("is the expected template key/version this test suite is pinned against", () => {
     expect(INITIAL_TEMPLATE_KEY).toBe("14_day_pay_or_quit");
-    expect(INITIAL_TEMPLATE_VERSION).toBe(4);
+    expect(INITIAL_TEMPLATE_VERSION).toBe(5);
   });
 
   it("renders the full body with realistic tenant data and contains every populated field's value", () => {

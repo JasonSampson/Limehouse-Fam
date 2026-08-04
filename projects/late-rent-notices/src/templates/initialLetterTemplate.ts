@@ -65,10 +65,17 @@
 // testing this rendered output end-to-end, then Judge's review — has passed.
 // It is safe to load in shadow mode, where Send is a no-op.
 export const INITIAL_TEMPLATE_KEY = "14_day_pay_or_quit";
-export const INITIAL_TEMPLATE_VERSION = 4;
+export const INITIAL_TEMPLATE_VERSION = 5;
 
-export const INITIAL_SUBJECT_LINE =
-  "NOTICE OF DEFAULT — FAILURE TO PAY RENT — {{unit_label}}";
+// v5 changes from v4, per Jason on 2026-08-04 after reviewing the first
+// real drafts: (1) the unit label is dropped from the subject line — the
+// property/unit still appears in the notice header block, the dashboard
+// row, and the PDF filename, so nothing is lost for identification; (2)
+// the office phone number is added under "Limehouse Property Management"
+// in the signature block. No substantive legal wording changed — the
+// paragraph-spacing changes Jason asked for in the same breath live in
+// generateNoticePdf.ts's print CSS, not in this text.
+export const INITIAL_SUBJECT_LINE = "NOTICE OF DEFAULT — FAILURE TO PAY RENT";
 
 // v4 change from v3: the header block was restructured to match the actual
 // table layout in the attorney's original document, which the earlier
@@ -156,4 +163,5 @@ POSSESSION OF THE PREMISES IN GENERAL DISTRICT COURT.**
 
 BY: {{pm_name}} (Authorized Agent)
 Limehouse Property Management
+757-986-0526
 `.trim();

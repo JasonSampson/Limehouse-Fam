@@ -91,7 +91,7 @@
             <p class="field-hint" style="margin-top:0;">To: ${toLine}</p>
             <p style="font-weight:600; margin: 4px 0 10px;">${escapeHtml(notice.subject)}</p>
             <p style="margin: 0 0 10px;">
-              <a href="${pdfUrl}" target="_blank" rel="noopener" class="btn">
+              <a href="${pdfUrl}" target="_blank" rel="noopener" class="btn" style="background:var(--lime-green-dark);border-color:var(--lime-green-dark);color:var(--white)">
                 View / Download PDF (this is what gets attached to the email and can be printed for court)
               </a>
             </p>

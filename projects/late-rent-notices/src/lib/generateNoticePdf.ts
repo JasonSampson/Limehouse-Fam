@@ -243,7 +243,10 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
     font-size: 11pt;
     font-weight: bold;
     text-align: center;
-    margin: 0 0 4pt 0;
+    /* One blank-line gap below the title before the TO/FROM header table —
+       per Jason's spacing pass (2026-08-04) after reviewing the first real
+       drafts. 12pt ≈ one 11pt line at this line-height. */
+    margin: 0 0 12pt 0;
   }
   table.grid {
     width: 100%;
@@ -275,7 +278,13 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
     line-height: 1.08;
   }
   p {
-    margin: 0 0 2pt 0;
+    /* One blank-line gap between paragraphs (Jason's spacing pass,
+       2026-08-04) — this, plus the tables' own 12pt bottom margin, creates
+       the before/after breathing room he listed around every major
+       paragraph: the gap BEFORE each table comes from the preceding
+       paragraph's bottom margin, the gap AFTER it from the table's own.
+       Single-page fit is locked in by the generateNoticePdf test suite. */
+    margin: 0 0 12pt 0;
   }
   strong {
     font-weight: bold;

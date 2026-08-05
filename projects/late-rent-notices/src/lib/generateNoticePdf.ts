@@ -359,7 +359,20 @@ export async function generateNoticePdf(fields: MergeFields, subjectLine: string
   const html = buildNoticePrintHtml(fields, subjectLine);
 
   const executablePath = resolveChromeExecutablePath();
-  const browser = await puppeteer.launch({ executablePath, headless: true });
+  // The production server runs this process as root (matches every other
+  // app in this ecosystem's deploy setup), and Chrome refuses to launch as
+  // root without this flag ("Running as root without --no-sandbox is not
+  // supported", https://crbug.com/638180) — confirmed as the exact cause of
+  // every "PDF generation failed unexpectedly" error since go-live. Safe
+  // here specifically because this only ever renders our own
+  // template-generated HTML (built from internal merge fields, never a
+  // third-party URL or arbitrary user-supplied content), which is exactly
+  // the case Chrome's own sandboxing guidance treats as acceptable to skip.
+  const browser = await puppeteer.launch({
+    executablePath,
+    headless: true,
+    args: ["--no-sandbox"],
+  });
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });

@@ -249,6 +249,19 @@ function renderUnlockedView() {
     });
   });
 
+  // Portfolios with more than ~3 roles overflow this row on a phone screen
+  // (confirmed directly: 5 roles at 375px width, only 2.5 fit) — it already
+  // scrolls horizontally (.role-tabs has overflow-x:auto), but with nothing
+  // showing there's more to swipe to, "Marketing Specialist" and beyond
+  // were invisible and easy to never discover. has-overflow (see
+  // dashboard.css) fades the right edge only when there's actually
+  // something to scroll to, not on every portfolio regardless of role
+  // count.
+  const roleTabsEl = document.getElementById("role-tabs");
+  if (roleTabsEl) {
+    roleTabsEl.classList.toggle("has-overflow", roleTabsEl.scrollWidth > roleTabsEl.clientWidth);
+  }
+
   renderRoleDetail(tpActiveRole);
 }
 

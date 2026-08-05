@@ -1097,6 +1097,18 @@ table.drill-table td {
   padding-bottom: 4px;
 }
 
+/* Fades the right edge so a row with more roles than fit on screen (a
+   real case on a phone: Portfolio Manager/Assistant/Bookkeeper/Leasing
+   Specialist/Marketing Specialist is 5 tabs) visibly hints there's more
+   to swipe to, instead of looking like a short, complete list that
+   happens to end mid-scroll. Toggled by JS (team-performance.js) only
+   when the row actually overflows — a portfolio with few enough roles to
+   fit fully never gets a fade clipping real content off the true last tab. */
+.role-tabs.has-overflow {
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
+}
+
 .role-tabs button {
   background: #eef0f3;
   border: none;

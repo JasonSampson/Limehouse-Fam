@@ -26,11 +26,50 @@
 // revisited — see parseNoticeBody's doc comment below.
 import puppeteer from "puppeteer-core";
 import * as fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadEnv } from "../config/env.js";
 import type { MergeFields } from "../templates/renderTemplate.js";
 import { renderTemplate } from "../templates/renderTemplate.js";
 import { INITIAL_BODY_MARKDOWN } from "../templates/initialLetterTemplate.js";
 import { escapeHtml, boldMarkdownToHtml, groupLinesIntoParagraphs, paragraphsToHtml } from "./noticeBodyFormatting.js";
+
+// Self-hosted, never system-dependent: the notice must render with
+// Calibri-compatible line widths regardless of what fonts happen to be
+// installed on whatever machine runs this. This exact gap — Calibri/Carlito
+// present on the Windows machine this was built and tested on, absent on
+// the Linux production server — silently pushed every real notice onto a
+// second page after go-live (the wider fallback font wrapped fewer words
+// per line), spilling only the tiny signature block onto an otherwise-blank
+// page 2. Carlito is metrically identical to Calibri (same glyph widths per
+// character), so embedding the font file directly here guarantees the same
+// line wrapping and page count on every machine, forever, with no server
+// setup step required.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CARLITO_REGULAR_PATH = path.join(__dirname, "..", "..", "assets", "fonts", "Carlito-Regular.ttf");
+const CARLITO_BOLD_PATH = path.join(__dirname, "..", "..", "assets", "fonts", "Carlito-Bold.ttf");
+
+// Node's own path-to-URL converter, not a hand-rolled string replace —
+// Windows file URLs need a leading slash before the drive letter
+// (file:///C:/...) that a naive backslash-swap silently produces wrong.
+function toFileUrl(absolutePath: string): string {
+  return pathToFileURL(absolutePath).href;
+}
+
+const CARLITO_FONT_FACES = `
+    @font-face {
+      font-family: 'Carlito';
+      src: url('${toFileUrl(CARLITO_REGULAR_PATH)}') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Carlito';
+      src: url('${toFileUrl(CARLITO_BOLD_PATH)}') format('truetype');
+      font-weight: bold;
+      font-style: normal;
+    }
+  `;
 
 // Common install locations for Chrome/Chromium/Edge, checked in order, used
 // only when CHROME_EXECUTABLE_PATH isn't set. Windows dev path is listed
@@ -229,6 +268,7 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
 <meta charset="UTF-8">
 <title>${escapeHtml(subject)}</title>
 <style>
+  ${CARLITO_FONT_FACES}
   @page {
     size: 8.5in 11in;
     /* 0.2in top, 0.3in right, 0.16in bottom, 0.3in left — from the
@@ -240,7 +280,11 @@ function buildPrintHtml(parsed: ParsedNoticeBody, subject: string): string {
   html, body {
     margin: 0;
     padding: 0;
-    font-family: Calibri, "Carlito", Arial, sans-serif;
+    /* 'Carlito' first and self-hosted via the @font-face above — guaranteed
+       present regardless of the machine. Calibri/Arial stay as a cosmetic
+       fallback only, in the unlikely case the embedded font file itself
+       fails to load; they should never actually be selected in practice. */
+    font-family: 'Carlito', Calibri, Arial, sans-serif;
     font-size: 11pt;
     /* Single-spaced, like the original Word document (which uses 0pt
        space-after and single (1.0) line spacing throughout) rather than a

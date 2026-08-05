@@ -85,7 +85,17 @@ export async function findTenantDealId(recipientEmails: string[]): Promise<{ dea
   return null;
 }
 
-async function createOutboundEmailNote(dealId: string, description: string, sentAtIso: string): Promise<void> {
+// user_id ("User to assign the note activity to") is optional per
+// LeadSimple's own POST /notes spec. Omitted (not sent as an empty
+// string) when null, matching the pre-fix behavior exactly for any PM
+// with no known LeadSimple account — LeadSimple's own default
+// attribution (the API key owner) applies, same as before this fix.
+async function createOutboundEmailNote(
+  dealId: string,
+  description: string,
+  sentAtIso: string,
+  userId: string | null
+): Promise<void> {
   const env = loadEnv();
   const form = new URLSearchParams({
     parent_id: dealId,
@@ -94,6 +104,7 @@ async function createOutboundEmailNote(dealId: string, description: string, sent
     kind: "email",
     direction: "outbound",
     created_at: sentAtIso,
+    ...(userId ? { user_id: userId } : {}),
   });
   const res = await fetch(`${LEADSIMPLE_BASE_URL}/notes`, {
     method: "POST",
@@ -133,6 +144,12 @@ export interface NoticeMirrorPayload {
   amountDue: string; // already formatted, e.g. "$1,875.50"
   deliveryStatus: string; // 'sent' | 'bounced'
   sentByPmName: string;
+  // Real fix (2026-08-05) for notes always showing as posted by the
+  // LeadSimple API key's owner regardless of who actually sent the
+  // notice — see pm_users.leadsimple_user_id (migration 0052). Null when
+  // the sending PM has no known LeadSimple account; the note still posts,
+  // just under LeadSimple's own default attribution as before.
+  sentByLeadSimpleUserId: string | null;
   sentAtIso: string;
   pdf: Buffer;
   pdfFilename: string;
@@ -174,7 +191,7 @@ export async function mirrorNoticeToLeadSimple(payload: NoticeMirrorPayload): Pr
     `Delivery status: ${payload.deliveryStatus}. ` +
     `The notice PDF is attached to this deal's files as "${payload.pdfFilename}".`;
 
-  await createOutboundEmailNote(deal.dealId, description, payload.sentAtIso);
+  await createOutboundEmailNote(deal.dealId, description, payload.sentAtIso, payload.sentByLeadSimpleUserId);
   await uploadDealPdf(deal.dealId, payload.pdfFilename, payload.pdf);
 
   logInfo("LeadSimple mirror complete", { noticeId: payload.noticeId, dealId: deal.dealId });

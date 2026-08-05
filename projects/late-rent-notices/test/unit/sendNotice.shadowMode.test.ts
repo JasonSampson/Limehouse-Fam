@@ -98,11 +98,15 @@ function makeFakeClient(): PoolClient {
     property_address: "123 Main St, Norfolk, VA 23508",
     rent_due_day: 1,
     grace_period_days: 3,
-    assigned_pm_name: "Alex Rivera",
+    // Deliberately DIFFERENT from the sending PM's own name below (Alex
+    // Rivera) — this is exactly the distinction Jason's 2026-08-05 fix is
+    // about: the notice is assigned to Dana, but Alex is the one clicking
+    // Send, so the signature must show Alex, not Dana.
+    assigned_pm_name: "Dana Sampson",
   };
   const templateRow = {
     subject_line: "14-Day Notice — {{unit_label}}",
-    body_markdown: "Dear {{tenant_name}}, you owe {{amount_due}}.",
+    body_markdown: "Dear {{tenant_name}}, you owe {{amount_due}}. Signed, {{pm_name}}.",
   };
   const recipientRows = [
     { id: 1, recipient_type: "to", email_address: "tenant@example.com", full_name: "Jane Doe" },
@@ -124,8 +128,12 @@ function makeFakeClient(): PoolClient {
     if (sql.includes("FROM pm_users")) {
       // The sending staff member's identity — arrives via their LimeHQ
       // login and resolves to this pm_users row. The live-mode test below
-      // asserts the Graph send goes out FROM this person's own mailbox.
-      return { rows: [{ display_name: "Alex Rivera", email: "alex@limehousepm.com" }] };
+      // asserts the Graph send goes out FROM this person's own mailbox,
+      // and that the notice's own signature line shows THEIR name, not
+      // the assigned PM's (Dana, above).
+      return {
+        rows: [{ id: 9, display_name: "Alex Rivera", email: "alex@limehousepm.com", leadsimple_user_id: "ls-user-alex" }],
+      };
     }
     // UPDATE notices / notice_recipients. rowCount: 1 matches real pg
     // behavior for an UPDATE that actually affects the target row —
@@ -232,8 +240,16 @@ describe("sendNotice — shadow mode guard (legal 14-Day Notice send)", () => {
         // clicked Send (their own Microsoft 365 mailbox), not a shared
         // compliance address — identity flows in via their LimeHQ login.
         senderMailbox: "alex@limehousepm.com",
+        // Jason's correction, 2026-08-05: the notice's own "Signed, {name}"
+        // line must show the actual sender (Alex), never the PM the
+        // lease/notice happens to be assigned to (Dana, per leaseRow above)
+        // — a real bug caught the first time someone other than the
+        // assigned PM sent a real notice.
+        bodyHtml: expect.stringContaining("Alex Rivera"),
       })
     );
+    const sentBodyHtml = sendGraphMailMock.mock.calls[0][0].bodyHtml;
+    expect(sentBodyHtml).not.toContain("Dana Sampson");
     expect(result).toEqual({ sent: true, voided: false });
   });
 

@@ -133,6 +133,20 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     [notice.lease_id, notice.assigned_pm_id]
   );
   const lease = leaseResult.rows[0];
+
+  // The notice is signed by whoever actually clicks Send, not necessarily
+  // the PM the lease/notice happens to be assigned to — Jason's correction
+  // (2026-08-05) after a staff member other than the assigned PM sent the
+  // first real notice and the signature still showed the assigned PM's
+  // name. Looked up early so it can feed BOTH the "BY:" signature line
+  // (mergeFields.pm_name below) and the Graph FROM: mailbox further down —
+  // one lookup, one source of truth, instead of two separately-reasoned
+  // "who is this" answers that could drift apart.
+  const senderResult = await client.query<{ id: number; display_name: string; email: string; leadsimple_user_id: string | null }>(
+    "SELECT id, display_name, email, leadsimple_user_id FROM pm_users WHERE id = $1",
+    [params.sendingPmId]
+  );
+  const sender = senderResult.rows[0];
   const unitDisplay = formatUnitDisplay(lease.unit_label, lease.multi_unit);
   const mailingAddress = formatMailingAddressLines(lease.address_line1, lease.city, lease.state, lease.postal_code, unitDisplay);
 
@@ -279,7 +293,9 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     // Standard two-line mailing address — see formatMailingAddressLines.
     property_address: mailingAddress.line1,
     property_address_line2: mailingAddress.line2,
-    pm_name: lease.assigned_pm_name,
+    // The actual clicking sender, not the assigned PM — see sender lookup
+    // above.
+    pm_name: sender.display_name,
     // Real computed itemized amounts (migration 0038 / notice_line_items),
     // classified fresh above at send time.
     rent_amount_due: formatCurrency(bucketSums.rent),
@@ -323,12 +339,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   // sees the actual person handling their notice, not a shared mailbox.
   // Their limehousepm.com address must match their Microsoft 365 mailbox
   // (LimeHQ Staff & Permissions is the source of truth for that email).
-  const senderResult = await client.query<{ display_name: string; email: string }>(
-    "SELECT display_name, email FROM pm_users WHERE id = $1",
-    [params.sendingPmId]
-  );
-  const sender = senderResult.rows[0];
-
+  // (sender was looked up early, right after the lease query — see above.)
   const result = await sendGraphMail({
     subject,
     bodyHtml,
@@ -416,6 +427,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
       amountDue: formatCurrency(liveBalance.balance),
       deliveryStatus: finalDeliveryStatus,
       sentByPmName: sender?.display_name ?? `PM ${params.sendingPmId}`,
+      sentByLeadSimpleUserId: sender?.leadsimple_user_id ?? null,
       sentAtIso: new Date().toISOString(),
       pdf: noticePdf,
       pdfFilename,
@@ -481,11 +493,12 @@ export async function resendBouncedRecipient(
     status: string;
     letter_template_id: number;
     assigned_pm_id: number;
+    sent_by_pm_id: number | null;
     sent_at: Date | null;
     amount_due_at_send: string | null;
     days_late_at_send: number | null;
   }>(
-    `SELECT id, lease_id, status, letter_template_id, assigned_pm_id, sent_at,
+    `SELECT id, lease_id, status, letter_template_id, assigned_pm_id, sent_by_pm_id, sent_at,
             amount_due_at_send, days_late_at_send
      FROM notices WHERE id = $1 FOR UPDATE`,
     [params.noticeId]
@@ -598,6 +611,20 @@ export async function resendBouncedRecipient(
   const unitDisplay = formatUnitDisplay(lease.unit_label, lease.multi_unit);
   const mailingAddress = formatMailingAddressLines(lease.address_line1, lease.city, lease.state, lease.postal_code, unitDisplay);
 
+  // A resend redelivers the SAME already-sent document to a corrected
+  // address — the signature must show who actually signed it originally,
+  // not the assigned PM (matches sendNotice's fix, same reasoning: whoever
+  // clicks the button isn't necessarily who the notice is attributed to)
+  // and not necessarily whoever is doing the correcting/resending either.
+  // sent_by_pm_id is set the moment a notice transitions to 'sent' (see the
+  // UPDATE above in sendNotice), so it's always populated by the time a
+  // resend is possible; the fallback only guards a theoretical gap.
+  const originalSenderResult = await client.query<{ display_name: string }>(
+    "SELECT display_name FROM pm_users WHERE id = $1",
+    [notice.sent_by_pm_id ?? notice.assigned_pm_id]
+  );
+  const originalSenderName = originalSenderResult.rows[0]?.display_name ?? lease.assigned_pm_name;
+
   const templateResult = await client.query<{ subject_line: string; body_markdown: string }>(
     "SELECT subject_line, body_markdown FROM letter_templates WHERE id = $1",
     [notice.letter_template_id]
@@ -652,7 +679,7 @@ export async function resendBouncedRecipient(
     notice_date: formatDateMMDDYYYY(notice.sent_at),
     property_address: mailingAddress.line1,
     property_address_line2: mailingAddress.line2,
-    pm_name: lease.assigned_pm_name,
+    pm_name: originalSenderName,
     rent_amount_due: formatCurrency(sumBucket("rent")),
     late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
     misc_amount_due: formatCurrency(sumBucket("other")),

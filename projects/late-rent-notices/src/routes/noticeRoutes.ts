@@ -181,6 +181,8 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
       state: string;
       postal_code: string;
       assigned_pm_name: string;
+      sent_by_pm_name: string | null;
+      viewer_display_name: string;
     }>(
       `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.amount_due_at_send, n.days_late_at_send, n.voided_reason, n.letter_template_id,
@@ -190,13 +192,15 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
               p.name AS property_name,
               (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
               p.address_line1, p.city, p.state, p.postal_code,
-              pm.display_name AS assigned_pm_name
+              pm.display_name AS assigned_pm_name,
+              (SELECT display_name FROM pm_users WHERE id = n.sent_by_pm_id) AS sent_by_pm_name,
+              (SELECT display_name FROM pm_users WHERE id = $2) AS viewer_display_name
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
        JOIN properties p ON p.id = l.property_id
        JOIN pm_users pm ON pm.id = n.assigned_pm_id
        WHERE n.id = $1`,
-      [noticeId]
+      [noticeId, session.pmUserId]
     );
     if (noticeResult.rows.length === 0) {
       return null;
@@ -371,7 +375,13 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
       notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
       property_address: previewMailingAddress.line1,
       property_address_line2: previewMailingAddress.line2,
-      pm_name: notice.assigned_pm_name,
+      // A draft's signature previews as whoever is currently looking at
+      // it — accurate to sendNotice.ts's real behavior, since that's
+      // exactly who signs it if they click Send right now. Once sent, the
+      // signature is fixed to whoever actually sent it (sent_by_pm_name),
+      // not whoever happens to be reviewing the history later. Jason's
+      // correction, 2026-08-05.
+      pm_name: notice.status === "draft" ? notice.viewer_display_name : (notice.sent_by_pm_name ?? notice.assigned_pm_name),
       rent_amount_due: formatCurrency(sumBucket("rent")),
       late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
       misc_amount_due: formatCurrency(sumBucket("other")),
@@ -497,6 +507,8 @@ noticeRoutes.get("/api/notices/:id/pdf", asyncHandler(async (req: AuthedRequest,
         state: string;
         postal_code: string;
         assigned_pm_name: string;
+        sent_by_pm_name: string | null;
+        viewer_display_name: string;
       }>(
         `SELECT n.id, n.lease_id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
                 n.amount_due_at_send, n.days_late_at_send, n.letter_template_id,
@@ -505,13 +517,15 @@ noticeRoutes.get("/api/notices/:id/pdf", asyncHandler(async (req: AuthedRequest,
                 (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit,
                 (p.address_line1 || ', ' || p.city || ', ' || p.state) AS property_address,
                 p.address_line1, p.city, p.state, p.postal_code,
-                pm.display_name AS assigned_pm_name
+                pm.display_name AS assigned_pm_name,
+                (SELECT display_name FROM pm_users WHERE id = n.sent_by_pm_id) AS sent_by_pm_name,
+                (SELECT display_name FROM pm_users WHERE id = $2) AS viewer_display_name
          FROM notices n
          JOIN leases l ON l.id = n.lease_id
          JOIN properties p ON p.id = l.property_id
          JOIN pm_users pm ON pm.id = n.assigned_pm_id
          WHERE n.id = $1`,
-        [noticeId]
+        [noticeId, session.pmUserId]
       );
       if (noticeResult.rows.length === 0) {
         return null;
@@ -607,7 +621,10 @@ noticeRoutes.get("/api/notices/:id/pdf", asyncHandler(async (req: AuthedRequest,
         notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
         property_address: pdfMailingAddress.line1,
         property_address_line2: pdfMailingAddress.line2,
-        pm_name: notice.assigned_pm_name,
+        // Same rule as the detail route: a draft previews as whoever's
+        // currently viewing it (accurate to who'd actually sign it), a
+        // sent notice's PDF always shows who actually sent it.
+        pm_name: notice.status === "draft" ? notice.viewer_display_name : (notice.sent_by_pm_name ?? notice.assigned_pm_name),
         rent_amount_due: formatCurrency(sumBucket("rent")),
         late_fee_amount_due: formatCurrency(sumBucket("late_fee")),
         misc_amount_due: formatCurrency(sumBucket("other")),

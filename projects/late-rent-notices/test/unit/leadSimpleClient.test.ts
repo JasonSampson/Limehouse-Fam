@@ -97,6 +97,7 @@ describe("mirrorNoticeToLeadSimple", () => {
     amountDue: "$1,875.50",
     deliveryStatus: "sent",
     sentByPmName: "Jason Sampson",
+    sentByLeadSimpleUserId: "bcae78e5-c7d0-4068-a0e9-4deab3793410",
     sentAtIso: "2026-08-03T17:00:00.000Z",
     pdf: Buffer.from("%PDF-fake"),
     pdfFilename: "14-Day-Notice-Unit-1.pdf",
@@ -136,6 +137,11 @@ describe("mirrorNoticeToLeadSimple", () => {
     expect(noteBody.get("direction")).toBe("outbound");
     expect(noteBody.get("description")).toContain("$1,875.50");
     expect(noteBody.get("description")).toContain("Jacob Watson");
+    // The note is attributed to the ACTUAL sender in LeadSimple's own UI,
+    // not just described as such in the text — Jason's correction,
+    // 2026-08-05 (every note previously showed as posted by the API key's
+    // owner regardless of who really sent it).
+    expect(noteBody.get("user_id")).toBe("bcae78e5-c7d0-4068-a0e9-4deab3793410");
 
     const [fileUrl, fileInit] = fetchMock.mock.calls[2];
     expect(fileUrl).toBe("https://api.leadsimple.com/rest/uploaded_files");
@@ -143,6 +149,21 @@ describe("mirrorNoticeToLeadSimple", () => {
     expect(form.get("uploadable_id")).toBe("deal-9");
     expect(form.get("uploadable_type")).toBe("deals");
     expect(form.get("file")).toBeInstanceOf(Blob);
+  });
+
+  it("omits user_id entirely (not even blank) when the sending PM has no known LeadSimple account", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ data: [makeDeal("deal-9", TENANTS_PIPELINE, "Buildium Rental Tenants", [{ name: "Jacob Watson", emails: ["watsonja@bakerdc.com"] }])] })
+      )
+      .mockResolvedValueOnce(jsonResponse({ id: "note-1" }, 201))
+      .mockResolvedValueOnce(jsonResponse({ id: "file-1" }, 201));
+
+    await mirrorNoticeToLeadSimple({ ...payload, sentByLeadSimpleUserId: null });
+
+    const [, noteInit] = fetchMock.mock.calls[1];
+    const noteBody = new URLSearchParams(noteInit.body as string);
+    expect(noteBody.has("user_id")).toBe(false);
   });
 
   it("propagates a note-create failure so the caller can log it (send itself is already committed)", async () => {

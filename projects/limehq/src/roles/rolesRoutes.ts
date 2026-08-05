@@ -243,6 +243,36 @@ const SHARED_CSS = `
     font-size: 0.875rem;
   }
 
+  /* ── Role Templates table ──────────────────────────────────────── */
+  .staff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  .staff-table th {
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 2px solid #eee;
+  }
+  .staff-table td {
+    padding: 0.75rem 0.75rem;
+    border-bottom: 1px solid #eee;
+    color: #333;
+    vertical-align: middle;
+  }
+  .staff-table tr:last-child td { border-bottom: none; }
+  .staff-table tr:hover td { background: #fafafa; }
+  .staff-actions {
+    text-align: right;
+    white-space: nowrap;
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+  }
+  .staff-action-btn { font-size: 0.8rem; padding: 0.3rem 0.75rem; }
+
   /* ── Permissions grid ───────────────────────────────────────────── */
   .grid-scroll {
     overflow-x: auto;
@@ -337,7 +367,53 @@ const SHARED_CSS = `
     .card { padding: 1.25rem 1rem; }
     .page-header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
     .nav { padding: 0.75rem 1rem; }
-    .nav-user { display: none; }
+
+    /* Role Templates table becomes a stack of labeled cards below 600px —
+       same technique as the Staff page's table (see staffRoutes.ts): hide
+       the <thead>, print each column's name via ::before + data-label
+       instead. The wide role x permission grid further down is NOT
+       touched here — it already scrolls horizontally inside .grid-scroll,
+       which is the right pattern for a matrix that can't sensibly reflow
+       into cards. */
+    .staff-table, .staff-table thead, .staff-table tbody,
+    .staff-table th, .staff-table td, .staff-table tr {
+      display: block;
+    }
+    .staff-table thead { position: absolute; left: -9999px; }
+    .staff-table tr {
+      margin-bottom: 1rem;
+      border: 1px solid #eee;
+      border-radius: 10px;
+      padding: 0.25rem 0.9rem;
+    }
+    .staff-table tr:last-child { margin-bottom: 0; }
+    .staff-table td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      text-align: right;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid #f2f2f2;
+    }
+    .staff-table td:last-child { border-bottom: none; }
+    .staff-table td[data-label]::before {
+      content: attr(data-label);
+      font-weight: 600;
+      color: #555;
+      text-align: left;
+      flex-shrink: 0;
+    }
+    .staff-table td.staff-actions {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+      padding-top: 0.75rem;
+    }
+    .staff-table td.staff-actions a {
+      text-align: center;
+      padding: 0.65rem 0.5rem;
+    }
   }
 `;
 
@@ -717,13 +793,13 @@ router.get("/", async (req, res, next) => {
         const ownerBadge = isOwner ? ` <span class="badge badge-owner">Owner</span>` : "";
         const editLink =
           !isOwner && canEdit
-            ? `<a href="/roles/${esc(r.id)}/edit" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Edit</a>`
+            ? `<a href="/roles/${esc(r.id)}/edit" class="btn-secondary staff-action-btn">Edit</a>`
             : "";
         return `
       <tr>
-        <td>${esc(r.name)}${ownerBadge}</td>
-        <td>${esc(r.team_performance_category ?? "—")}</td>
-        <td style="text-align:right">${editLink}</td>
+        <td data-label="Role">${esc(r.name)}${ownerBadge}</td>
+        <td data-label="Team Performance Category">${esc(r.team_performance_category ?? "—")}</td>
+        <td class="staff-actions">${editLink}</td>
       </tr>`;
       })
       .join("");

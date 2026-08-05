@@ -27,7 +27,7 @@
 import puppeteer from "puppeteer-core";
 import * as fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { loadEnv } from "../config/env.js";
 import type { MergeFields } from "../templates/renderTemplate.js";
 import { renderTemplate } from "../templates/renderTemplate.js";
@@ -49,23 +49,30 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CARLITO_REGULAR_PATH = path.join(__dirname, "..", "..", "assets", "fonts", "Carlito-Regular.ttf");
 const CARLITO_BOLD_PATH = path.join(__dirname, "..", "..", "assets", "fonts", "Carlito-Bold.ttf");
 
-// Node's own path-to-URL converter, not a hand-rolled string replace —
-// Windows file URLs need a leading slash before the drive letter
-// (file:///C:/...) that a naive backslash-swap silently produces wrong.
-function toFileUrl(absolutePath: string): string {
-  return pathToFileURL(absolutePath).href;
+// Embedded as a base64 data: URI, NOT referenced by file:// path — confirmed
+// directly that Chrome refuses local file:// resource loads for a page
+// built via page.setContent() ("Not allowed to load local resource"),
+// which silently failed the font load and produced the exact same
+// wrong-wrapping/2-page bug this whole fix exists to prevent, even with the
+// font file correctly bundled and the path correctly computed. A data: URI
+// is inline content, not an external resource fetch, so it isn't subject to
+// that restriction. Computed once at module load, not per PDF — these files
+// don't change at runtime.
+function toDataUrl(absolutePath: string): string {
+  const base64 = fs.readFileSync(absolutePath).toString("base64");
+  return `data:font/ttf;base64,${base64}`;
 }
 
 const CARLITO_FONT_FACES = `
     @font-face {
       font-family: 'Carlito';
-      src: url('${toFileUrl(CARLITO_REGULAR_PATH)}') format('truetype');
+      src: url('${toDataUrl(CARLITO_REGULAR_PATH)}') format('truetype');
       font-weight: normal;
       font-style: normal;
     }
     @font-face {
       font-family: 'Carlito';
-      src: url('${toFileUrl(CARLITO_BOLD_PATH)}') format('truetype');
+      src: url('${toDataUrl(CARLITO_BOLD_PATH)}') format('truetype');
       font-weight: bold;
       font-style: normal;
     }
@@ -420,6 +427,14 @@ export async function generateNoticePdf(fields: MergeFields, subjectLine: string
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "load" });
+    // setContent's "load" event does NOT guarantee @font-face resources have
+    // finished fetching — confirmed directly: without this wait, the PDF
+    // silently rendered with the browser's fallback font (wider glyphs, more
+    // line wraps, pushed the signature block onto a second page) even with
+    // the Carlito font file correctly bundled and referenced. Explicitly
+    // waiting on document.fonts.ready is the standard fix for this exact
+    // Puppeteer footgun.
+    await page.evaluateHandle("document.fonts.ready");
     const pdfUint8Array = await page.pdf({
       // @page rule above sets exact size/margins; printBackground stays
       // false (no shading in the original spec, borders only).

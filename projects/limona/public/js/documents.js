@@ -83,11 +83,11 @@ function renderCategorySection(categoryName, docs) {
     .map(
       (d) => `
         <tr data-id="${d.id}">
-          <td><a href="/api/admin/documents/${d.id}/preview" target="_blank" class="doc-name-link" title="${escapeHtml(d.filename)}">${escapeHtml(d.filename)}</a></td>
-          <td class="doc-description-cell">${renderDescriptionDisplay(d)}</td>
-          <td class="doc-created-cell">${renderDocCreatedDisplay(d)}</td>
-          <td>${new Date(d.created_at).toLocaleDateString()}</td>
-          <td class="doc-category-cell">${renderCategoryDisplay(d)}</td>
+          <td data-label="Document"><a href="/api/admin/documents/${d.id}/preview" target="_blank" class="doc-name-link" title="${escapeHtml(d.filename)}">${escapeHtml(d.filename)}</a></td>
+          <td class="doc-description-cell" data-label="Description">${renderDescriptionDisplay(d)}</td>
+          <td class="doc-created-cell" data-label="Doc Created">${renderDocCreatedDisplay(d)}</td>
+          <td data-label="Uploaded">${new Date(d.created_at).toLocaleDateString()}</td>
+          <td class="doc-category-cell" data-label="Category">${renderCategoryDisplay(d)}</td>
           <td class="actions-cell">
             <button class="secondary download-btn">Download</button>
             <button class="danger remove-btn">Remove</button>

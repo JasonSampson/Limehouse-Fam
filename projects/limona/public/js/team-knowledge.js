@@ -45,10 +45,10 @@ function formatWhen(value) {
 function renderRow(e) {
   return `
     <tr data-id="${e.id}">
-      <td class="tk-question-cell"><strong>${escapeHtml(e.question)}</strong></td>
-      <td class="tk-answer-cell">${escapeHtml(e.answer)}</td>
-      <td>${escapeHtml(e.created_by_name || "—")}</td>
-      <td>${formatWhen(e.created_at)}</td>
+      <td class="tk-question-cell" data-label="Question"><strong>${escapeHtml(e.question)}</strong></td>
+      <td class="tk-answer-cell" data-label="Answer">${escapeHtml(e.answer)}</td>
+      <td data-label="Added By">${escapeHtml(e.created_by_name || "—")}</td>
+      <td data-label="When">${formatWhen(e.created_at)}</td>
       <td class="actions-cell">
         <button class="secondary edit-btn">Edit</button>
         <button class="danger remove-btn">Delete</button>

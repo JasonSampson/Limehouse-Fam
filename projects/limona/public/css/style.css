@@ -581,12 +581,91 @@ a.button-link:hover { background: var(--color-primary-dark); }
     padding: 8px;
     flex: 1;
     overflow-x: auto;
+    /* All 7 nav links (Dashboard, Chat, Upload Document, Document Library,
+       Assets, Team Knowledge, Reporting) never come close to fitting this
+       row on a phone — confirmed directly, only "Dashboard" and a sliver
+       of the next item were visible at 375px width, with nothing showing
+       there were 6 more to scroll to. Unlike a variable-length list (e.g.
+       Dashboard's Team Performance role tabs), this nav is a fixed, always-
+       overflowing set within this breakpoint, so the fade can be
+       unconditional here rather than needing a JS overflow check. */
+    mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent 100%);
   }
   .sidebar-section { display: flex; align-items: center; margin-bottom: 0; margin-right: 10px; }
   .sidebar-section-label { display: none; }
   .sidebar-link { white-space: nowrap; margin-bottom: 0; margin-right: 2px; }
   .admin-content { padding: 18px; }
   .stat-cards { grid-template-columns: 1fr 1fr; }
+
+  /* Every admin data table (Document Library, Assets, Reporting, Team
+     Knowledge) shares this base `table`/`th`/`td` styling with no
+     per-page override, and none of them had ANY mobile treatment —
+     confirmed directly, a 6-column table crushed into 375px was wrapping
+     dates and category text one character per line ("1\n2\n/\n3\n0..."),
+     completely unreadable. Same card-stacking technique already proven
+     on LimeHQ's Staff & Roles pages: hide the header row, each row
+     becomes its own bordered block, ::before + data-label (added to
+     each page's row-rendering JS) reprints the column name per cell
+     since the real header is hidden. Scoped to tables inside .card
+     specifically — the stat-card grid above is unrelated markup, not a
+     <table>, so this can't affect it. */
+  .card table, .card thead, .card tbody, .card th, .card td, .card tr {
+    display: block;
+  }
+  .card table thead { position: absolute; left: -9999px; }
+  .card table tr {
+    margin-bottom: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 4px 14px;
+  }
+  .card table tr:last-child { margin-bottom: 0; }
+  .card table td {
+    display: flex;
+    /* Document Library's table also sets table-layout:fixed with
+       percentage widths per column (22%/26%/9%/9%/10%/20%) for its
+       desktop layout. Once the row becomes a block instead of a table
+       row, those percentages are read against the row's full width
+       instead of being ignored — every cell rendered at a fraction of
+       the row instead of full-width, confirmed directly. */
+    width: auto !important;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    text-align: right;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .card table td:last-child { border-bottom: none; }
+  /* Document Library's first column has its own desktop-only rule
+     (white-space:nowrap + overflow:hidden + ellipsis, for a fixed-width
+     table column) that's still active here and fights this flex layout —
+     confirmed directly: without this reset, the cell collapsed to a
+     sliver and the filename link rendered outside its own box entirely.
+     Long filenames just wrap normally now, matching every other stacked
+     value. */
+  .category-section table td:nth-child(1) {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .card table td[data-label]::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--color-muted);
+    text-align: left;
+    flex-shrink: 0;
+  }
+  /* Action buttons (Download/Remove, Approve/Edit/Reject, etc.) — no
+     data-label, so no ::before, and stacked full-width instead of the
+     cramped inline row they'd otherwise be squeezed into. */
+  .card table td.actions-cell {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding-top: 12px;
+  }
 }
 
 @media (max-width: 480px) {

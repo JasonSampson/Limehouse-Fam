@@ -96,11 +96,11 @@ function renderCategorySection(categoryName, assets) {
     .map(
       (a) => `
         <tr data-id="${a.id}">
-          <td><a href="/api/admin/assets/${a.id}/preview" target="_blank" class="doc-name-link" title="${escapeHtml(a.filename)}">${escapeHtml(a.filename)}</a></td>
-          <td class="doc-description-cell">${renderDescriptionDisplay(a)}</td>
-          <td class="doc-category-cell">${renderCategoryDisplay(a)}</td>
-          <td>${formatBytes(a.size_bytes)}</td>
-          <td>${new Date(a.created_at).toLocaleDateString()}</td>
+          <td data-label="Document"><a href="/api/admin/assets/${a.id}/preview" target="_blank" class="doc-name-link" title="${escapeHtml(a.filename)}">${escapeHtml(a.filename)}</a></td>
+          <td class="doc-description-cell" data-label="Description">${renderDescriptionDisplay(a)}</td>
+          <td class="doc-category-cell" data-label="Category">${renderCategoryDisplay(a)}</td>
+          <td data-label="Size">${formatBytes(a.size_bytes)}</td>
+          <td data-label="Uploaded">${new Date(a.created_at).toLocaleDateString()}</td>
           <td class="actions-cell">
             <button class="secondary download-btn">Download</button>
             <button class="danger remove-btn">Remove</button>

@@ -53,9 +53,9 @@ function renderGapRow(g) {
 
   return `
     <tr data-id="${g.id}" data-question="${escapeHtml(g.question)}" data-draft="${escapeHtml(g.draft_answer || "")}">
-      <td><strong>${escapeHtml(g.question)}</strong>${draftPreview}</td>
-      <td>${renderAskedBy(g)}</td>
-      <td>${new Date(g.created_at).toLocaleString()}</td>
+      <td data-label="Question"><strong>${escapeHtml(g.question)}</strong>${draftPreview}</td>
+      <td data-label="Asked by">${renderAskedBy(g)}</td>
+      <td data-label="When">${new Date(g.created_at).toLocaleString()}</td>
       <td class="actions-cell">${actionButtons}</td>
     </tr>
   `;
@@ -311,10 +311,10 @@ async function loadRecentQuestions() {
     .map(
       (q) => `
       <tr data-id="${q.id}">
-        <td>${escapeHtml(q.question)}</td>
-        <td><span class="badge ${q.answered ? "badge-ready" : "badge-failed"}">${q.answered ? "Yes" : "No"}</span></td>
-        <td>${escapeHtml(q.asked_by || "Unknown")}</td>
-        <td>${new Date(q.created_at).toLocaleString()}</td>
+        <td data-label="Question">${escapeHtml(q.question)}</td>
+        <td data-label="Answered"><span class="badge ${q.answered ? "badge-ready" : "badge-failed"}">${q.answered ? "Yes" : "No"}</span></td>
+        <td data-label="Asked by">${escapeHtml(q.asked_by || "Unknown")}</td>
+        <td data-label="When">${new Date(q.created_at).toLocaleString()}</td>
         <td class="actions-cell"><button class="secondary remove-recent-btn">Remove</button></td>
       </tr>
     `

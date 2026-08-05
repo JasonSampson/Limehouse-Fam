@@ -168,7 +168,27 @@ const SHARED_CSS = `
     background:#fffbeb; border:1.5px solid #f59e0b; color:#92400e; border-radius:8px;
     padding:.75rem .9rem; font-size:.82rem; font-weight:600; margin:.75rem 0;
   }
-  @media (max-width:600px) { .nav-title { display:none; } .areas-sidebar { width:100%; height:45%; bottom:auto; } }
+  /* ── Named-Area Tool link (floats over the map, top-right) ────────── */
+  .named-area-link { position:absolute; top:0.55rem; right:11.5rem; z-index:25; }
+  @media (max-width:600px) {
+    .nav-title { display:none; }
+    .areas-sidebar { width:100%; height:45%; bottom:auto; }
+    /* Google's own search box control (.map-search-box) grows to 70vw on
+       a narrow screen and runs directly under this link's fixed
+       right:11.5rem desktop position — confirmed colliding at 375px
+       width. Drop it below the search box instead of beside it; the
+       search box's own margin + height comes to about 65px at this
+       width, plus a little breathing room. */
+    /* Standing alone under the search box now (not beside other nav items
+       any more), floating directly over map tiles — give it the same
+       solid card background the search box and loading pill already use,
+       so it stays legible over satellite imagery instead of relying on
+       plain green text with no backing. */
+    .named-area-link {
+      top:4.25rem; right:0.75rem; left:0.75rem; text-align:center;
+      background:#fff; box-shadow:0 2px 12px rgba(0,0,0,.18); padding:0.65rem 0.7rem;
+    }
+  }
 `;
 
 function layout(title: string, displayName: string, bodyClass: string, content: string, extraHead = ""): string {
@@ -257,7 +277,7 @@ router.get("/", async (req, res, next) => {
 
     const areasLink =
       canManageAreas || canActivateAreas
-        ? `<a href="/map/areas" class="nav-link" style="position:absolute;top:0.55rem;right:11.5rem;z-index:25">Named-Area Tool</a>`
+        ? `<a href="/map/areas" class="nav-link named-area-link">Named-Area Tool</a>`
         : "";
 
     const content = `

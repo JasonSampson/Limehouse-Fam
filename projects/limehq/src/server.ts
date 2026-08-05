@@ -84,7 +84,18 @@ app.use("/auth", authRouter);
 // all. A static top-level import would fail Node's module resolution even
 // though the mount below is already gated, since ESM resolves imports
 // before any runtime check runs.
+//
+// tsc still tries to resolve this path for typing purposes even though
+// it's a dynamic import, and fails wherever the file doesn't exist on disk
+// — confirmed directly: this passed `tsc --noEmit` locally (where the file
+// happens to exist) but failed the exact same check on the production
+// server, where it doesn't. The suppression directive below is the
+// "ignore" flavor rather than the "expect an error" flavor, since it needs
+// to stay silent whether or not the file happens to be present — the
+// other flavor itself errors on a line where nothing turned out to need
+// suppressing.
 if (env.NODE_ENV === "development") {
+  // @ts-ignore — see comment above; devLoginRoutes.ts is intentionally never committed.
   const { devLoginRoutes } = await import("./auth/devLoginRoutes.js");
   app.use(devLoginRoutes);
 }

@@ -322,6 +322,7 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
     tenant_first_names: formatTenantFirstNames(toRecipients.map((r) => r.full_name ?? "Tenant")),
     due_month_name: formatDueMonthName(dueDate),
     payment_deadline: formatOrdinalDate(computePaymentDeadline(new Date())),
+    sender_name: sender.display_name,
   });
 
   // Print-formatted PDF copy of the same notice, matching the attorney's
@@ -702,6 +703,7 @@ export async function resendBouncedRecipient(
     tenant_first_names: formatTenantFirstNames(allToRecipients.map((r) => r.full_name ?? "Tenant")),
     due_month_name: formatDueMonthName(dueDate),
     payment_deadline: formatOrdinalDate(computePaymentDeadline(notice.sent_at)),
+    sender_name: originalSenderName,
   });
   const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
 

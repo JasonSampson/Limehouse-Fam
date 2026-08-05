@@ -15,12 +15,21 @@
 // for. Changes to this file still go through the same Mason review any
 // tenant-facing wording gets in this project.
 //
+// v2, same day: added a closing signature block (Regards / sender's name /
+// company / phone) — Jason noticed the email had no salutation, name,
+// company, or phone at all. sender_name is the same value already used
+// for the PDF's own "BY: {name}" signature (see mergeFields.pm_name at
+// each call site) — the person who signs the legal document and the
+// person who signs this cover note are always the same person, by
+// construction, never two independently-tracked values.
+//
 // Merge fields: {{greeting}}, {{tenant_first_names}}, {{due_month_name}},
-// {{payment_deadline}}. All four are computed in coverEmailFormatting.ts,
-// not stored anywhere — recomputed fresh each time from the same
-// notice_date/due_date/recipient data the PDF itself uses, so the two can
-// never state a different deadline or month from one another.
-export const COVER_EMAIL_KEY = "cover_email_v1";
+// {{payment_deadline}}, {{sender_name}}. All are computed in
+// coverEmailFormatting.ts, not stored anywhere — recomputed fresh each
+// time from the same notice_date/due_date/recipient/sender data the PDF
+// itself uses, so the two can never state a different deadline, month, or
+// signer from one another.
+export const COVER_EMAIL_KEY = "cover_email_v2";
 
 export const COVER_EMAIL_GREETING_PARAGRAPH = `{{greeting}} {{tenant_first_names}},`;
 
@@ -42,3 +51,11 @@ right in the drop slot. Please advise status of payment upon receipt of this ema
 // substitution at all; spliced in as its own paragraph between the two
 // dynamic ones above (see coverEmailFormatting.ts's renderCoverEmailHtml).
 export const OFFICE_ADDRESS_LINES = ["Limehouse Property Management", "6056 Providence Road, Suite 200", "Virginia Beach, VA 23464"];
+
+// Closing signature block, added v2. "Regards," and the company name/phone
+// are static; the sender's name is the one dynamic line, spliced in
+// between them by coverEmailFormatting.ts's renderCoverEmailHtml — kept as
+// two separate constants (not one array with a placeholder) so it's
+// obvious at a glance which lines never change.
+export const CLOSING_SIGNATURE_LEAD = "Regards,";
+export const CLOSING_SIGNATURE_TRAILING_LINES = ["Limehouse Property Management", "757-986-0526"];

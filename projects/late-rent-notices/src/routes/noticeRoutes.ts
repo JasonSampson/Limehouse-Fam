@@ -412,6 +412,7 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
       tenant_first_names: formatTenantFirstNames(toRecipients.map((r) => r.full_name ?? "Tenant")),
       due_month_name: formatDueMonthName(dueDateSource),
       payment_deadline: formatOrdinalDate(computePaymentDeadline(noticeDateSource)),
+      sender_name: mergeFields.pm_name,
     });
 
     return {

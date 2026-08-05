@@ -5,6 +5,8 @@ import {
   COVER_EMAIL_GREETING_PARAGRAPH,
   COVER_EMAIL_BODY_MARKDOWN,
   OFFICE_ADDRESS_LINES,
+  CLOSING_SIGNATURE_LEAD,
+  CLOSING_SIGNATURE_TRAILING_LINES,
 } from "../templates/coverEmailTemplate.js";
 
 // Good morning / afternoon / evening by the REAL Virginia local clock at
@@ -92,15 +94,19 @@ export interface CoverEmailMergeFields {
   tenant_first_names: string;
   due_month_name: string;
   payment_deadline: string;
+  // The same person who signs the PDF's own "BY: {name}" line — see each
+  // call site's mergeFields.pm_name, computed once and reused for both.
+  sender_name: string;
 }
 
 // Renders the full cover email body — the greeting, the payment/deadline
-// paragraph, the static office-address block, and the closing paragraph.
-// The address block is spliced in as its own untouched <p> (no merge
-// fields, ever) between the two dynamic paragraphs in
-// COVER_EMAIL_BODY_MARKDOWN, rather than being part of that markdown
-// itself, since it never varies and doesn't need renderTemplate's
-// substitution pass at all.
+// paragraph, the static office-address block, the closing paragraph, and
+// (v2) a closing signature block. The address block and signature block
+// are both spliced in as their own untouched <p> elements rather than
+// being part of COVER_EMAIL_BODY_MARKDOWN's merge-field substitution pass
+// — the address never varies at all, and the signature's only variable
+// part (the sender's name) still needs HTML-escaping but not the
+// paragraph-reflow/bold-markdown machinery that pass is for.
 export function renderCoverEmailHtml(fields: CoverEmailMergeFields): string {
   const greetingHtml = paragraphsToHtml([renderTemplate(COVER_EMAIL_GREETING_PARAGRAPH, fields, { escapeForHtml: false })]);
 
@@ -119,8 +125,13 @@ export function renderCoverEmailHtml(fields: CoverEmailMergeFields): string {
     );
   }
   const addressHtml = `<p>${OFFICE_ADDRESS_LINES.map(escapeHtml).join("<br>")}</p>`;
+  const signatureHtml = `<p>${[CLOSING_SIGNATURE_LEAD, fields.sender_name, ...CLOSING_SIGNATURE_TRAILING_LINES].map(escapeHtml).join("<br>")}</p>`;
 
-  return [greetingHtml, paragraphsToHtml([bodyParagraphs[0], bodyParagraphs[1]]), addressHtml, paragraphsToHtml([bodyParagraphs[2]])].join(
-    "\n"
-  );
+  return [
+    greetingHtml,
+    paragraphsToHtml([bodyParagraphs[0], bodyParagraphs[1]]),
+    addressHtml,
+    paragraphsToHtml([bodyParagraphs[2]]),
+    signatureHtml,
+  ].join("\n");
 }

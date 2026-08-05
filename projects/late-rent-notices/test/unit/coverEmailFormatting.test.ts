@@ -104,12 +104,13 @@ describe("renderCoverEmailHtml", () => {
     tenant_first_names: "Corinne and Ladereck",
     due_month_name: "August",
     payment_deadline: "August 18th",
+    sender_name: "Dana Sampson",
   };
 
-  it("renders the greeting, payment paragraph, address intro, static address block, and closing as five separate <p> elements", () => {
+  it("renders the greeting, payment paragraph, address intro, static address block, closing, and signature as six separate <p> elements", () => {
     const html = renderCoverEmailHtml(fields);
     const paragraphs = html.split("\n").filter((line) => line.startsWith("<p>"));
-    expect(paragraphs).toHaveLength(5);
+    expect(paragraphs).toHaveLength(6);
     expect(paragraphs[0]).toBe("<p>Good afternoon Corinne and Ladereck,</p>");
     expect(paragraphs[1]).toContain("past due rent for August");
     expect(paragraphs[1]).toContain("August 18th");
@@ -119,6 +120,14 @@ describe("renderCoverEmailHtml", () => {
   it("renders the static office address as one paragraph with real line breaks, not run together", () => {
     const html = renderCoverEmailHtml(fields);
     expect(html).toContain("<p>Limehouse Property Management<br>6056 Providence Road, Suite 200<br>Virginia Beach, VA 23464</p>");
+  });
+
+  // Jason noticed the email had no salutation, name, company, or phone at
+  // all — added 2026-08-05. sender_name is the same person who signs the
+  // PDF's own "BY:" line (see each call site's mergeFields.pm_name).
+  it("renders a closing signature block with the actual sender's name, company, and phone", () => {
+    const html = renderCoverEmailHtml(fields);
+    expect(html).toContain("<p>Regards,<br>Dana Sampson<br>Limehouse Property Management<br>757-986-0526</p>");
   });
 
   it("includes the drop-slot closing paragraph", () => {

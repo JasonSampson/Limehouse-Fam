@@ -217,6 +217,15 @@ const SHARED_CSS = `
   }
   .staff-table tr:last-child td { border-bottom: none; }
   .staff-table tr:hover td { background: #fafafa; }
+  .staff-actions {
+    text-align: right;
+    white-space: nowrap;
+    display: flex;
+    gap: 0.4rem;
+    justify-content: flex-end;
+  }
+  .staff-action-btn { font-size: 0.8rem; padding: 0.3rem 0.75rem; }
+  .staff-action-btn-danger { color: #dc2626; border-color: #fca5a5; }
 
   /* ── Badges ─────────────────────────────────────────────────────── */
   .badge {
@@ -440,11 +449,61 @@ const SHARED_CSS = `
   @media (max-width: 600px) {
     .main { padding: 1.25rem 0.75rem; }
     .card { padding: 1.25rem 1rem; }
-    .staff-table th:nth-child(2),
-    .staff-table td:nth-child(2) { display: none; }
     .page-header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
     .nav { padding: 0.75rem 1rem; }
-    .nav-user { display: none; }
+
+    /* The staff table stops being a table below 600px — six columns plus
+       four action buttons never fit a phone screen no matter how much
+       squeezing, so each row becomes its own labeled card instead. Standard
+       CSS-only responsive-table technique: hide the header row, make every
+       structural element block-level, and print each cell's own column
+       name via ::before + data-label (set on the <td> in the row template
+       below) since the header that used to supply that label is gone. */
+    .staff-table, .staff-table thead, .staff-table tbody,
+    .staff-table th, .staff-table td, .staff-table tr {
+      display: block;
+    }
+    .staff-table thead { position: absolute; left: -9999px; }
+    .staff-table tr {
+      margin-bottom: 1rem;
+      border: 1px solid #eee;
+      border-radius: 10px;
+      padding: 0.25rem 0.9rem;
+    }
+    .staff-table tr:last-child { margin-bottom: 0; }
+    .staff-table td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      text-align: right;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid #f2f2f2;
+    }
+    .staff-table td:last-child { border-bottom: none; }
+    .staff-table td[data-label]::before {
+      content: attr(data-label);
+      font-weight: 600;
+      color: #555;
+      text-align: left;
+      flex-shrink: 0;
+    }
+    /* The action buttons stack one-per-row (no data-label — there's no
+       single value to right-align against), replacing the fixed
+       single-line, no-wrap layout .staff-actions uses above 600px. Tried
+       two-per-row first, but "Permissions" and "Reset 2FA" don't fit a
+       half-width button without shrinking the tap target uncomfortably
+       small — full-width rows read cleaner and are easier to tap accurately. */
+    .staff-table td.staff-actions {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+      padding-top: 0.75rem;
+    }
+    .staff-table td.staff-actions a {
+      text-align: center;
+      padding: 0.65rem 0.5rem;
+    }
   }
 `;
 
@@ -617,10 +676,10 @@ router.get("/", async (req, res, next) => {
         const ownerBadge = isOwner ? ` <span class="badge badge-owner">Owner</span>` : "";
         const editBtn =
           !isOwner && canEdit
-            ? `<a href="/staff/${esc(u.id)}/edit" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Edit</a>`
+            ? `<a href="/staff/${esc(u.id)}/edit" class="btn-secondary staff-action-btn">Edit</a>`
             : "";
         const permBtn = !isOwner
-          ? `<a href="/staff/${esc(u.id)}/permissions" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Permissions</a>`
+          ? `<a href="/staff/${esc(u.id)}/permissions" class="btn-secondary staff-action-btn">Permissions</a>`
           : "";
         // "Lost my phone" reset — the ONLY recovery path for non-Owner
         // staff (no backup codes). Same permission gate as Edit; never
@@ -628,22 +687,25 @@ router.get("/", async (req, res, next) => {
         // for editBtn/deleteBtn above).
         const reset2faBtn =
           !isOwner && canEdit
-            ? `<a href="/staff/${esc(u.id)}/reset-2fa" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem">Reset 2FA</a>`
+            ? `<a href="/staff/${esc(u.id)}/reset-2fa" class="btn-secondary staff-action-btn">Reset 2FA</a>`
             : "";
         // Can't delete the Owner account or your own account (locking
         // yourself out isn't recoverable from inside this same UI).
         const deleteBtn =
           !isOwner && !isSelf && canDelete
-            ? `<a href="/staff/${esc(u.id)}/delete" class="btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem;color:#dc2626;border-color:#fca5a5">Delete</a>`
+            ? `<a href="/staff/${esc(u.id)}/delete" class="btn-secondary staff-action-btn staff-action-btn-danger">Delete</a>`
             : "";
+        // data-label feeds the ::before column label the stacked mobile
+        // layout prints in place of the (hidden) <thead> — see the
+        // @media (max-width: 600px) block above. Harmless no-op above 600px.
         return `
       <tr>
-        <td>${esc(u.display_name)}</td>
-        <td>${esc(u.email)}</td>
-        <td>${esc(u.role_name)}${ownerBadge}</td>
-        <td>${activeBadge}</td>
-        <td>${esc(formatLastLogin(u.last_login_at))}</td>
-        <td style="text-align:right;white-space:nowrap;display:flex;gap:0.4rem;justify-content:flex-end">${editBtn}${permBtn}${reset2faBtn}${deleteBtn}</td>
+        <td data-label="Name">${esc(u.display_name)}</td>
+        <td data-label="Email">${esc(u.email)}</td>
+        <td data-label="Role">${esc(u.role_name)}${ownerBadge}</td>
+        <td data-label="Status">${activeBadge}</td>
+        <td data-label="Last Login">${esc(formatLastLogin(u.last_login_at))}</td>
+        <td class="staff-actions">${editBtn}${permBtn}${reset2faBtn}${deleteBtn}</td>
       </tr>`;
       })
       .join("");

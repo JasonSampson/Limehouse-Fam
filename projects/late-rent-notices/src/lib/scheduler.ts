@@ -5,7 +5,7 @@ import { rollForwardToBusinessDay, getEasternUtcOffsetHours } from "./businessCa
 // getEasternUtcOffsetHours, kept here rather than added to businessCalendar
 // since it's about "what time is it right now locally," not calendar-day
 // arithmetic).
-function getEasternLocalHourMinute(instant: Date): { hour: number; minute: number } {
+export function getEasternLocalHourMinute(instant: Date): { hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     hour: "numeric",

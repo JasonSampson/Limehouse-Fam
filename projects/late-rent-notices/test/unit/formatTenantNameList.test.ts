@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatTenantNameList } from "../../src/lib/sendNotice.js";
+import { formatTenantNameList } from "../../src/templates/renderTemplate.js";
 
 // Decides how tenant names read on the combined notice (one email/PDF to
 // every tenant on the lease, per Jason's explicit confirmation that a

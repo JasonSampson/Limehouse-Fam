@@ -8,12 +8,18 @@ import { isReauthFresh } from "../auth/requireFreshReauth.js";
 import { addBusinessDays } from "../lib/businessCalendar.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace } from "../lib/trace.js";
-import { renderTemplate, formatCurrency, formatDateMMDDYYYY, type MergeFields } from "../templates/renderTemplate.js";
+import { renderTemplate, formatCurrency, formatDateMMDDYYYY, formatTenantNameList, type MergeFields } from "../templates/renderTemplate.js";
 import { formatUnitDisplay, formatMailingAddressLines } from "../lib/unitDisplay.js";
 import { getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../lib/config.js";
 import { generateNoticePdf, NoticeBodyParseError, ChromeNotFoundError } from "../lib/generateNoticePdf.js";
-import { formatTenantNameList } from "../lib/sendNotice.js";
-import { renderNoticeBodyToHtml } from "../lib/noticeBodyFormatting.js";
+import {
+  getTimeOfDayGreeting,
+  formatDueMonthName,
+  computePaymentDeadline,
+  formatOrdinalDate,
+  formatTenantFirstNames,
+  renderCoverEmailHtml,
+} from "../lib/coverEmailFormatting.js";
 import { checkLiveBalanceAndVoidIfStale } from "../lib/staleDraftCheck.js";
 import { fetchAndClassifyLeaseCharges, UnclassifiedChargeBlockedError } from "../lib/noticeLineItems.js";
 import { calculateLateness } from "../lib/lateness.js";
@@ -333,6 +339,7 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
     const amountDue = notice.amount_due_at_send ?? notice.amount_due_at_draft;
     const daysLate = notice.days_late_at_send ?? notice.days_late_at_draft;
     const dueDateSource = liveDueDate ?? notice.sent_at ?? notice.drafted_at;
+    const noticeDateSource = liveNoticeDate ?? notice.sent_at ?? notice.drafted_at;
 
     // Bucket sums for the itemized merge fields — same buckets
     // glClassification.ts writes to notice_line_items with ('rent' |
@@ -372,7 +379,7 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
       amount_due: formatCurrency(Number(amountDue)),
       days_late: String(daysLate),
       due_date: formatDateMMDDYYYY(dueDateSource),
-      notice_date: formatDateMMDDYYYY(liveNoticeDate ?? notice.sent_at ?? notice.drafted_at),
+      notice_date: formatDateMMDDYYYY(noticeDateSource),
       property_address: previewMailingAddress.line1,
       property_address_line2: previewMailingAddress.line2,
       // A draft's signature previews as whoever is currently looking at
@@ -390,13 +397,22 @@ noticeRoutes.get("/api/notices/:id", asyncHandler(async (req: AuthedRequest, res
       total_fees_and_costs_amount: formatCurrency(courtCosts + attorneyFees),
     };
     // escapeForHtml split matches sendNotice.ts exactly: subject is a
-    // plain-text header, body becomes bodyHtml.
+    // plain-text header.
     const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
-    // Same escapeForHtml: false + renderNoticeBodyToHtml pairing sendNotice.ts
-    // uses — this preview must match what actually gets sent exactly,
-    // including paragraph reflow (not a literal <br> per source line break).
-    const renderedBody = renderTemplate(template.body_markdown, mergeFields, { escapeForHtml: false });
-    const bodyHtml = renderNoticeBodyToHtml(renderedBody);
+    // The cover-email preview, not the full legal text — must match
+    // sendNotice.ts's real behavior exactly (same reasoning as every other
+    // field on this page: "the preview matches what Send will actually
+    // produce"). noticeDateSource doubles as both the notice_date merge
+    // field above and the payment-deadline anchor here, same as
+    // sendNotice.ts's own live-send-vs-resend split: a still-open draft's
+    // deadline previews as if sent right now, an already-sent notice's
+    // deadline stays anchored to when it actually was.
+    const bodyHtml = renderCoverEmailHtml({
+      greeting: getTimeOfDayGreeting(new Date()),
+      tenant_first_names: formatTenantFirstNames(toRecipients.map((r) => r.full_name ?? "Tenant")),
+      due_month_name: formatDueMonthName(dueDateSource),
+      payment_deadline: formatOrdinalDate(computePaymentDeadline(noticeDateSource)),
+    });
 
     return {
       id: notice.id,

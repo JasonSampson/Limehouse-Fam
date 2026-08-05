@@ -58,9 +58,14 @@ function escapeHtml(value: string): string {
 // SUBJECT line (not HTML) must pass escapeForHtml: false — otherwise a name
 // like "O'Brien" would literally show "O&#39;Brien" in the subject, since
 // subject headers are never HTML-decoded by the mail client.
-export function renderTemplate(
+// Generic over the field-map shape (defaults to MergeFields, so every
+// existing call site is unaffected) — the cover email template
+// (coverEmailTemplate.ts) has its own distinct, smaller set of fields
+// unrelated to the legal notice's, and reuses this same substitution/
+// escaping logic rather than a second hand-rolled implementation.
+export function renderTemplate<T extends object = MergeFields>(
   template: string,
-  fields: MergeFields,
+  fields: T,
   options: { escapeForHtml?: boolean } = {}
 ): string {
   const escapeForHtml = options.escapeForHtml ?? true;
@@ -86,4 +91,18 @@ export function formatDateMMDDYYYY(date: Date): string {
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
   return `${mm}/${dd}/${date.getUTCFullYear()}`;
+}
+
+// Joins tenant names into one readable list for a single combined notice
+// email ("Jane Doe", "Jane Doe and John Doe", "Jane Doe, John Doe, and Mary
+// Doe"). Jason confirmed one combined email to every tenant on the lease is
+// fine, in place of a separate email per tenant. Lives here (not
+// sendNotice.ts, where it originated) so coverEmailFormatting.ts can reuse
+// its joining convention for first-names-only greetings without a circular
+// import between the two.
+export function formatTenantNameList(names: string[]): string {
+  if (names.length === 0) return "Tenant";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }

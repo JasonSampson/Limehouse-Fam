@@ -7,27 +7,23 @@ import {
   insertNoticeLineItems,
   UnclassifiedChargeBlockedError,
 } from "./noticeLineItems.js";
-import { renderTemplate, formatCurrency, formatDateMMDDYYYY, type MergeFields } from "../templates/renderTemplate.js";
+import { renderTemplate, formatCurrency, formatDateMMDDYYYY, formatTenantNameList, type MergeFields } from "../templates/renderTemplate.js";
 import { formatUnitDisplay, formatMailingAddressLines } from "./unitDisplay.js";
 import { sendGraphMail, sendPmNotificationEmail } from "../email/graphMailer.js";
 import { generateNoticePdf } from "./generateNoticePdf.js";
-import { renderNoticeBodyToHtml } from "./noticeBodyFormatting.js";
+import {
+  getTimeOfDayGreeting,
+  formatDueMonthName,
+  computePaymentDeadline,
+  formatOrdinalDate,
+  formatTenantFirstNames,
+  renderCoverEmailHtml,
+} from "./coverEmailFormatting.js";
 import { checkLiveBalanceAndVoidIfStale } from "./staleDraftCheck.js";
 import { mirrorNoticeToLeadSimple } from "../integrations/leadSimpleClient.js";
 import { writeAuditLog } from "./auditLog.js";
 import { startTrace } from "./trace.js";
 import { logInfo, logWarn } from "./appLogger.js";
-
-// Joins tenant names into one readable list for a single combined notice
-// email ("Jane Doe", "Jane Doe and John Doe", "Jane Doe, John Doe, and Mary
-// Doe"). Jason confirmed one combined email to every tenant on the lease is
-// fine, in place of a separate email per tenant.
-export function formatTenantNameList(names: string[]): string {
-  if (names.length === 0) return "Tenant";
-  if (names.length === 1) return names[0];
-  if (names.length === 2) return `${names[0]} and ${names[1]}`;
-  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
-}
 
 export class SendBlockedError extends Error {
   constructor(message: string, public readonly reason: string) {
@@ -310,17 +306,23 @@ export async function sendNotice(client: PoolClient, params: SendNoticeParams): 
   };
 
   // Subject is a plain-text email header, not HTML — must not be escaped
-  // (see renderTemplate's escapeForHtml doc comment), while the body
-  // becomes bodyHtml and needs the default HTML-escaping.
+  // (see renderTemplate's escapeForHtml doc comment).
   const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
-  // escapeForHtml: false — renderNoticeBodyToHtml does its own escaping
-  // pass (same reasoning as generateNoticePdf.ts's buildNoticePrintHtml:
-  // using the default here would escape merge field values twice). This
-  // also reflows INITIAL_BODY_MARKDOWN's source-file hard-wrapped lines
-  // into real paragraphs instead of turning every line break into a
-  // visible <br>, which used to split sentences mid-way through.
-  const renderedBody = renderTemplate(template.body_markdown, mergeFields, { escapeForHtml: false });
-  const bodyHtml = renderNoticeBodyToHtml(renderedBody);
+  // The email body is a short cover note, not the full legal notice text a
+  // second time — Jason's correction, 2026-08-05: reading the identical
+  // wording twice (once in the email, once in the attached PDF) was
+  // redundant. The PDF is still the full, authoritative legal document,
+  // rendered from the SAME mergeFields below — only the email wrapper
+  // around it changed. sentAt is "right now" (a live email being read
+  // right now deserves a greeting matching the actual time of day); the
+  // month/deadline stay anchored to this notice's own dueDate, same as
+  // every other field on it.
+  const bodyHtml = renderCoverEmailHtml({
+    greeting: getTimeOfDayGreeting(new Date()),
+    tenant_first_names: formatTenantFirstNames(toRecipients.map((r) => r.full_name ?? "Tenant")),
+    due_month_name: formatDueMonthName(dueDate),
+    payment_deadline: formatOrdinalDate(computePaymentDeadline(new Date())),
+  });
 
   // Print-formatted PDF copy of the same notice, matching the attorney's
   // original paper form layout, attached so the tenant (and Jason, if this
@@ -689,8 +691,18 @@ export async function resendBouncedRecipient(
   };
 
   const subject = renderTemplate(template.subject_line, mergeFields, { escapeForHtml: false });
-  const renderedBody = renderTemplate(template.body_markdown, mergeFields, { escapeForHtml: false });
-  const bodyHtml = renderNoticeBodyToHtml(renderedBody);
+  // Same cover-email format as a fresh send (see sendNotice above) — but
+  // the payment deadline stays anchored to the ORIGINAL notice_at, not
+  // today, since this is redelivering the same already-sent document with
+  // the same already-stated 14-day clock, not resetting it. The greeting
+  // still reflects right now — a live email landing in an inbox today
+  // deserves today's actual time of day, same reasoning as a fresh send.
+  const bodyHtml = renderCoverEmailHtml({
+    greeting: getTimeOfDayGreeting(new Date()),
+    tenant_first_names: formatTenantFirstNames(allToRecipients.map((r) => r.full_name ?? "Tenant")),
+    due_month_name: formatDueMonthName(dueDate),
+    payment_deadline: formatOrdinalDate(computePaymentDeadline(notice.sent_at)),
+  });
   const noticePdf = await generateNoticePdf(mergeFields, template.subject_line);
 
   const result = await sendGraphMail({

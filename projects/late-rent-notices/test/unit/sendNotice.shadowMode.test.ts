@@ -240,18 +240,35 @@ describe("sendNotice — shadow mode guard (legal 14-Day Notice send)", () => {
         // clicked Send (their own Microsoft 365 mailbox), not a shared
         // compliance address — identity flows in via their LimeHQ login.
         senderMailbox: "alex@limehousepm.com",
-        // Jason's correction, 2026-08-05: the notice's own "Signed, {name}"
-        // line must show the actual sender (Alex), never the PM the
-        // lease/notice happens to be assigned to (Dana, per leaseRow above)
-        // — a real bug caught the first time someone other than the
-        // assigned PM sent a real notice.
-        bodyHtml: expect.stringContaining("Alex Rivera"),
+        // Cover email, not the full legal text a second time — Jason's
+        // correction, 2026-08-05. The signature check for THIS same
+        // correction lives in the "signs the real PDF..." test below,
+        // since the signature line only ever lived in the legal document,
+        // never in this short cover note.
+        bodyHtml: expect.stringContaining("Good "),
       })
     );
-    const sentBodyHtml = sendGraphMailMock.mock.calls[0][0].bodyHtml;
-    expect(sentBodyHtml).not.toContain("Dana Sampson");
     expect(result).toEqual({ sent: true, voided: false });
   });
+
+  it("signs the real PDF attachment with the actual sender (Alex), never the PM the notice happens to be assigned to (Dana)", async () => {
+    loadEnvMock.mockReturnValue(fakeEnv({ SHADOW_MODE: false }));
+    const client = makeFakeClient();
+
+    await sendNotice(client, baseParams);
+
+    const attachment = sendGraphMailMock.mock.calls[0][0].attachments[0];
+    const { PDFParse } = await import("pdf-parse");
+    const parser = new PDFParse({ data: attachment.contentBytes });
+    const { text } = await parser.getText();
+
+    // Jason's correction, 2026-08-05: the PDF's own "BY: {name}" signature
+    // line must show whoever actually clicked Send, not the PM the
+    // lease/notice happens to be assigned to — a real bug caught the
+    // first time someone other than the assigned PM sent a real notice.
+    expect(text).toContain("BY: Alex Rivera");
+    expect(text).not.toContain("Dana Sampson");
+  }, 30000);
 
   it("SHADOW_MODE=false: marks the notice status='sent' in the DB (the real send path actually runs, not silently skipped)", async () => {
     loadEnvMock.mockReturnValue(fakeEnv({ SHADOW_MODE: false }));

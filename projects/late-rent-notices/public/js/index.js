@@ -181,6 +181,32 @@
                       `
                       : `<p class="field-hint" style="margin-top:6px;">A property manager is already assigned — something else is blocking this draft (check the ledger classification or the active letter template).</p>`
                   }
+                  ${
+                    me.isFallbackDecisionMaker
+                      ? `
+                        <details class="exclude-details" data-lease-id="${c.lease_id}" style="margin-top:10px;">
+                          <summary style="cursor:pointer; color:var(--red); font-size:0.85rem;">Rare case — this one doesn't need a notice</summary>
+                          <form class="exclude-form" data-lease-id="${c.lease_id}" style="margin-top:8px; display:flex; flex-direction:column; gap:8px; max-width:420px;">
+                            <label style="font-size:0.85rem;">
+                              Why? (this stops future notices for this lease too, until you remove it)
+                              <select required style="margin-top:4px;">
+                                <option value="">Choose a reason…</option>
+                                <option value="payment_plan">Payment plan already in place</option>
+                                <option value="dispute">Tenant dispute in progress</option>
+                                <option value="active_eviction">Already in active eviction</option>
+                                <option value="other">Other</option>
+                              </select>
+                            </label>
+                            <textarea required minlength="5" placeholder="Brief note for the record…" style="min-height:50px;"></textarea>
+                            <div>
+                              <button type="submit" class="btn-danger">Exclude this lease</button>
+                              <span class="exclude-result field-hint"></span>
+                            </div>
+                          </form>
+                        </details>
+                      `
+                      : ""
+                  }
                 </div>
               `)
               .join("")}</div>
@@ -207,6 +233,39 @@
                 resultSpan.textContent = friendlyError(err);
                 button.disabled = false;
                 select.disabled = false;
+              }
+            });
+          });
+
+          listArea.querySelectorAll(".exclude-form").forEach((form) => {
+            form.addEventListener("submit", async (e) => {
+              e.preventDefault();
+              const select = form.querySelector("select");
+              const textarea = form.querySelector("textarea");
+              const resultSpan = form.querySelector(".exclude-result");
+              const button = form.querySelector("button");
+              const leaseId = Number(form.dataset.leaseId);
+              const reasonCategory = select.value;
+              const reason = textarea.value.trim();
+              if (!reasonCategory || reason.length < 5) return;
+
+              if (!window.confirm("Exclude this lease from automatic notices? This also stops it from coming back next month until you remove the exclusion.")) {
+                return;
+              }
+
+              button.disabled = true;
+              select.disabled = true;
+              textarea.disabled = true;
+              resultSpan.textContent = "Excluding…";
+              try {
+                await LimehouseAPI.post("/api/exclusions", { leaseId, reasonCategory, reason });
+                resultSpan.textContent = "Excluded — gone from this list now, and won't come back until you remove it.";
+                setTimeout(loadNoNotice, 1200);
+              } catch (err) {
+                resultSpan.textContent = friendlyError(err);
+                button.disabled = false;
+                select.disabled = false;
+                textarea.disabled = false;
               }
             });
           });

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { withPmScope } from "../db/withPmScope.js";
 import { requireSession, type AuthedRequest } from "./requireSession.js";
@@ -31,8 +31,24 @@ const createExclusionSchema = z.object({
   reason: z.string().min(5),
 });
 
+// Owner/fallback-decision-maker only (Jason, 2026-08-07): excluding a
+// lease from automatic notices — permanently, across every future month
+// until someone removes it — is a bigger decision than a regular PM
+// should make unilaterally on their own door. Server-side check, not just
+// a hidden UI button: migration 0053 gave the fallback role RLS access to
+// any lease's exclusions/late_cycles specifically so this check has
+// something to actually authorize once it passes.
+function requireFallbackDecisionMaker(session: { isFallbackDecisionMaker: boolean }, res: Response): boolean {
+  if (!session.isFallbackDecisionMaker) {
+    res.status(403).json({ error: "Only the owner can exclude a lease from automatic notices." });
+    return false;
+  }
+  return true;
+}
+
 exclusionRoutes.post("/api/exclusions", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
+  if (!requireFallbackDecisionMaker(session, res)) return;
   const parsed = createExclusionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid exclusion request.", details: parsed.error.flatten() });
@@ -50,10 +66,10 @@ exclusionRoutes.post("/api/exclusions", asyncHandler(async (req: AuthedRequest, 
     await writeAuditLog(client, {
       companyId: "limehouse-pm",
       instanceId: "late-rent-notices",
-      actorType: "pm",
+      actorType: "fallback_decision_maker",
       actorId: String(session.pmUserId),
       eventType: "exclusion.created",
-      eventSummary: `PM added a manual exclusion (category: ${parsed.data.reasonCategory})`,
+      eventSummary: `Owner added a manual exclusion (category: ${parsed.data.reasonCategory})`,
       eventData: { reasonCategory: parsed.data.reasonCategory },
       contextSnapshot: { leaseId: parsed.data.leaseId },
       privacyCategory: "Decisional Interference",
@@ -64,6 +80,37 @@ exclusionRoutes.post("/api/exclusions", asyncHandler(async (req: AuthedRequest, 
       trace,
     });
 
+    // An exclusion only stops FUTURE late_cycles from being created
+    // (dailyLatenessCheck.ts checks it before drafting) — it does nothing
+    // about a cycle that's already open with no notice, which would
+    // otherwise keep sitting in "Late, No Notice Yet" forever. Closing it
+    // here makes "exclude this" a genuinely complete action: gone now,
+    // and never comes back on its own.
+    const closedCycles = await client.query<{ id: number }>(
+      `UPDATE late_cycles SET closed_at = now(), closed_reason = 'manual'
+       WHERE lease_id = $1 AND closed_at IS NULL
+       RETURNING id`,
+      [parsed.data.leaseId]
+    );
+    if (closedCycles.rows.length > 0) {
+      await writeAuditLog(client, {
+        companyId: "limehouse-pm",
+        instanceId: "late-rent-notices",
+        actorType: "fallback_decision_maker",
+        actorId: String(session.pmUserId),
+        eventType: "late_cycle.closed",
+        eventSummary: `${closedCycles.rows.length} open late cycle(s) closed as part of a manual exclusion`,
+        eventData: { closedCycleIds: closedCycles.rows.map((r) => r.id) },
+        contextSnapshot: { leaseId: parsed.data.leaseId },
+        privacyCategory: "Aggregation",
+        regulationTags: ["VRLTA"],
+        riskLevel: "low",
+        legalBasis: "manual_exclusion_list",
+        retentionPolicy: "retain_7_years_post_tenancy",
+        trace,
+      });
+    }
+
     return result.rows[0];
   });
 
@@ -72,6 +119,7 @@ exclusionRoutes.post("/api/exclusions", asyncHandler(async (req: AuthedRequest, 
 
 exclusionRoutes.post("/api/exclusions/:id/remove", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
+  if (!requireFallbackDecisionMaker(session, res)) return;
   const exclusionId = Number(req.params.id);
 
   await withPmScope(session.pmUserId, async (client) => {
@@ -90,10 +138,10 @@ exclusionRoutes.post("/api/exclusions/:id/remove", asyncHandler(async (req: Auth
       await writeAuditLog(client, {
         companyId: "limehouse-pm",
         instanceId: "late-rent-notices",
-        actorType: "pm",
+        actorType: "fallback_decision_maker",
         actorId: String(session.pmUserId),
         eventType: "exclusion.removed",
-        eventSummary: `PM removed exclusion ${removed.id} (category: ${removed.reason_category})`,
+        eventSummary: `Owner removed exclusion ${removed.id} (category: ${removed.reason_category})`,
         eventData: { reasonCategory: removed.reason_category },
         contextSnapshot: { leaseId: removed.lease_id, exclusionId: removed.id },
         privacyCategory: "Decisional Interference",

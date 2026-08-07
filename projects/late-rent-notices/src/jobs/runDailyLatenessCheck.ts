@@ -5,4 +5,9 @@
 import { runDailyLatenessCheck } from "./dailyLatenessCheck.js";
 import { runJobEntryPoint } from "./runJobEntryPoint.js";
 
-void runJobEntryPoint("daily_lateness_check", 10, 0, (jobPool) => runDailyLatenessCheck(jobPool));
+// --force: also invoked on demand by the web app (onDemandLatenessTrigger.ts)
+// when a staff member opens the Late Rent Notices dashboard and it's been
+// more than 15 minutes since the last run — see that file for why.
+const force = process.argv.includes("--force");
+
+void runJobEntryPoint("daily_lateness_check", 10, 0, (jobPool) => runDailyLatenessCheck(jobPool), { force });

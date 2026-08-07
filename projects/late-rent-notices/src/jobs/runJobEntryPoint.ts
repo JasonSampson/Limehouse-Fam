@@ -37,16 +37,22 @@ export async function runJobEntryPoint(
   jobName: string,
   targetHourLocal: number,
   targetMinuteLocal: number,
-  runFn: (jobPool: Pool) => Promise<unknown>
+  runFn: (jobPool: Pool) => Promise<unknown>,
+  options: { force?: boolean } = {}
 ): Promise<void> {
-  if (!isScheduledRunTime(new Date(), targetHourLocal, targetMinuteLocal)) {
+  // force: true skips the cron-tick gate below — used when the web app
+  // spawns this same script on demand (see onDemandLatenessTrigger.ts)
+  // because a staff member just opened the page, not because it's 10am.
+  // scheduled_for is stamped as "now" rather than the usual 10am slot,
+  // since an on-demand run genuinely isn't standing in for that slot.
+  if (!options.force && !isScheduledRunTime(new Date(), targetHourLocal, targetMinuteLocal)) {
     logInfo(`${jobName}: not the scheduled run time yet, skipping this tick`, { jobName });
     return;
   }
 
   try {
     const jobPool = getJobPool();
-    const scheduledFor = computeScheduledRunTime(new Date(), targetHourLocal);
+    const scheduledFor = options.force ? new Date() : computeScheduledRunTime(new Date(), targetHourLocal);
     await runTrackedJob(jobPool, jobName, scheduledFor, () => runFn(jobPool));
   } catch (err) {
     console.error(err);

@@ -24,6 +24,7 @@ import { checkLiveBalanceAndVoidIfStale } from "../lib/staleDraftCheck.js";
 import { fetchAndClassifyLeaseCharges, UnclassifiedChargeBlockedError } from "../lib/noticeLineItems.js";
 import { calculateLateness } from "../lib/lateness.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
+import { maybeTriggerOnDemandLatenessCheck } from "../lib/onDemandLatenessTrigger.js";
 
 export const noticeRoutes = Router();
 noticeRoutes.use(requireSession);
@@ -35,6 +36,14 @@ noticeRoutes.use(requireSession);
 // database is the enforcement point, not application code.
 noticeRoutes.get("/api/notices", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
+
+  // Fire-and-forget: a staff member opening this page is, per Jason, usually
+  // acting on a bounce email Buildium already sent them — this gives the
+  // data a chance to be fresh for that without making every page load wait
+  // on a full portfolio check. See onDemandLatenessTrigger.ts for the
+  // 15-minute throttle and why this can't just run in-process.
+  void maybeTriggerOnDemandLatenessCheck();
+
   const notices = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
       // status = 'voided' is excluded here (never sent — a notice can only

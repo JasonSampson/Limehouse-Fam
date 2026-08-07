@@ -121,6 +121,10 @@ exclusionRoutes.post("/api/exclusions/:id/remove", asyncHandler(async (req: Auth
   const session = req.session!;
   if (!requireFallbackDecisionMaker(session, res)) return;
   const exclusionId = Number(req.params.id);
+  if (!Number.isInteger(exclusionId) || exclusionId <= 0) {
+    res.status(400).json({ error: "Invalid exclusion id." });
+    return;
+  }
 
   await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query<{ id: number; lease_id: number; reason_category: string }>(

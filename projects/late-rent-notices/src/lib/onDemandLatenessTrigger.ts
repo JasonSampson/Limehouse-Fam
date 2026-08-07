@@ -23,7 +23,7 @@ const THROTTLE_MS = 15 * 60 * 1000;
 // pm_users lookup authRoutes.ts already does directly against getAppPool()
 // before any PM session/scope exists. Querying it straight, without
 // withPmScope, doesn't touch the RLS boundary that rule protects.
-async function minutesSinceLastRun(pool: Pool): Promise<number | null> {
+async function msSinceLastRun(pool: Pool): Promise<number | null> {
   const result = await pool.query<{ started_at: string }>(
     `SELECT started_at FROM job_runs WHERE job_name = 'daily_lateness_check' ORDER BY started_at DESC LIMIT 1`
   );
@@ -66,7 +66,7 @@ function spawnOnDemandCheck(): void {
 // this convenience feature can never break the page staff actually need.
 export async function maybeTriggerOnDemandLatenessCheck(pool: Pool = getAppPool()): Promise<void> {
   try {
-    const elapsedMs = await minutesSinceLastRun(pool);
+    const elapsedMs = await msSinceLastRun(pool);
     if (elapsedMs !== null && elapsedMs < THROTTLE_MS) {
       return;
     }

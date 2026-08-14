@@ -827,6 +827,16 @@ main {
    income month-list fallback elsewhere on this page is untouched. */
 .account-balances-list {
   gap: 1px;
+  /* FIXED 2026-08-04, per Jason directly ("American Express" / "Capital
+     One" dollar figures bleeding outside the tile): this is a flex item
+     (flex:1) inside the two-column row below, and a flex item's default
+     min-width is its own content's natural width, not 0 — so it refused
+     to shrink into its allocated half of the row no matter how narrow
+     that half was, even though the row's own ellipsis-truncation (below)
+     was already set up to handle exactly this. min-width:0 lets it
+     actually shrink to fit; the label truncates first as designed and
+     the balance stays fully visible, both back inside the tile. */
+  min-width: 0;
 }
 .account-balances-list .breakdown-row {
   padding: 3px 0;

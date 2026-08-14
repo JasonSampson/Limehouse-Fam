@@ -34,6 +34,11 @@ noticeRoutes.use(requireSession);
 // transaction only — RLS (migration 0016) does the actual filtering, this
 // route does not add its own WHERE pm_id = ... clause, by design: the
 // database is the enforcement point, not application code.
+//
+// Drafts ONLY (2026-08-14 tab restructure, per Jason: the "Notices" tab
+// should show everything that needs a human to act — drafts to review AND
+// the stuck no-notice-yet cases from /api/late-no-notice — with the
+// separate historical record split out to GET /api/notices/sent below).
 noticeRoutes.get("/api/notices", asyncHandler(async (req: AuthedRequest, res) => {
   const session = req.session!;
 
@@ -46,20 +51,11 @@ noticeRoutes.get("/api/notices", asyncHandler(async (req: AuthedRequest, res) =>
 
   const notices = await withPmScope(session.pmUserId, async (client) => {
     const result = await client.query(
-      // status = 'voided' is excluded here (never sent — a notice can only
-      // ever be voided while still 'draft', see the ck_notices_status /
-      // ck_notices_voided_reason_required constraints and
-      // staleDraftCheck.ts). A draft that turned out to already be paid
-      // and got auto-canceled before anyone acted on it isn't a real event
-      // worth cluttering this list with — per Jason's explicit request.
-      // 'draft' (still needs review) and 'sent'/'bounced' (real history)
-      // still show.
-      // Not filtered on p.is_active: a notice already drafted/sent is a
-      // real historical/legal record regardless of whether the property has
-      // since sold or gone inactive in Buildium — it must keep showing here
-      // exactly like any other notice (properties.is_active only controls
-      // whether NEW notices get created going forward, see
-      // dailyLatenessCheck.ts).
+      // Not filtered on p.is_active: a still-draft notice on a property that
+      // went inactive mid-review is unusual but not impossible, and should
+      // still surface for someone to void/resolve rather than silently
+      // vanish — dailyLatenessCheck.ts's own is_active filter is what stops
+      // NEW drafts from being created for inactive properties going forward.
       `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
               n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
               l.unit_label, p.name AS property_name,
@@ -67,11 +63,40 @@ noticeRoutes.get("/api/notices", asyncHandler(async (req: AuthedRequest, res) =>
        FROM notices n
        JOIN leases l ON l.id = n.lease_id
        JOIN properties p ON p.id = l.property_id
-       WHERE n.status != 'voided'
+       WHERE n.status = 'draft'
        ORDER BY n.drafted_at DESC`
     );
     // unit_display: "Unit B2" at multi-unit properties, "" at single-family
     // homes (Buildium's obligatory "1" is noise there) — see unitDisplay.ts.
+    return result.rows.map((r) => ({ ...r, unit_display: formatUnitDisplay(r.unit_label, r.multi_unit) }));
+  });
+  res.json({ notices });
+}));
+
+// Historical record: everything actually sent — the "Sent Notices" tab.
+// Registered here, before GET /api/notices/:id further down, so Express
+// matches this literal path first rather than treating "sent" as an :id.
+//
+// status = 'sent' covers a bounced delivery too: this app tracks a bounce
+// via delivery_status = 'bounced' on an otherwise status='sent' row (see the
+// frontend's statusBadge, which reads both fields) — the notice really was
+// sent, delivery just failed after the fact. notices.status's CHECK
+// constraint does technically also allow a literal 'bounced' status value,
+// but no code path in this app ever sets it, so it's not queried for here.
+noticeRoutes.get("/api/notices/sent", asyncHandler(async (req: AuthedRequest, res) => {
+  const session = req.session!;
+  const notices = await withPmScope(session.pmUserId, async (client) => {
+    const result = await client.query(
+      `SELECT n.id, n.status, n.amount_due_at_draft, n.days_late_at_draft,
+              n.drafted_at, n.sent_at, n.delivery_status, n.ledger_verified,
+              l.unit_label, p.name AS property_name,
+              (SELECT count(DISTINCT l2.unit_buildium_id) FROM leases l2 WHERE l2.property_id = l.property_id) > 1 AS multi_unit
+       FROM notices n
+       JOIN leases l ON l.id = n.lease_id
+       JOIN properties p ON p.id = l.property_id
+       WHERE n.status = 'sent'
+       ORDER BY n.sent_at DESC`
+    );
     return result.rows.map((r) => ({ ...r, unit_display: formatUnitDisplay(r.unit_label, r.multi_unit) }));
   });
   res.json({ notices });

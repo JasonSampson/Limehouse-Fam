@@ -254,3 +254,96 @@ describe("fetchAndClassifyLeaseCharges", () => {
     expect(result.positiveLines).toHaveLength(0);
   });
 });
+
+// 2026-08-14 fix: what counts as "behind on rent" for the lateness trigger
+// (dailyLatenessCheck.ts, staleDraftCheck.ts, escalationCheck.ts) is rent +
+// late fees, never a leftover 'other'-bucket fee on its own. Root-cause
+// regression coverage for Jason's report: 1318 River Birch Run South and
+// 1313 Tait Close both got a 14-day pay-or-quit notice over an unpaid $300
+// Lease Change Fee alone, with zero rent actually owed.
+describe("rentEquivalentBalance", () => {
+  it("is rent plus late_fee, excluding other", async () => {
+    const { rentEquivalentBalance } = await import("../../src/lib/noticeLineItems.js");
+    expect(rentEquivalentBalance({ rent: 1200, late_fee: 50, other: 300 })).toBe(1250);
+  });
+
+  it("is zero when the only balance is a non-rent fee — the exact River Birch/Tait bug", async () => {
+    const { rentEquivalentBalance } = await import("../../src/lib/noticeLineItems.js");
+    expect(rentEquivalentBalance({ rent: 0, late_fee: 0, other: 300 })).toBe(0);
+  });
+});
+
+describe("classifyBalanceLines — callable without a second Buildium fetch", () => {
+  it("classifies pre-fetched balancesByGl the same way fetchAndClassifyLeaseCharges does", async () => {
+    const { classifyBalanceLines } = await import("../../src/lib/noticeLineItems.js");
+    const result = classifyBalanceLines(
+      "999",
+      [
+        { glAccountId: 3, balance: 1000 },
+        { glAccountId: 958019, balance: 50 },
+      ],
+      glMap(RENT_INCOME, RBP)
+    );
+    expect(result.bucketTotals).toEqual({ rent: 1050, late_fee: 0, other: 0 });
+  });
+
+  it("puts a Lease Change Fee in 'other', excluded from rentEquivalentBalance", async () => {
+    const { classifyBalanceLines, rentEquivalentBalance } = await import("../../src/lib/noticeLineItems.js");
+    const LEASE_CHANGE_FEE: BuildiumGlAccount = {
+      Id: 857392,
+      Name: "Lease Change Fee",
+      Type: "Income",
+      SubType: "Income",
+      DefaultAccountName: null,
+      IsDefaultGLAccount: false,
+    };
+    const result = classifyBalanceLines("999", [{ glAccountId: 857392, balance: 300 }], glMap(LEASE_CHANGE_FEE));
+
+    expect(result.bucketTotals).toEqual({ rent: 0, late_fee: 0, other: 300 });
+    expect(rentEquivalentBalance(result.bucketTotals)).toBe(0);
+  });
+
+  it("classifies Solar Rent into the rent bucket — confirmed live on 1149 Birks Lane, per Jason's explicit rule", async () => {
+    const { classifyBalanceLines, rentEquivalentBalance } = await import("../../src/lib/noticeLineItems.js");
+    const SOLAR_RENT: BuildiumGlAccount = {
+      Id: 987307,
+      Name: "Solar Rent",
+      Type: "Income",
+      SubType: "Income",
+      DefaultAccountName: null,
+      IsDefaultGLAccount: false,
+    };
+    const result = classifyBalanceLines("999", [{ glAccountId: 987307, balance: 85 }], glMap(SOLAR_RENT));
+
+    expect(result.bucketTotals).toEqual({ rent: 85, late_fee: 0, other: 0 });
+    expect(rentEquivalentBalance(result.bucketTotals)).toBe(85);
+  });
+
+  it("a mix of real rent and a non-rent fee only counts the rent portion toward the trigger, but keeps both on the itemization", async () => {
+    const { classifyBalanceLines, rentEquivalentBalance } = await import("../../src/lib/noticeLineItems.js");
+    const LEASE_CHANGE_FEE: BuildiumGlAccount = {
+      Id: 857392,
+      Name: "Lease Change Fee",
+      Type: "Income",
+      SubType: "Income",
+      DefaultAccountName: null,
+      IsDefaultGLAccount: false,
+    };
+    const result = classifyBalanceLines(
+      "999",
+      [
+        { glAccountId: 3, balance: 1500 },
+        { glAccountId: 857392, balance: 300 },
+      ],
+      glMap(RENT_INCOME, LEASE_CHANGE_FEE)
+    );
+
+    expect(rentEquivalentBalance(result.bucketTotals)).toBe(1500);
+    // Still itemized in full once a real rent delinquency legitimately
+    // triggers a notice — the fee doesn't disappear, it just can't trigger
+    // on its own.
+    expect(result.positiveLines).toHaveLength(2);
+    const total = result.bucketTotals.rent + result.bucketTotals.late_fee + result.bucketTotals.other;
+    expect(total).toBe(1800);
+  });
+});

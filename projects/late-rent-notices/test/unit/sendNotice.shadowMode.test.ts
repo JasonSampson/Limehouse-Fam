@@ -25,17 +25,33 @@ vi.mock("../../src/config/env.js", () => ({
 }));
 vi.mock("../../src/buildium/client.js", () => ({
   fetchLeaseOutstandingBalance: vi.fn(),
+  // Real implementation is a live Buildium call — never used from a test.
+  // staleDraftCheck.ts (called internally by sendNotice.ts's stale-draft
+  // guard) now classifies the live balance on every call (2026-08-14 fix),
+  // so this needs a resolved value; set to a real "Rent Income" GL account
+  // (TEST_RENT_GL_ID below) in beforeEach so the balancesByGl fixtures
+  // resolve to the rent bucket instead of throwing UnclassifiedChargeError.
+  fetchGlAccountsById: vi.fn(),
 }));
 vi.mock("../../src/lib/config.js", () => ({
   getDeMinimisThreshold: vi.fn(),
   getEstimatedCourtCosts: vi.fn(),
   getEstimatedAttorneyFees: vi.fn(),
 }));
-vi.mock("../../src/lib/noticeLineItems.js", () => ({
-  fetchAndClassifyLeaseCharges: vi.fn(),
-  insertNoticeLineItems: vi.fn(),
-  UnclassifiedChargeBlockedError: class UnclassifiedChargeBlockedError extends Error {},
-}));
+vi.mock("../../src/lib/noticeLineItems.js", async (importOriginal) => {
+  // classifyBalanceLines/rentEquivalentBalance are pure, no external calls —
+  // safe to use the real implementations so this test proves staleDraftCheck
+  // actually classifies rather than asserting against a second hand-rolled
+  // fake of the same logic. fetchAndClassifyLeaseCharges (a real Buildium
+  // fetch) and insertNoticeLineItems (a real DB write) stay manual mocks.
+  const actual = await importOriginal<typeof import("../../src/lib/noticeLineItems.js")>();
+  return {
+    ...actual,
+    fetchAndClassifyLeaseCharges: vi.fn(),
+    insertNoticeLineItems: vi.fn(),
+    UnclassifiedChargeBlockedError: class UnclassifiedChargeBlockedError extends Error {},
+  };
+});
 vi.mock("../../src/email/graphMailer.js", () => ({
   sendGraphMail: vi.fn(),
 }));
@@ -51,8 +67,9 @@ vi.mock("../../src/lib/appLogger.js", () => ({
   logWarn: vi.fn(),
 }));
 
+import type { BuildiumGlAccount } from "../../src/buildium/client.js";
 import { loadEnv } from "../../src/config/env.js";
-import { fetchLeaseOutstandingBalance } from "../../src/buildium/client.js";
+import { fetchLeaseOutstandingBalance, fetchGlAccountsById } from "../../src/buildium/client.js";
 import { getDeMinimisThreshold, getEstimatedCourtCosts, getEstimatedAttorneyFees } from "../../src/lib/config.js";
 import { fetchAndClassifyLeaseCharges, insertNoticeLineItems } from "../../src/lib/noticeLineItems.js";
 import { sendGraphMail } from "../../src/email/graphMailer.js";
@@ -62,6 +79,7 @@ import { sendNotice } from "../../src/lib/sendNotice.js";
 
 const loadEnvMock = vi.mocked(loadEnv);
 const fetchLeaseOutstandingBalanceMock = vi.mocked(fetchLeaseOutstandingBalance);
+const fetchGlAccountsByIdMock = vi.mocked(fetchGlAccountsById);
 const getDeMinimisThresholdMock = vi.mocked(getDeMinimisThreshold);
 const getEstimatedCourtCostsMock = vi.mocked(getEstimatedCourtCosts);
 const getEstimatedAttorneyFeesMock = vi.mocked(getEstimatedAttorneyFees);
@@ -70,6 +88,20 @@ const insertNoticeLineItemsMock = vi.mocked(insertNoticeLineItems);
 const sendGraphMailMock = vi.mocked(sendGraphMail);
 const writeAuditLogMock = vi.mocked(writeAuditLog);
 const logInfoMock = vi.mocked(logInfo);
+
+// Real "Rent Income" GL account (matching Buildium's actual default-account
+// shape — see glClassification.ts) — every balancesByGl fixture below that
+// represents a genuine still-owed balance uses this id so staleDraftCheck's
+// classification resolves it to the rent bucket, not "unclassifiable."
+const TEST_RENT_GL_ID = 3;
+const TEST_RENT_GL_ACCOUNT: BuildiumGlAccount = {
+  Id: TEST_RENT_GL_ID,
+  Name: "Rent Income",
+  Type: "Income",
+  SubType: "Income",
+  DefaultAccountName: "Rent Income",
+  IsDefaultGLAccount: true,
+};
 
 function fakeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -153,11 +185,12 @@ describe("sendNotice — shadow mode guard (legal 14-Day Notice send)", () => {
     getDeMinimisThresholdMock.mockResolvedValue({ id: 1, amount: 50 });
     getEstimatedCourtCostsMock.mockResolvedValue({ id: 1, amount: 250 });
     getEstimatedAttorneyFeesMock.mockResolvedValue({ id: 1, amount: 500 });
+    fetchGlAccountsByIdMock.mockResolvedValue(new Map([[TEST_RENT_GL_ID, TEST_RENT_GL_ACCOUNT]]));
     fetchLeaseOutstandingBalanceMock.mockResolvedValue({
       leaseId: "2317038",
       balance: 1500,
       evictionPendingDate: null,
-      balancesByGl: [],
+      balancesByGl: [{ glAccountId: TEST_RENT_GL_ID, balance: 1500 }],
     });
     fetchAndClassifyLeaseChargesMock.mockResolvedValue({
       positiveLines: [],

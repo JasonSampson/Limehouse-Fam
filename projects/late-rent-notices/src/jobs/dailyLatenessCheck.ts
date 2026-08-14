@@ -1,10 +1,15 @@
 import type { Pool } from "pg";
 import { loadEnv } from "../config/env.js";
 import { syncBuildiumData } from "../buildium/sync.js";
-import { fetchOutstandingBalances } from "../buildium/client.js";
+import { fetchOutstandingBalances, fetchGlAccountsById, type BuildiumGlAccount, type LeaseBalance } from "../buildium/client.js";
 import { calculateLateness } from "../lib/lateness.js";
 import { getDeMinimisThreshold } from "../lib/config.js";
-import { fetchAndClassifyLeaseCharges, insertNoticeLineItems } from "../lib/noticeLineItems.js";
+import {
+  classifyBalanceLines,
+  rentEquivalentBalance,
+  insertNoticeLineItems,
+  UnclassifiedChargeBlockedError,
+} from "../lib/noticeLineItems.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { startTrace, childSpan } from "../lib/trace.js";
 import { logInfo, logError } from "../lib/appLogger.js";
@@ -48,11 +53,12 @@ interface DailyJobResult {
 // the same day it's paid, not only when someone tries to send its notice.
 export async function reconcileClosedCycles(
   jobPool: Pool,
-  outstandingBalances: Array<{ leaseId: string; balance: number }>,
+  outstandingBalances: LeaseBalance[],
+  glAccountsById: Map<number, BuildiumGlAccount>,
   deMinimisThreshold: number,
   trace: ReturnType<typeof startTrace>
 ): Promise<{ cyclesReconciled: number; noticesAutoVoided: number; errors: string[] }> {
-  const balanceByBuildiumLeaseId = new Map(outstandingBalances.map((b) => [b.leaseId, b.balance]));
+  const balanceByBuildiumLeaseId = new Map(outstandingBalances.map((b) => [b.leaseId, b]));
   const errors: string[] = [];
   let cyclesReconciled = 0;
   let noticesAutoVoided = 0;
@@ -69,17 +75,60 @@ export async function reconcileClosedCycles(
     try {
       // Absent from the balances list means Buildium reports zero/credit
       // balance for this lease (see fetchOutstandingBalances's doc comment)
-      // — not an error, and not "still owes money."
-      const currentBalance = balanceByBuildiumLeaseId.get(cycle.buildium_lease_id) ?? 0;
+      // — not an error, and not "still owes money." Present means classify
+      // it the same way the trigger below does: a cycle only stays open
+      // because of rent/late-fee money still owed, never because of a
+      // leftover non-rent fee like a Lease Change Fee (Jason's 2026-08-14
+      // report — see rentEquivalentBalance's doc comment).
+      const leaseBalance = balanceByBuildiumLeaseId.get(cycle.buildium_lease_id);
+      let classified: ReturnType<typeof classifyBalanceLines> | null = null;
+      if (leaseBalance) {
+        try {
+          classified = classifyBalanceLines(cycle.buildium_lease_id, leaseBalance.balancesByGl, glAccountsById);
+        } catch (err) {
+          // An unclassifiable charge (e.g. Court Costs — legally out of
+          // scope for this table, see glClassification.ts) must never be
+          // silently guessed at to justify closing a cycle. The SAME lease
+          // will already surface this identical problem the moment the
+          // drafting step below tries to classify it too — recording it
+          // here as well would just be a redundant daily alert for a
+          // problem Jason is already being told about. Safe default: leave
+          // the cycle open (matches "still genuinely late" below) rather
+          // than guess it's resolved.
+          if (err instanceof UnclassifiedChargeBlockedError) {
+            logInfo("daily lateness check: reconciliation deferred to drafting step (unclassifiable charge)", {
+              leaseId: cycle.lease_id,
+            });
+            continue;
+          }
+          throw err;
+        }
+      }
+      const currentBalance = classified ? rentEquivalentBalance(classified.bucketTotals) : 0;
       if (currentBalance > 0 && currentBalance >= deMinimisThreshold) {
         continue; // still genuinely late — leave the cycle open
       }
 
+      // "Paid in full" / "below threshold" describe RENT being resolved, not
+      // necessarily every dollar on the ledger — a non-rent fee (Lease
+      // Change Fee, Application Fee, etc.) can still be genuinely
+      // outstanding even once this cycle correctly closes (Jason's
+      // 2026-08-14 report: an inaccurate "paid in full" label here would be
+      // a bookkeeping trap, telling a PM there's nothing left to collect
+      // when there is — just not rent). Named explicitly rather than left
+      // implicit so the reason text/audit trail never overstates what
+      // actually happened.
+      const nonRentBalanceRemaining = classified?.bucketTotals.other ?? 0;
       const closedReason = currentBalance <= 0 ? "paid_in_full" : "paid_below_threshold";
+      const nonRentNote =
+        nonRentBalanceRemaining > 0
+          ? ` Note: ${formatCurrency(nonRentBalanceRemaining)} in non-rent fees may still be outstanding on the ledger, separate from this rent cycle.`
+          : "";
       const voidReason =
-        closedReason === "paid_in_full"
-          ? "Tenant paid the balance in full before the notice was sent (reconciled automatically by the daily job)."
-          : "Tenant's balance dropped below the de minimis threshold before the notice was sent (reconciled automatically by the daily job).";
+        (closedReason === "paid_in_full"
+          ? "Tenant's rent is paid in full before the notice was sent (reconciled automatically by the daily job)."
+          : "Tenant's rent-equivalent balance dropped below the de minimis threshold before the notice was sent (reconciled automatically by the daily job).") +
+        nonRentNote;
 
       await jobPool.query("UPDATE late_cycles SET closed_at = now(), closed_reason = $1 WHERE id = $2", [
         closedReason,
@@ -110,7 +159,7 @@ export async function reconcileClosedCycles(
         eventSummary:
           `Late cycle ${cycle.id} closed (${closedReason})` +
           (voided.rows.length > 0 ? `, voided draft notice ${voided.rows[0].id}` : ""),
-        eventData: { closedReason, currentBalance, deMinimisThreshold },
+        eventData: { closedReason, currentBalance, deMinimisThreshold, nonRentBalanceRemaining },
         contextSnapshot: { leaseId: cycle.lease_id, lateCycleId: cycle.id },
         privacyCategory: "Aggregation",
         regulationTags: ["VRLTA"],
@@ -255,9 +304,12 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
   await syncBuildiumData(jobPool);
 
   const { id: deMinimisConfigId, amount: deMinimisThreshold } = await getDeMinimisThreshold(jobPool);
-  const outstandingBalances = await fetchOutstandingBalances();
+  const [outstandingBalances, glAccountsById] = await Promise.all([
+    fetchOutstandingBalances(),
+    fetchGlAccountsById(),
+  ]);
 
-  const reconciliation = await reconcileClosedCycles(jobPool, outstandingBalances, deMinimisThreshold, trace);
+  const reconciliation = await reconcileClosedCycles(jobPool, outstandingBalances, glAccountsById, deMinimisThreshold, trace);
   errors.push(...reconciliation.errors);
 
   const today = new Date();
@@ -343,10 +395,25 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
         continue;
       }
 
+      // Classified once here and reused below (both for the trigger decision
+      // and, if this lease qualifies, for the notice's own itemization) —
+      // rather than a second, redundant per-lease Buildium fetch later.
+      // Left unclassifiable, this throws UnclassifiedChargeBlockedError,
+      // caught by this lease's own try/catch below like any other per-lease
+      // failure (no active letter_templates, etc.) — same "flag, don't
+      // guess" handling as the drafting path always had, just applied one
+      // step earlier now that the trigger decision also needs it.
+      const classifiedBalance = classifyBalanceLines(lease.buildium_lease_id, balanceRow.balancesByGl, glAccountsById);
+
       const lateness = calculateLateness({
         rentDueDay: lease.rent_due_day,
         gracePeriodDays: lease.grace_period_days,
-        balance: balanceRow.balance,
+        // Only rent + late fees can trigger a legal rent notice — a
+        // leftover non-rent fee (Lease Change Fee, Application Fee, etc.)
+        // never can on its own. See rentEquivalentBalance's doc comment
+        // (noticeLineItems.ts) for the full reasoning and the real case
+        // that surfaced this (Jason, 2026-08-14).
+        balance: rentEquivalentBalance(classifiedBalance.bucketTotals),
         today,
         deMinimisThreshold,
       });
@@ -434,18 +501,17 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
       noticesDrafted += 1;
 
       // Itemized charge breakdown, snapshotted at draft time (migration
-      // 0038). If any charge line can't be safely classified into
-      // rent/late_fee/other, fetchAndClassifyLeaseCharges throws
-      // UnclassifiedChargeBlockedError — caught by this lease's try/catch
-      // below like any other per-lease failure, landing in `errors` for a
-      // human to review. The notice row itself is intentionally left in
-      // place without line items rather than rolled back, matching this
-      // job's existing no-transaction, best-effort-per-lease pattern; a
-      // notice missing its itemization is visibly incomplete (Judge/TARS
-      // can check for notices with zero notice_line_items rows), which is
-      // safer than either silently guessing a bucket or aborting the whole
-      // day's run over one lease's chart-of-accounts problem.
-      const classifiedBalance = await fetchAndClassifyLeaseCharges(lease.buildium_lease_id);
+      // 0038) — reuses the same classifiedBalance computed above for the
+      // trigger decision, no second Buildium fetch needed. Note this
+      // itemizes ALL positive lines across rent/late_fee/other, not just
+      // the rent-equivalent amount that triggered the notice: once a real
+      // rent delinquency legitimately fires a notice, it should still ask
+      // for everything owed, including any miscellaneous fees stacked on
+      // top (e.g. a Lease Change Fee sitting alongside genuinely unpaid
+      // rent) — see rentEquivalentBalance's doc comment. The notice row
+      // itself is intentionally left in place without line items rather
+      // than rolled back if this had failed, matching this job's existing
+      // no-transaction, best-effort-per-lease pattern.
       await insertNoticeLineItems(jobPool, noticeId, "draft", classifiedBalance.positiveLines);
 
       // Recipients: every listed tenant on the lease gets a "to" entry

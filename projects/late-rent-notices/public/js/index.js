@@ -5,10 +5,10 @@
       const content = document.getElementById("app-content");
       content.innerHTML = `
         <h1>Delinquency Dashboard</h1>
-        <p class="subtitle" id="page-subtitle">One row per late-rent notice on file. This is what the system has drafted or sent — it is not a full list of every late tenant (see note below).</p>
+        <p class="subtitle" id="page-subtitle">Everything that needs a human right now — leases stuck with no notice drafted, and drafts waiting for review.</p>
         <nav class="tabs" id="subtabs">
           <a href="#" id="subtab-notices" class="active" data-tab="notices">Notices</a>
-          <a href="#" id="subtab-no-notice" data-tab="no-notice">Late, No Notice Yet</a>
+          <a href="#" id="subtab-sent" data-tab="sent">Sent Notices</a>
         </nav>
         <div id="list-area" class="loading">Loading notices…</div>
       `;
@@ -16,11 +16,11 @@
       const listArea = document.getElementById("list-area");
       const subtitle = document.getElementById("page-subtitle");
       const subtabNotices = document.getElementById("subtab-notices");
-      const subtabNoNotice = document.getElementById("subtab-no-notice");
+      const subtabSent = document.getElementById("subtab-sent");
 
       const subtitles = {
-        notices: "One row per late-rent notice on file. This is what the system has drafted or sent — it is not a full list of every late tenant.",
-        "no-notice": "Leases that are past their grace period but don't have a notice drafted yet for the current cycle. Something is blocking the draft.",
+        notices: "Everything that needs a human right now — leases stuck with no notice drafted, and drafts waiting for review.",
+        sent: "The historical record — every notice that's actually been sent to a tenant.",
       };
 
       let activeSubtab = "notices";
@@ -29,21 +29,21 @@
         e.preventDefault();
         switchSubtab("notices");
       });
-      subtabNoNotice.addEventListener("click", (e) => {
+      subtabSent.addEventListener("click", (e) => {
         e.preventDefault();
-        switchSubtab("no-notice");
+        switchSubtab("sent");
       });
 
       function switchSubtab(tab) {
         if (tab === activeSubtab) return;
         activeSubtab = tab;
         subtabNotices.classList.toggle("active", tab === "notices");
-        subtabNoNotice.classList.toggle("active", tab === "no-notice");
+        subtabSent.classList.toggle("active", tab === "sent");
         subtitle.textContent = subtitles[tab];
         if (tab === "notices") {
-          loadNotices();
+          loadNeedsAttention();
         } else {
-          loadNoNotice();
+          loadSentNotices();
         }
       }
 
@@ -53,17 +53,35 @@
         return "";
       }
 
+      // Only ever fed 'draft' (GET /api/notices) or 'sent' (GET
+      // /api/notices/sent) — those two endpoints are the only callers of
+      // noticeRowHtml below, and neither ever returns a voided notice.
       function statusBadge(status, deliveryStatus) {
         if (status === "draft") return `<span class="badge badge-draft">Draft — not sent</span>`;
-        if (status === "voided") return `<span class="badge badge-voided">Voided</span>`;
-        if (status === "sent" && deliveryStatus === "bounced") return `<span class="badge badge-bounced">Sent — bounced</span>`;
-        if (status === "sent") return `<span class="badge badge-sent">Sent</span>`;
-        return `<span class="badge badge-voided">${status}</span>`;
+        if (deliveryStatus === "bounced") return `<span class="badge badge-bounced">Sent — bounced</span>`;
+        return `<span class="badge badge-sent">Sent</span>`;
+      }
+
+      function noticeRowHtml(n) {
+        return `
+          <a class="notice-row status-${n.status}" href="/notice.html?id=${n.id}">
+            <div class="row-top">
+              <span class="tenant-name">${escapeHtml(n.property_name)}${n.unit_display ? " — " + escapeHtml(n.unit_display) : ""}</span>
+              <span class="amount">${fmtMoney(n.amount_due_at_draft)}</span>
+            </div>
+            <div class="row-meta">
+              <span class="days-late ${daysLateClass(n.days_late_at_draft)}">${n.days_late_at_draft} days late (at draft)</span>
+              &middot; Drafted ${fmtDate(n.drafted_at)}
+              &middot; ${statusBadge(n.status, n.delivery_status)}
+            </div>
+          </a>
+        `;
       }
 
       // How long an open-but-undrafted cycle has been sitting, in plain
-      // English — this is the whole point of the view, so it needs to read
-      // clearly at a glance ("3 days", "since yesterday", etc.).
+      // English — this is the whole point of the "needs a notice drafted"
+      // section, so it needs to read clearly at a glance ("3 days", "since
+      // yesterday", etc.).
       function openDuration(openedAt) {
         const opened = new Date(openedAt);
         if (Number.isNaN(opened.getTime())) return "unknown";
@@ -83,47 +101,6 @@
         return "";
       }
 
-      async function loadNotices() {
-        listArea.className = "loading";
-        listArea.innerHTML = "Loading notices…";
-        try {
-          const { notices } = await LimehouseAPI.get("/api/notices");
-
-          if (!notices.length) {
-            listArea.className = "";
-            listArea.innerHTML = `<div class="empty-state">No notices on file yet. Nothing to review.</div>`;
-            return;
-          }
-
-          // Draft notices needing attention first, then most recent.
-          notices.sort((a, b) => {
-            if (a.status === "draft" && b.status !== "draft") return -1;
-            if (b.status === "draft" && a.status !== "draft") return 1;
-            return new Date(b.drafted_at) - new Date(a.drafted_at);
-          });
-
-          listArea.className = "";
-          listArea.innerHTML = `<div class="notice-list">${notices
-            .map((n) => `
-              <a class="notice-row status-${n.status}" href="/notice.html?id=${n.id}">
-                <div class="row-top">
-                  <span class="tenant-name">${escapeHtml(n.property_name)}${n.unit_display ? " — " + escapeHtml(n.unit_display) : ""}</span>
-                  <span class="amount">${fmtMoney(n.amount_due_at_draft)}</span>
-                </div>
-                <div class="row-meta">
-                  <span class="days-late ${daysLateClass(n.days_late_at_draft)}">${n.days_late_at_draft} days late (at draft)</span>
-                  &middot; Drafted ${fmtDate(n.drafted_at)}
-                  &middot; ${statusBadge(n.status, n.delivery_status)}
-                </div>
-              </a>
-            `)
-            .join("")}</div>`;
-        } catch (err) {
-          listArea.className = "";
-          listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
-        }
-      }
-
       let pmUsersCache = null;
       async function getPmUsers() {
         if (!pmUsersCache) {
@@ -133,147 +110,195 @@
         return pmUsersCache;
       }
 
-      async function loadNoNotice() {
+      function stuckRowHtml(c, pmOptions) {
+        return `
+          <div class="notice-row status-draft">
+            <div class="row-top">
+              <span class="tenant-name">${escapeHtml(c.property_name)}${c.unit_display ? " — " + escapeHtml(c.unit_display) : ""}</span>
+              <span class="days-late ${openDurationClass(c.opened_at)}">Stuck ${openDuration(c.opened_at)}</span>
+            </div>
+            <div class="row-meta">
+              Due ${fmtDate(c.due_date)}
+              &middot; Past grace period since ${fmtDate(c.opened_at)}
+            </div>
+            ${
+              c.needs_pm_assignment
+                ? `
+                  <form class="assign-pm-form" data-property-id="${c.property_id}" style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+                    <label style="font-size:0.85rem;">No property manager assigned:</label>
+                    <select required>
+                      <option value="">Choose a manager…</option>
+                      ${pmOptions}
+                    </select>
+                    <button type="submit" class="btn-primary">Assign</button>
+                    <span class="assign-pm-result"></span>
+                  </form>
+                `
+                : `<p class="field-hint" style="margin-top:6px;">A property manager is already assigned — something else is blocking this draft (check the ledger classification or the active letter template).</p>`
+            }
+            ${
+              me.isFallbackDecisionMaker
+                ? `
+                  <details class="exclude-details" data-lease-id="${c.lease_id}" style="margin-top:10px;">
+                    <summary style="cursor:pointer; color:var(--red); font-size:0.85rem;">Rare case — this one doesn't need a notice</summary>
+                    <form class="exclude-form" data-lease-id="${c.lease_id}" style="margin-top:8px; display:flex; flex-direction:column; gap:8px; max-width:420px;">
+                      <label style="font-size:0.85rem;">
+                        Why? (this stops future notices for this lease too, until you remove it)
+                        <select required style="margin-top:4px;">
+                          <option value="">Choose a reason…</option>
+                          <option value="payment_plan">Payment plan already in place</option>
+                          <option value="dispute">Tenant dispute in progress</option>
+                          <option value="active_eviction">Already in active eviction</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </label>
+                      <textarea required minlength="5" placeholder="Brief note for the record…" style="min-height:50px;"></textarea>
+                      <div>
+                        <button type="submit" class="btn-danger">Exclude this lease</button>
+                        <span class="exclude-result field-hint"></span>
+                      </div>
+                    </form>
+                  </details>
+                `
+                : ""
+            }
+          </div>
+        `;
+      }
+
+      function wireStuckRowForms() {
+        listArea.querySelectorAll(".assign-pm-form").forEach((form) => {
+          form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const select = form.querySelector("select");
+            const resultSpan = form.querySelector(".assign-pm-result");
+            const button = form.querySelector("button");
+            const propertyId = Number(form.dataset.propertyId);
+            const pmUserId = Number(select.value);
+            if (!pmUserId) return;
+
+            button.disabled = true;
+            select.disabled = true;
+            resultSpan.textContent = "Assigning…";
+            try {
+              await LimehouseAPI.post("/api/pm-property-assignments", { propertyId, pmUserId });
+              resultSpan.textContent = "Assigned — will draft on the next daily check.";
+              setTimeout(loadNeedsAttention, 1200);
+            } catch (err) {
+              resultSpan.textContent = friendlyError(err);
+              button.disabled = false;
+              select.disabled = false;
+            }
+          });
+        });
+
+        listArea.querySelectorAll(".exclude-form").forEach((form) => {
+          form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const select = form.querySelector("select");
+            const textarea = form.querySelector("textarea");
+            const resultSpan = form.querySelector(".exclude-result");
+            const button = form.querySelector("button");
+            const leaseId = Number(form.dataset.leaseId);
+            const reasonCategory = select.value;
+            const reason = textarea.value.trim();
+            if (!reasonCategory || reason.length < 5) return;
+
+            if (!window.confirm("Exclude this lease from automatic notices? This also stops it from coming back next month until you remove the exclusion.")) {
+              return;
+            }
+
+            button.disabled = true;
+            select.disabled = true;
+            textarea.disabled = true;
+            resultSpan.textContent = "Excluding…";
+            try {
+              await LimehouseAPI.post("/api/exclusions", { leaseId, reasonCategory, reason });
+              resultSpan.textContent = "Excluded — gone from this list now, and won't come back until you remove it.";
+              setTimeout(loadNeedsAttention, 1200);
+            } catch (err) {
+              resultSpan.textContent = friendlyError(err);
+              button.disabled = false;
+              select.disabled = false;
+              textarea.disabled = false;
+            }
+          });
+        });
+      }
+
+      // "Notices" tab — everything that needs a human: leases stuck with no
+      // notice drafted yet, plus drafts waiting for review, on one page (per
+      // Jason's 2026-08-14 request — these used to be two separate tabs, and
+      // he wanted the stuck cases folded into the same place he already
+      // checks for drafts, not a second click away).
+      async function loadNeedsAttention() {
         listArea.className = "loading";
         listArea.innerHTML = "Loading…";
         try {
-          const { lateNoNotice } = await LimehouseAPI.get("/api/late-no-notice");
+          const [{ lateNoNotice }, { notices: drafts }] = await Promise.all([
+            LimehouseAPI.get("/api/late-no-notice"),
+            LimehouseAPI.get("/api/notices"),
+          ]);
 
-          if (!lateNoNotice.length) {
+          if (!lateNoNotice.length && !drafts.length) {
             listArea.className = "";
-            listArea.innerHTML = `<div class="empty-state">Nothing stuck right now. Every late lease past its grace period has a notice drafted.</div>`;
+            listArea.innerHTML = `<div class="empty-state">Nothing needs attention right now. Every late lease past its grace period has a notice drafted, and every draft has been reviewed.</div>`;
             return;
           }
 
-          const pmUsers = await getPmUsers();
-          const pmOptions = pmUsers.map((pm) => `<option value="${pm.id}">${escapeHtml(pm.display_name)}</option>`).join("");
+          let html = "";
+
+          if (lateNoNotice.length) {
+            const pmUsers = await getPmUsers();
+            const pmOptions = pmUsers.map((pm) => `<option value="${pm.id}">${escapeHtml(pm.display_name)}</option>`).join("");
+            html += `
+              <h2 style="margin-top:0;">Needs a notice drafted</h2>
+              <div class="alert alert-warn">
+                <strong>These need attention:</strong> each of these leases is past its grace period, but no notice has been drafted for the current cycle.
+                Most of these are missing a property manager assignment — assign one below and it'll be picked up automatically on the next daily check.
+                A few may be blocked for a different reason (an unclassifiable charge on the ledger, no active letter template) — those need a human to look into why.
+              </div>
+              <div class="notice-list">${lateNoNotice.map((c) => stuckRowHtml(c, pmOptions)).join("")}</div>
+            `;
+          }
+
+          if (drafts.length) {
+            drafts.sort((a, b) => new Date(b.drafted_at) - new Date(a.drafted_at));
+            html += `
+              <h2 style="${lateNoNotice.length ? "margin-top:28px;" : "margin-top:0;"}">Drafted — ready to review</h2>
+              <div class="notice-list">${drafts.map(noticeRowHtml).join("")}</div>
+            `;
+          }
 
           listArea.className = "";
-          listArea.innerHTML = `
-            <div class="alert alert-warn">
-              <strong>These need attention:</strong> each of these leases is past its grace period, but no notice has been drafted for the current cycle.
-              Most of these are missing a property manager assignment — assign one below and it'll be picked up automatically on the next daily check.
-              A few may be blocked for a different reason (an unclassifiable charge on the ledger, no active letter template) — those need a human to look into why.
-            </div>
-            <div class="notice-list">${lateNoNotice
-              .map((c, idx) => `
-                <div class="notice-row status-draft">
-                  <div class="row-top">
-                    <span class="tenant-name">${escapeHtml(c.property_name)}${c.unit_display ? " — " + escapeHtml(c.unit_display) : ""}</span>
-                    <span class="days-late ${openDurationClass(c.opened_at)}">Stuck ${openDuration(c.opened_at)}</span>
-                  </div>
-                  <div class="row-meta">
-                    Due ${fmtDate(c.due_date)}
-                    &middot; Past grace period since ${fmtDate(c.opened_at)}
-                  </div>
-                  ${
-                    c.needs_pm_assignment
-                      ? `
-                        <form class="assign-pm-form" data-property-id="${c.property_id}" style="margin-top:10px; display:flex; gap:8px; align-items:center;">
-                          <label style="font-size:0.85rem;">No property manager assigned:</label>
-                          <select required>
-                            <option value="">Choose a manager…</option>
-                            ${pmOptions}
-                          </select>
-                          <button type="submit" class="btn-primary">Assign</button>
-                          <span class="assign-pm-result"></span>
-                        </form>
-                      `
-                      : `<p class="field-hint" style="margin-top:6px;">A property manager is already assigned — something else is blocking this draft (check the ledger classification or the active letter template).</p>`
-                  }
-                  ${
-                    me.isFallbackDecisionMaker
-                      ? `
-                        <details class="exclude-details" data-lease-id="${c.lease_id}" style="margin-top:10px;">
-                          <summary style="cursor:pointer; color:var(--red); font-size:0.85rem;">Rare case — this one doesn't need a notice</summary>
-                          <form class="exclude-form" data-lease-id="${c.lease_id}" style="margin-top:8px; display:flex; flex-direction:column; gap:8px; max-width:420px;">
-                            <label style="font-size:0.85rem;">
-                              Why? (this stops future notices for this lease too, until you remove it)
-                              <select required style="margin-top:4px;">
-                                <option value="">Choose a reason…</option>
-                                <option value="payment_plan">Payment plan already in place</option>
-                                <option value="dispute">Tenant dispute in progress</option>
-                                <option value="active_eviction">Already in active eviction</option>
-                                <option value="other">Other</option>
-                              </select>
-                            </label>
-                            <textarea required minlength="5" placeholder="Brief note for the record…" style="min-height:50px;"></textarea>
-                            <div>
-                              <button type="submit" class="btn-danger">Exclude this lease</button>
-                              <span class="exclude-result field-hint"></span>
-                            </div>
-                          </form>
-                        </details>
-                      `
-                      : ""
-                  }
-                </div>
-              `)
-              .join("")}</div>
-          `;
-
-          listArea.querySelectorAll(".assign-pm-form").forEach((form) => {
-            form.addEventListener("submit", async (e) => {
-              e.preventDefault();
-              const select = form.querySelector("select");
-              const resultSpan = form.querySelector(".assign-pm-result");
-              const button = form.querySelector("button");
-              const propertyId = Number(form.dataset.propertyId);
-              const pmUserId = Number(select.value);
-              if (!pmUserId) return;
-
-              button.disabled = true;
-              select.disabled = true;
-              resultSpan.textContent = "Assigning…";
-              try {
-                await LimehouseAPI.post("/api/pm-property-assignments", { propertyId, pmUserId });
-                resultSpan.textContent = "Assigned — will draft on the next daily check.";
-                setTimeout(loadNoNotice, 1200);
-              } catch (err) {
-                resultSpan.textContent = friendlyError(err);
-                button.disabled = false;
-                select.disabled = false;
-              }
-            });
-          });
-
-          listArea.querySelectorAll(".exclude-form").forEach((form) => {
-            form.addEventListener("submit", async (e) => {
-              e.preventDefault();
-              const select = form.querySelector("select");
-              const textarea = form.querySelector("textarea");
-              const resultSpan = form.querySelector(".exclude-result");
-              const button = form.querySelector("button");
-              const leaseId = Number(form.dataset.leaseId);
-              const reasonCategory = select.value;
-              const reason = textarea.value.trim();
-              if (!reasonCategory || reason.length < 5) return;
-
-              if (!window.confirm("Exclude this lease from automatic notices? This also stops it from coming back next month until you remove the exclusion.")) {
-                return;
-              }
-
-              button.disabled = true;
-              select.disabled = true;
-              textarea.disabled = true;
-              resultSpan.textContent = "Excluding…";
-              try {
-                await LimehouseAPI.post("/api/exclusions", { leaseId, reasonCategory, reason });
-                resultSpan.textContent = "Excluded — gone from this list now, and won't come back until you remove it.";
-                setTimeout(loadNoNotice, 1200);
-              } catch (err) {
-                resultSpan.textContent = friendlyError(err);
-                button.disabled = false;
-                select.disabled = false;
-                textarea.disabled = false;
-              }
-            });
-          });
+          listArea.innerHTML = html;
+          wireStuckRowForms();
         } catch (err) {
           listArea.className = "";
           listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
         }
       }
 
-      loadNotices();
+      // "Sent Notices" tab — the historical record.
+      async function loadSentNotices() {
+        listArea.className = "loading";
+        listArea.innerHTML = "Loading…";
+        try {
+          const { notices } = await LimehouseAPI.get("/api/notices/sent");
+
+          if (!notices.length) {
+            listArea.className = "";
+            listArea.innerHTML = `<div class="empty-state">No notices have been sent yet.</div>`;
+            return;
+          }
+
+          listArea.className = "";
+          listArea.innerHTML = `<div class="notice-list">${notices.map(noticeRowHtml).join("")}</div>`;
+        } catch (err) {
+          listArea.className = "";
+          listArea.innerHTML = `<div class="alert alert-error">${escapeHtml(friendlyError(err))}</div>`;
+        }
+      }
+
+      loadNeedsAttention();
     })();

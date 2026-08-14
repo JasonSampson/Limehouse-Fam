@@ -41,6 +41,7 @@ describe("Row-level security", () => {
   let pmB: number; // PM assigned to property B only
   let adminAssistant: number;
   let bookkeeping: number;
+  let fallbackPm: number; // owner/fallback decision-maker, assigned to neither property A nor B
   let propertyA: number;
   let propertyB: number;
   let leaseA: number; // belongs to property A (pmA's door)
@@ -55,6 +56,11 @@ describe("Row-level security", () => {
     pmB = await seedPmUser(superuser, { email: "pm-b@limehousepm.com", role: "pm" });
     adminAssistant = await seedPmUser(superuser, { email: "assistant@limehousepm.com", role: "admin_assistant" });
     bookkeeping = await seedPmUser(superuser, { email: "bookkeeper@limehousepm.com", role: "bookkeeping" });
+    fallbackPm = await seedPmUser(superuser, {
+      email: "owner@limehousepm.com",
+      role: "pm",
+      isFallbackDecisionMaker: true,
+    });
 
     propertyA = await seedProperty(superuser, { buildiumPropertyId: "PROP-A", name: "Ghent Square Apts" });
     propertyB = await seedProperty(superuser, { buildiumPropertyId: "PROP-B", name: "Riverside Commons" });
@@ -151,6 +157,74 @@ describe("Row-level security", () => {
         client.query("SELECT lease_id FROM contact_attempts ORDER BY id")
       );
       expect(rows.rows.map((r) => Number(r.lease_id)).sort()).toEqual([leaseA, leaseB].sort());
+    });
+  });
+
+  // Migration 0054 — direct regression coverage for the "fourth recurrence"
+  // bug (0047 draft-visibility, 0048/0049 fallback-void crash, 0050 voided-
+  // visibility, now this): the fallback decision-maker's READ access into
+  // leases/lease_tenants/notices/notice_recipients used to be scoped to
+  // specific notice statuses, which broke for exactly the two real cases
+  // Jason hit on 2026-08-14 — a stuck lease with NO notice at all yet, and
+  // an already-SENT notice on someone else's door. Fixed by making the
+  // grant unconditional, matching admin_assistant/bookkeeping's existing
+  // portfolio-wide pattern.
+  describe("portfolio-wide read for the fallback decision-maker (migration 0054)", () => {
+    it("fallback sees a lease with an open late_cycle but NO notices row at all, on a door assigned to someone else — the 'Late, No Notice Yet' case", async () => {
+      // leaseB belongs to pmB's door, not the fallback user's — and gets no
+      // notices row at all, matching the real stuck-cycle scenario exactly
+      // (a late_cycle exists, nothing else does yet).
+      await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-08-01" });
+
+      const rows = await withTestPmScope(
+        { pmUserId: fallbackPm, pmRole: "pm", isFallbackDecisionMaker: true },
+        (client) => client.query("SELECT id FROM leases WHERE id = $1", [leaseB])
+      );
+      expect(rows.rows.map((r) => r.id)).toEqual([leaseB]);
+    });
+
+    it("fallback sees an already-SENT notice assigned to and sent by someone else's door — the 3872 Old Forge Road case", async () => {
+      const lateCycle = await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-07-01" });
+      const noticeId = await seedNotice(superuser, {
+        lateCycleId: lateCycle,
+        leaseId: leaseB,
+        letterTemplateId,
+        assignedPmId: pmB,
+      });
+      await superuser.query(
+        "UPDATE notices SET status = 'sent', sent_at = now(), sent_by_pm_id = $1, ledger_verified = true WHERE id = $2",
+        [pmB, noticeId]
+      );
+
+      const rows = await withTestPmScope(
+        { pmUserId: fallbackPm, pmRole: "pm", isFallbackDecisionMaker: true },
+        (client) => client.query("SELECT id, status FROM notices WHERE id = $1", [noticeId])
+      );
+      expect(rows.rows).toEqual([{ id: noticeId, status: "sent" }]);
+    });
+
+    it("a plain PM (not fallback) still cannot see either case on someone else's door — the widened grant is fallback-only", async () => {
+      const lateCycle = await seedLateCycle(superuser, { leaseId: leaseB, deMinimisConfigId, dueDate: "2026-06-01" });
+      const noticeId = await seedNotice(superuser, {
+        lateCycleId: lateCycle,
+        leaseId: leaseB,
+        letterTemplateId,
+        assignedPmId: pmB,
+      });
+      await superuser.query(
+        "UPDATE notices SET status = 'sent', sent_at = now(), sent_by_pm_id = $1, ledger_verified = true WHERE id = $2",
+        [pmB, noticeId]
+      );
+
+      const leaseRows = await withTestPmScope({ pmUserId: pmA, pmRole: "pm" }, (client) =>
+        client.query("SELECT id FROM leases WHERE id = $1", [leaseB])
+      );
+      expect(leaseRows.rows).toEqual([]);
+
+      const noticeRows = await withTestPmScope({ pmUserId: pmA, pmRole: "pm" }, (client) =>
+        client.query("SELECT id FROM notices WHERE id = $1", [noticeId])
+      );
+      expect(noticeRows.rows).toEqual([]);
     });
   });
 

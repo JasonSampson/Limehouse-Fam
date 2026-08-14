@@ -1,8 +1,9 @@
 import type { PoolClient } from "pg";
-import { fetchLeaseOutstandingBalance } from "../buildium/client.js";
+import { fetchLeaseOutstandingBalance, fetchGlAccountsById } from "../buildium/client.js";
 import { getDeMinimisThreshold } from "./config.js";
 import { formatCurrency } from "../templates/renderTemplate.js";
 import { writeAuditLog, type ActorType } from "./auditLog.js";
+import { classifyBalanceLines, rentEquivalentBalance } from "./noticeLineItems.js";
 import type { Trace } from "./trace.js";
 
 export interface StaleDraftCheckResult {
@@ -41,14 +42,39 @@ export async function checkLiveBalanceAndVoidIfStale(
     trace: Trace;
   }
 ): Promise<StaleDraftCheckResult> {
-  const liveBalance = await fetchLeaseOutstandingBalance(params.buildiumLeaseId);
+  const [liveBalance, glAccountsById] = await Promise.all([
+    fetchLeaseOutstandingBalance(params.buildiumLeaseId),
+    fetchGlAccountsById(),
+  ]);
   const { amount: deMinimisThreshold } = await getDeMinimisThreshold(client);
 
-  if (liveBalance.balance > deMinimisThreshold) {
+  // A non-rent fee (Lease Change Fee, Application Fee, etc.) left on the
+  // ledger must never keep a stale draft looking "still owed" — only rent
+  // and late fees can. Same reasoning as dailyLatenessCheck.ts's trigger fix
+  // (2026-08-14, see rentEquivalentBalance's doc comment in
+  // noticeLineItems.ts). Left unclassifiable, this throws
+  // UnclassifiedChargeBlockedError, which both call sites (sendNotice.ts,
+  // noticeRoutes.ts) already let propagate through asyncHandler into a
+  // generic 500 — the same failure mode either already had if
+  // fetchLeaseOutstandingBalance itself failed.
+  const classified = classifyBalanceLines(params.buildiumLeaseId, liveBalance.balancesByGl, glAccountsById);
+  const liveRentEquivalentBalance = rentEquivalentBalance(classified.bucketTotals);
+
+  if (liveRentEquivalentBalance > deMinimisThreshold) {
     return { voided: false, liveBalance: liveBalance.balance, deMinimisThreshold };
   }
 
-  const voidedReason = `Tenant paid down below de minimis threshold ${params.triggerDescription}.`;
+  // Reflects that RENT is resolved, not necessarily every dollar on the
+  // ledger — amount_due_at_send below already stores the true full balance,
+  // but a human reading just this sentence shouldn't come away thinking $0
+  // is owed if a non-rent fee (Lease Change Fee, etc.) is still sitting
+  // there (Mason/TARS review finding, 2026-08-14).
+  const nonRentBalanceRemaining = classified.bucketTotals.other;
+  const voidedReason =
+    `Tenant's rent-equivalent balance dropped below de minimis threshold ${params.triggerDescription}.` +
+    (nonRentBalanceRemaining > 0
+      ? ` Note: ${formatCurrency(nonRentBalanceRemaining)} in non-rent fees may still be outstanding on the ledger.`
+      : "");
   const updateResult = await client.query(
     `UPDATE notices SET status = 'voided', voided_at = now(),
        voided_reason = $1, amount_due_at_send = $2
@@ -70,7 +96,7 @@ export async function checkLiveBalanceAndVoidIfStale(
       actorId: params.actorId,
       eventType: "notice.voided",
       eventSummary: `Notice ${params.noticeId} voided ${params.triggerDescription}: balance dropped to ${formatCurrency(liveBalance.balance)}, below threshold.`,
-      eventData: { liveBalance: liveBalance.balance, deMinimisThreshold },
+      eventData: { liveBalance: liveBalance.balance, deMinimisThreshold, nonRentBalanceRemaining },
       contextSnapshot: { noticeId: params.noticeId, leaseId: params.leaseId },
       privacyCategory: "Aggregation",
       regulationTags: ["VRLTA"],

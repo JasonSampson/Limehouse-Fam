@@ -62,11 +62,14 @@ process.env.TEAMS_ALERT_WEBHOOK_URL ??= "https://example.invalid/webhook";
 
 // Buildium is a real, billed, external API — never call it from a test.
 // fetchLeaseOutstandingBalance is mocked to report a balance already below
-// the seeded de-minimis threshold, which makes sendNotice() void the notice
-// and return immediately (staleDraftCheck.ts), before it would otherwise
-// need the (also-Buildium-backed) GL classification call. This is enough to
-// prove the route's ownership gate did or didn't fire without needing to
-// fake an entire live-send.
+// the seeded de-minimis threshold (empty balancesByGl, so classification
+// trivially nets to zero regardless of GL account content), which makes
+// sendNotice() void the notice and return immediately (staleDraftCheck.ts).
+// fetchGlAccountsById is mocked too — staleDraftCheck.ts now classifies the
+// live balance on every call (2026-08-14 fix), not just once a notice is
+// about to actually draft/send, so this would otherwise reach the real
+// Buildium API. This is enough to prove the route's ownership gate did or
+// didn't fire without needing to fake an entire live-send.
 vi.mock("../../src/buildium/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/buildium/client.js")>();
   return {
@@ -77,6 +80,7 @@ vi.mock("../../src/buildium/client.js", async (importOriginal) => {
       evictionPendingDate: null,
       balancesByGl: [],
     }),
+    fetchGlAccountsById: vi.fn().mockResolvedValue(new Map()),
   };
 });
 

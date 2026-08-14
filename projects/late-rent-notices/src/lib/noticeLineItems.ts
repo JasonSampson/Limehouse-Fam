@@ -1,5 +1,10 @@
 import type { Pool, PoolClient } from "pg";
-import { fetchLeaseOutstandingBalance, fetchGlAccountsById, type BuildiumGlAccount } from "../buildium/client.js";
+import {
+  fetchLeaseOutstandingBalance,
+  fetchGlAccountsById,
+  type BuildiumGlAccount,
+  type LeaseBalanceByGl,
+} from "../buildium/client.js";
 import {
   classifyGlAccount,
   UnclassifiableChargeError,
@@ -98,11 +103,26 @@ export async function fetchAndClassifyLeaseCharges(buildiumLeaseId: string): Pro
     fetchGlAccountsById(),
   ]);
 
+  return classifyBalanceLines(buildiumLeaseId, leaseBalance.balancesByGl, glAccountsById);
+}
+
+// The actual classify-and-sum loop, pulled out of fetchAndClassifyLeaseCharges
+// so callers that already HAVE a lease's balancesByGl in hand — the daily
+// job's bulk /leases/outstandingbalances call already returns it per lease —
+// can classify without a second, redundant per-lease Buildium fetch.
+// fetchAndClassifyLeaseCharges above is now just this function plus the
+// fetch; behavior/contract (including the UnclassifiedChargeBlockedError
+// "never guess" throw) is unchanged for its existing callers.
+export function classifyBalanceLines(
+  buildiumLeaseId: string,
+  balancesByGl: LeaseBalanceByGl[],
+  glAccountsById: Map<number, BuildiumGlAccount>
+): ClassifiedBalance {
   const positiveLines: ClassifiedLine[] = [];
   const bucketTotals: Record<NoticeLineItemBucket, number> = { rent: 0, late_fee: 0, other: 0 };
   const unclassifiable: { chargeId: number; glAccountId: number; glAccountName: string; amount: number }[] = [];
 
-  for (const balanceLine of leaseBalance.balancesByGl) {
+  for (const balanceLine of balancesByGl) {
     // A zero balance on a GL account means nothing currently outstanding on
     // it — not worth resolving/classifying at all.
     if (balanceLine.balance === 0) {
@@ -176,6 +196,25 @@ export async function fetchAndClassifyLeaseCharges(buildiumLeaseId: string): Pro
   }
 
   return { positiveLines, bucketTotals };
+}
+
+// What actually counts as "behind on rent" for lateness/notice purposes:
+// the rent bucket (which already folds in pet rent, RBP, utilities, and
+// solar rent — see glClassification.ts's RENT_BUCKET_NAMES) plus the
+// late_fee bucket (a late fee only ever exists because of a real rent
+// delinquency in the first place). Deliberately excludes 'other' —
+// Application Fee, Convenience Fee, Lease Change Fee, Tenant Lease Renewal
+// Fee, and similar one-off charges are real money owed, but Jason's 2026-
+// 08-14 report (1318 River Birch Run South and 1313 Tait Close both got a
+// 14-day pay-or-quit notice over an unpaid $300 Lease Change Fee alone, with
+// zero rent actually owed) confirmed those must never be able to trigger a
+// legal rent notice on their own. They still show up itemized on a notice
+// that a real rent-equivalent delinquency legitimately triggers — this
+// function only governs the trigger decision, not what a triggered notice
+// itemizes (see insertNoticeLineItems, which still inserts every positive
+// line across all three buckets).
+export function rentEquivalentBalance(bucketTotals: Record<NoticeLineItemBucket, number>): number {
+  return bucketTotals.rent + bucketTotals.late_fee;
 }
 
 // Inserts one notice_line_items row per classified charge line, all at the

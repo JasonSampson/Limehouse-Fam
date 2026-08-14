@@ -221,12 +221,19 @@ const OUT_OF_SCOPE_NAME_PATTERNS: RegExp[] = [/court\s*cost/i, /attorney/i];
 // fall through to 'other' or, if it collides with OUT_OF_SCOPE_NAME_PATTERNS
 // or looks structurally wrong, throw — it will NOT silently join this list.
 //
-// Rent bucket additions: Utilities, Pet Rent, Resident Benefits Package.
+// Rent bucket additions: Utilities, Pet Rent, Resident Benefits Package,
+// Solar Rent.
 const RENT_BUCKET_NAMES = new Set<string>([
   "Utility Income", // GL 636963 — confirmed on 315 real charge lines, $28,418.30 total
   "Pet Rent", // GL 876174 — confirmed on 107 real charge lines, $5,304.52 total
   "Pet Rent- Limehouse", // GL 992070 — confirmed on 190 real charge lines, $14,126.33 total (property-specific variant, same pattern as Late Fee Income's per-property split)
   "Resident Benefits Package", // GL 958019 — confirmed on 1,175 real charge lines, $53,750.35 total
+  // GL 987307 — confirmed live 2026-08-14 in Limehouse's chart of accounts
+  // (Income type, not IsDefaultGLAccount, same shape as the other five names
+  // in this list) and confirmed by Jason as a real charge on 1149 Birks
+  // Lane. Added per Jason's explicit rule: solar rent counts as rent for
+  // lateness/notice purposes, same as pet rent/RBP/utilities.
+  "Solar Rent",
 ]);
 
 // Late Fee bucket additions: NSF Fees, Admin/manual payment processing fee,

@@ -36,3 +36,24 @@ change that isn't about that app's own data.
   reusable pattern — other projects wanting the same Docker-free test setup
   can add their own `<project>_test` schema + role as a follow-up migration
   here, same shape.
+- `0003_create_limeacademy_test_schema` — the first project to take up 0002's
+  pattern: a `limeacademy_test` schema + `limeacademy_test_app` role for
+  LimeAcademy's disposable test database.
+- `0004_create_limeacademy_app_role_and_grants` — creates `limeacademy_app`,
+  the scoped **production** role LimeAcademy connects as, replacing the shared
+  Supabase `postgres` superuser. It gets read/write on its own 20 `la_*`
+  tables, **read-only** on the five LimeHQ tables its auth path needs (with a
+  column-scoped grant on `public.users` that withholds `password_hash` and
+  `totp_secret`), and nothing else anywhere. Specifically it cannot write to
+  `public.user_permission_overrides` — the write that would let one app grant
+  itself any permission in the ecosystem. Applying it changes nothing for any
+  running app: the role is created with **no password** and cannot log in
+  until the Owner/Broker sets one. See the file header for the rollout order
+  and for why table grants were chosen over a view contract.
+
+  This is the first *production* role in this folder and the shape is meant to
+  be reused. Three apps still connect as `postgres` — Limona (spec written
+  2026-07-25, never implemented), LimeHQ, and Dashboard. Each should get the
+  same treatment as a follow-up here rather than a second pattern. Note that
+  LimeHQ's own `.env.example` already documents a `limehq_app` role that no
+  migration has ever created.

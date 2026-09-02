@@ -51,6 +51,10 @@ export const syncRoutes = Router();
 // last succeeded (never just "last attempted" — see src/db/syncLog.ts).
 // Frontend uses this to show "RentEngine: not connected" vs "Buildium: last
 // synced 4 minutes ago" instead of guessing.
+// LEFT OPEN [today], per Sentinel's review of the wider permission rewrite:
+// only connectivity booleans and timestamps, no financial or portfolio
+// figures — deliberately not tied to any one dashboard.* section, same as
+// /api/dashboard/google-reviews and /api/dashboard/period-info.
 syncRoutes.get("/api/sync/status", requireLogin, asyncHandler(async (_req, res) => {
   try {
     const [buildium, rentEngine, leadSimple] = await Promise.all([
@@ -74,7 +78,11 @@ syncRoutes.get("/api/sync/status", requireLogin, asyncHandler(async (_req, res) 
 // this covers is small enough (delinquency summary + property count) that
 // a background job isn't warranted yet; if that changes, this becomes a
 // fire-and-forget with the sync log row as the only way to check progress.
-syncRoutes.post("/api/sync/now", requireLogin, asyncHandler(async (_req, res) => {
+// GATED [today], per Sentinel's review of the wider permission rewrite:
+// this refreshes delinquency/property figures (Financials-adjacent) and was
+// still requireLogin-only, letting anyone signed in trigger it regardless of
+// which specific section they're permissioned for.
+syncRoutes.post("/api/sync/now", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "metric_cache_refresh");
   try {
     const [balances, properties] = await Promise.all([fetchOutstandingBalances(), fetchProperties()]);

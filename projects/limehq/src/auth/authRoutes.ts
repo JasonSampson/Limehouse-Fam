@@ -271,6 +271,18 @@ const APP_PERMISSION_KEYS: Record<string, string> = {
 // personal-override merge for where that list comes from.
 const DASHBOARD_PERMISSION_PREFIX = "dashboard.";
 
+// Limona is the opposite shape from Dashboard: entry still gates on the one
+// fixed limona.chat.access key (everyone gets it by default — migration
+// 0009), but two further keys (limona.documents.manage,
+// limona.answers.contribute, both owner/Admin-only by default) control real
+// capabilities INSIDE Limona once someone's in. FIXED [today]: Limona used
+// to receive no permission data at all and treated every signed-in user as
+// its own local "admin" role — see Limona's src/auth/middleware.ts — so
+// those two keys existed in the catalog but were never actually enforced.
+// Forwarding the real limona.* set here, the same way DASHBOARD_PERMISSION_
+// PREFIX already does, lets Limona check the real thing.
+const LIMONA_PERMISSION_PREFIX = "limona.";
+
 router.get("/handoff", requireSession, async (req, res, next) => {
   try {
     const app = req.query["app"];
@@ -294,6 +306,13 @@ router.get("/handoff", requireSession, async (req, res, next) => {
       if (permissions.length === 0) {
         throw new ApiError(403, `You don't have access to ${app}.`);
       }
+    } else if (app === "limona") {
+      const allowed = await hasPermission(req.user.userId, APP_PERMISSION_KEYS[app]!);
+      if (!allowed) {
+        throw new ApiError(403, `You don't have access to ${app}.`);
+      }
+      const allEffective = await getEffectivePermissions(req.user.userId);
+      permissions = allEffective.filter((key) => key.startsWith(LIMONA_PERMISSION_PREFIX));
     } else {
       const allowed = await hasPermission(req.user.userId, APP_PERMISSION_KEYS[app]!);
       if (!allowed) {

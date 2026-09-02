@@ -1,14 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
-import { requireAdmin } from "../auth/middleware.js";
+import { requirePermission } from "../auth/middleware.js";
 import { embedQuery, toVectorLiteral } from "../rag/embeddings.js";
 import { createTeamKnowledgeEntry } from "../services/teamKnowledgeService.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const adminTeamKnowledgeRoutes = Router();
-adminTeamKnowledgeRoutes.use(requireAdmin);
+adminTeamKnowledgeRoutes.use(requirePermission("limona.answers.contribute"));
 
 adminTeamKnowledgeRoutes.get("/api/admin/team-knowledge", asyncHandler(async (_req, res) => {
   const result = await getPool().query(

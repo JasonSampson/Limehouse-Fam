@@ -10,6 +10,11 @@ export interface SessionPayload {
   userId: string;   // LimeHQ integer userId stored as string
   email: string;
   name: string;
+  // The real limona.* permission keys LimeHQ granted at handoff time (see
+  // LIMONA_PERMISSION_PREFIX in LimeHQ's authRoutes.ts) — e.g.
+  // "limona.documents.manage", "limona.answers.contribute". Replaces the old
+  // hardcoded-admin-for-everyone role (see auth/middleware.ts's history).
+  permissions: string[];
   issuedAt: number;
 }
 
@@ -21,8 +26,8 @@ function sign(value: string): string {
   return crypto.createHmac("sha256", getSecret()).update(value).digest("hex");
 }
 
-export function createSessionCookieValue(userId: string, email: string, name: string): string {
-  const payload: SessionPayload = { userId, email, name, issuedAt: Date.now() };
+export function createSessionCookieValue(userId: string, email: string, name: string, permissions: string[]): string {
+  const payload: SessionPayload = { userId, email, name, permissions, issuedAt: Date.now() };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = sign(body);
   return `${body}.${signature}`;
@@ -50,6 +55,12 @@ export function verifySessionCookieValue(cookieValue: string | undefined): Sessi
     // rather than rejecting the cookie, so attachUser's nameFromEmail fallback
     // (src/auth/middleware.ts) can still kick in for those.
     if (typeof payload.name !== "string") payload.name = "";
+    // permissions is new [today] — a cookie signed before this change has
+    // none. Default to [] (deny-by-default for documents.manage/
+    // answers.contribute) rather than rejecting the cookie; it just means
+    // that one existing session re-does the LimeHQ handoff on its next visit
+    // to a gated page, same as any other permission change taking effect.
+    if (!Array.isArray(payload.permissions)) payload.permissions = [];
     return payload;
   } catch {
     return null;

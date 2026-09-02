@@ -28,7 +28,7 @@ async function init() {
     return;
   }
   const me = await meRes.json();
-  if (me.user.role !== "admin") {
+  if (!me.user.permissions.includes("limona.documents.manage")) {
     window.location.href = "/chat.html";
     return;
   }

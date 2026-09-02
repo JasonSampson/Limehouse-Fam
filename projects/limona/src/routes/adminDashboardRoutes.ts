@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { getPool } from "../db/pool.js";
-import { requireAdmin } from "../auth/middleware.js";
+import { requirePermission } from "../auth/middleware.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const adminDashboardRoutes = Router();
-adminDashboardRoutes.use(requireAdmin);
+adminDashboardRoutes.use(requirePermission("limona.documents.manage"));
 
 // Read-only aggregate for the admin Dashboard home page's stat cards AND the
 // sidebar nav count badges (Document Library, Assets, Team Knowledge, Reporting).

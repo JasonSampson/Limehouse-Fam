@@ -45,27 +45,41 @@ const NAV_SECTIONS = [
   {
     label: "Knowledge Base",
     items: [
-      { href: "/admin.html", label: "Upload Document", icon: "upload" },
-      { href: "/documents.html", label: "Document Library", icon: "book", statKey: "documentsCount" },
-      { href: "/assets.html", label: "Assets", icon: "download", statKey: "assetsCount" },
+      { href: "/admin.html", label: "Upload Document", icon: "upload", requiredPermission: "limona.documents.manage" },
+      { href: "/documents.html", label: "Document Library", icon: "book", statKey: "documentsCount", requiredPermission: "limona.documents.manage" },
+      { href: "/assets.html", label: "Assets", icon: "download", statKey: "assetsCount", requiredPermission: "limona.documents.manage" },
       // "Create New SOP" intentionally omitted — separate tool, out of scope
       // (confirmed with Jason).
-      { href: "/team-knowledge.html", label: "Team Knowledge", icon: "diamond", statKey: "teamKnowledgeCount" },
+      { href: "/team-knowledge.html", label: "Team Knowledge", icon: "diamond", statKey: "teamKnowledgeCount", requiredPermission: "limona.answers.contribute" },
     ],
   },
   // Users section removed — staff management is now handled in LimeHQ (/staff).
   {
     label: "Insights",
-    items: [{ href: "/reporting.html", label: "Reporting", icon: "bars", statKey: "knowledgeGapsCount" }],
+    items: [{ href: "/reporting.html", label: "Reporting", icon: "bars", statKey: "knowledgeGapsCount", requiredPermission: "limona.documents.manage" }],
   },
 ];
 
+// CHANGED [today]: renderSidebar is only ever called on a page the caller
+// already passed its own requirePermission gate for, so this used to be
+// safe to show unconditionally — every page behind it required the same
+// single "admin" flag. Now that Upload Document/Document Library/Assets/
+// Reporting (limona.documents.manage) and Team Knowledge
+// (limona.answers.contribute) are two independently grantable permissions,
+// someone holding only one could see a nav link for the other and get
+// bounced on click — the same "tab shows, access denied" bug just fixed on
+// Dashboard. Filtering each item by the real permissions list closes that.
 function renderSidebar({ activePage, user }) {
   const root = document.getElementById("sidebar-root");
   if (!root) return;
+  const permissions = user?.permissions || [];
 
   const sectionsHtml = NAV_SECTIONS.map((section) => {
-    const itemsHtml = section.items
+    const visibleItems = section.items.filter(
+      (item) => !item.requiredPermission || permissions.includes(item.requiredPermission)
+    );
+    if (visibleItems.length === 0) return "";
+    const itemsHtml = visibleItems
       .map((item) => {
         const isActive = item.href === activePage;
         const icon = ICONS[item.icon] || "";

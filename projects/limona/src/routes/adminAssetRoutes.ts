@@ -4,14 +4,14 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
-import { requireAdmin } from "../auth/middleware.js";
+import { requirePermission } from "../auth/middleware.js";
 import { ingestAsset, absoluteAssetOriginalPath } from "../rag/assetIngest.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { upload } from "../lib/uploadConfig.js";
 
 export const adminAssetRoutes = Router();
-adminAssetRoutes.use(requireAdmin);
+adminAssetRoutes.use(requirePermission("limona.documents.manage"));
 
 adminAssetRoutes.get("/api/admin/assets", asyncHandler(async (_req, res) => {
   const result = await getPool().query(
@@ -180,7 +180,8 @@ ${bodyHtml}
 }
 
 // Renders an asset inline in the browser where it's safe to do so, same
-// requireAdmin guard as everything else in this file. Since assets accept
+// requirePermission("limona.documents.manage") guard as everything else in
+// this file. Since assets accept
 // ANY file type on upload (no restriction — see upload route above), this
 // route is a real security surface: every branch below is an explicit,
 // named case, and anything not explicitly named falls through to a plain

@@ -22,7 +22,7 @@ async function init() {
     return;
   }
   const me = await meRes.json();
-  if (me.user.role !== "admin") {
+  if (!me.user.permissions.includes("limona.answers.contribute")) {
     window.location.href = "/chat.html";
     return;
   }

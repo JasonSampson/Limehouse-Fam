@@ -5,7 +5,7 @@ export interface AuthedUser {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "member";
+  permissions: string[];
   status: "invited" | "active" | "disabled";
 }
 
@@ -31,8 +31,16 @@ function nameFromEmail(email: string): string {
 // All identity (userId, email) comes from the LimeHQ handoff token stored
 // in the signed session cookie. Limona no longer has its own users table.
 //
-// All LimeHQ-authenticated users are treated as "admin" in Limona — LimeHQ
-// already controls who can reach Limona via the limona.chat.access permission.
+// CHANGED [today]: every LimeHQ-authenticated user used to be hardcoded here
+// as role: "admin" — the comment used to justify this as "LimeHQ already
+// controls who can reach Limona via limona.chat.access," which is true for
+// getting in at all, but Limona has two further, real, owner/Admin-only
+// permissions (limona.documents.manage, limona.answers.contribute) that this
+// hardcoding silently made available to every single staff member regardless
+// of what LimeHQ actually granted them — a real bug, found 2026-09-02 when
+// Lea (invoices@limehousepm.com, the first non-owner hire with Limona
+// access) could see "Upload Document" despite not being Admin. permissions
+// now carries the real granted list straight from the LimeHQ handoff token.
 export async function attachUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const payload = verifySessionCookieValue(req.cookies?.[SESSION_COOKIE_NAME]);
   if (!payload) return next();
@@ -41,7 +49,7 @@ export async function attachUser(req: Request, _res: Response, next: NextFunctio
     id: payload.userId,
     email: payload.email,
     name: payload.name || nameFromEmail(payload.email),
-    role: "admin",
+    permissions: payload.permissions,
     status: "active",
   };
   next();
@@ -55,14 +63,19 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  if (!req.user) {
-    res.status(401).json({ error: "Not logged in." });
-    return;
-  }
-  if (req.user.role !== "admin") {
-    res.status(403).json({ error: "Admin access only." });
-    return;
-  }
-  next();
+// Replaces the old requireAdmin — every admin-only route now names the one
+// specific permission it needs rather than a single collapsed "admin" flag,
+// same pattern as Dashboard's requirePermission(key).
+export function requirePermission(key: string) {
+  return function (req: Request, res: Response, next: NextFunction): void {
+    if (!req.user) {
+      res.status(401).json({ error: "Not logged in." });
+      return;
+    }
+    if (!req.user.permissions.includes(key)) {
+      res.status(403).json({ error: "You don't have permission to do this." });
+      return;
+    }
+    next();
+  };
 }

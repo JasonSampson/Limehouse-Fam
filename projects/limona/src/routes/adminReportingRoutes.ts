@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
-import { requireAdmin } from "../auth/middleware.js";
+import { requirePermission } from "../auth/middleware.js";
 import { createTeamKnowledgeEntry } from "../services/teamKnowledgeService.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const adminReportingRoutes = Router();
-adminReportingRoutes.use(requireAdmin);
+adminReportingRoutes.use(requirePermission("limona.documents.manage"));
 
 // Reasonable simple cap for an internal tool with no pagination UI asked
 // for — "last 100" matches the approved spec exactly.

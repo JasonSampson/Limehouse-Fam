@@ -4,7 +4,7 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
-import { requireAdmin } from "../auth/middleware.js";
+import { requirePermission } from "../auth/middleware.js";
 import { ingestDocument, absoluteOriginalPath } from "../rag/ingest.js";
 import { extToSupportedExt } from "../rag/extractText.js";
 import { logError } from "../lib/logger.js";
@@ -12,7 +12,7 @@ import { asyncHandler } from "../lib/asyncHandler.js";
 import { upload } from "../lib/uploadConfig.js";
 
 export const adminDocumentRoutes = Router();
-adminDocumentRoutes.use(requireAdmin);
+adminDocumentRoutes.use(requirePermission("limona.documents.manage"));
 
 adminDocumentRoutes.get("/api/admin/documents", asyncHandler(async (req, res) => {
   const category = typeof req.query.category === "string" && req.query.category !== "" ? req.query.category : undefined;
@@ -276,7 +276,8 @@ ${bodyHtml}
 }
 
 // Renders a document inline in the browser instead of forcing a download —
-// same requireAdmin guard, same on-disk file the /download route reads, but
+// same requirePermission("limona.documents.manage") guard, same on-disk file
+// the /download route reads, but
 // branches on file_ext to decide how to render it since only pdf/txt/md can
 // be sent to the browser as-is.
 adminDocumentRoutes.get("/api/admin/documents/:id/preview", asyncHandler(async (req, res) => {

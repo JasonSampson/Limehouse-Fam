@@ -4,11 +4,11 @@ import type { Express } from "express";
 import { getTestPool } from "./testDb.js";
 
 // Mints a token shaped exactly like the real LimeHQ handoff JWT: signed with
-// the shared LIMEHQ_HANDOFF_SECRET, carrying { userId, email }. This is the
-// same secret/payload shape src/routes/authRoutes.ts verifies at
+// the shared LIMEHQ_HANDOFF_SECRET, carrying { userId, email, permissions }.
+// This is the same secret/payload shape src/routes/authRoutes.ts verifies at
 // POST /auth/limehq-callback (see verifySessionCookieValue in
 // src/auth/session.ts for what happens after).
-async function mintHandoffToken(userId: string, email: string): Promise<string> {
+async function mintHandoffToken(userId: string, email: string, permissions: string[]): Promise<string> {
   const secret = process.env.LIMEHQ_HANDOFF_SECRET;
   if (!secret) {
     throw new Error(
@@ -16,17 +16,26 @@ async function mintHandoffToken(userId: string, email: string): Promise<string> 
         "(same value the real .env.test uses for the LimeHQ handoff)."
     );
   }
-  return new SignJWT({ userId, email })
+  return new SignJWT({ userId, email, permissions })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("5m")
     .sign(new TextEncoder().encode(secret));
 }
 
+// CHANGED [today]: every LimeHQ-authenticated user used to be treated as
+// admin in Limona (see src/auth/middleware.ts's history), so every existing
+// call site here meant "log in as someone who can reach the admin routes."
+// Defaulting `permissions` to the full limona.* set preserves that for every
+// caller that doesn't care about the split; pass an explicit (possibly
+// narrower or empty) list to test a specific permission's gate.
+const FULL_LIMONA_PERMISSIONS = ["limona.chat.access", "limona.documents.manage", "limona.answers.contribute"];
+
 export interface TestLimeHqUser {
   id: number;
   email: string;
   displayName?: string | null;
+  permissions?: string[];
 }
 
 // Logs a supertest agent in through the REAL LimeHQ handoff flow (mint a
@@ -43,10 +52,10 @@ export interface TestLimeHqUser {
 // asked_by) resolve to something real in tests, the same way they would
 // against LimeHQ's actual table in production.
 //
-// Every LimeHQ-authenticated user is treated as admin in Limona today (see
-// src/auth/middleware.ts) — Jason is handling the finer-grained permission
-// split on the LimeHQ side separately — so this is the only kind of login
-// DB integration tests need right now.
+// Defaults to full admin-equivalent access (see FULL_LIMONA_PERMISSIONS
+// above) unless the caller passes a narrower `permissions` list — the
+// finer-grained limona.documents.manage/limona.answers.contribute split
+// landed [today] (src/auth/middleware.ts's requirePermission).
 export async function loginAsLimeHqUser(
   app: Express,
   user: TestLimeHqUser
@@ -58,7 +67,7 @@ export async function loginAsLimeHqUser(
     [user.id, user.email, user.displayName ?? null]
   );
 
-  const token = await mintHandoffToken(String(user.id), user.email);
+  const token = await mintHandoffToken(String(user.id), user.email, user.permissions ?? FULL_LIMONA_PERMISSIONS);
   const agent = request.agent(app);
   await agent.post("/auth/limehq-callback").send({ token });
   return agent;

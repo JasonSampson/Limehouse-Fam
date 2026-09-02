@@ -80,7 +80,7 @@ import {
 import { getCachedMetric, isCacheFresh } from "../db/metricCache.js";
 import { getLatestSnapshot, getSnapshotOnOrBefore } from "../db/googleReviewSnapshots.js";
 import { logError, logWarn } from "../lib/logger.js";
-import { requireLogin } from "../auth/session.js";
+import { requireLogin, requirePermission } from "../auth/session.js";
 
 // requireLogin applied per-route (not via dashboardRoutes.use()) — this
 // router is mounted at the app root with no path prefix, and a blanket
@@ -156,7 +156,7 @@ const periodSchema = periodEnumSchema.default("this_month");
 // themselves.
 const HISTORICAL_PERIODS = new Set(["last_month", "last_quarter", "last_year"]);
 
-dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, asyncHandler(async (req, res) => {
+dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (req, res) => {
   try {
     const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
@@ -223,7 +223,7 @@ dashboardRoutes.get("/api/dashboard/occupancy", requireLogin, asyncHandler(async
 // (across currently-tracked units) through the current month, plus a
 // by-year rollup and a same-month-last-year callout for the side panels
 // — same shape as the Rent Collection year-over-year panels.
-dashboardRoutes.get("/api/dashboard/occupancy-history", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/occupancy-history", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
@@ -249,7 +249,7 @@ dashboardRoutes.get("/api/dashboard/occupancy-history", requireLogin, asyncHandl
   }
 }));
 
-dashboardRoutes.get("/api/dashboard/lease-mix", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/lease-mix", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const activeLeases = await fetchActiveLeases();
     res.json(summarizeLeaseMix(activeLeases));
@@ -262,7 +262,7 @@ dashboardRoutes.get("/api/dashboard/lease-mix", requireLogin, asyncHandler(async
 // Avg Tenancy (Leasing Pipeline section) — STRUCTURAL, measured across
 // EVERY real tenant (past and current), not just today's active leases.
 // See src/kpi/tenancy.ts for the full derivation.
-dashboardRoutes.get("/api/dashboard/avg-tenancy", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/avg-tenancy", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const tenants = await fetchAllTenantsWithLeases();
     const rows = buildTenantStayRows(tenants, new Date());
@@ -274,7 +274,7 @@ dashboardRoutes.get("/api/dashboard/avg-tenancy", requireLogin, asyncHandler(asy
   }
 }));
 
-dashboardRoutes.get("/api/dashboard/delinquency", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/delinquency", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const balances = await fetchOutstandingBalances();
     res.json(summarizeDelinquency(balances));
@@ -285,7 +285,7 @@ dashboardRoutes.get("/api/dashboard/delinquency", requireLogin, asyncHandler(asy
 }));
 
 // Drill-down: property/unit/balance, sorted highest balance first.
-dashboardRoutes.get("/api/dashboard/delinquency/leases", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/delinquency/leases", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const [balances, properties, activeLeases] = await Promise.all([
       fetchOutstandingBalances(),
@@ -310,7 +310,7 @@ dashboardRoutes.get("/api/dashboard/delinquency/leases", requireLogin, asyncHand
 // derivation). Reads the SAME renewal_rate cache as /api/dashboard/
 // renewal-rate, filtered to outcome === "renewed" — so this tile's count
 // and Renewal Rate's own "N renewed" subtext can never disagree.
-dashboardRoutes.get("/api/dashboard/renewals", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/renewals", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("renewal_rate", "portfolio");
     if (!cached || cached.value === null) {
@@ -332,7 +332,7 @@ dashboardRoutes.get("/api/dashboard/renewals", requireLogin, asyncHandler(async 
 // yet" even though the tile right next to it is live. Reads the SAME
 // renewal_rate cache, bucketed by month — see monthlyRenewalCounts in
 // src/kpi/leaseRows.ts.
-dashboardRoutes.get("/api/dashboard/renewals/monthly", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/renewals/monthly", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("renewal_rate", "portfolio");
     if (!cached || cached.value === null) {
@@ -356,7 +356,7 @@ dashboardRoutes.get("/api/dashboard/renewals/monthly", requireLogin, asyncHandle
 // which needs one Buildium call per non-Past lease — same rate-limit
 // concern as Rent Collection/Security Deposit Withheld, so this reads a
 // cache populated by POST /api/sync/renewal-rate instead of computing live.
-dashboardRoutes.get("/api/dashboard/renewal-rate", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/renewal-rate", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("renewal_rate", "portfolio");
     if (!cached || cached.value === null) {
@@ -378,7 +378,7 @@ dashboardRoutes.get("/api/dashboard/renewal-rate", requireLogin, asyncHandler(as
 // Renewal Rate drill-down — the renewed/moved-out row list behind the
 // percentage above. Reads the same cache as /api/dashboard/renewal-rate so
 // the tile and its drill-down can never disagree.
-dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("renewal_rate", "portfolio");
     if (!cached || cached.value === null) {
@@ -402,7 +402,7 @@ dashboardRoutes.get("/api/dashboard/renewal-rate/leases", requireLogin, asyncHan
 // count is scoped to the currently-selected period (same period dropdown
 // every other flow tile on this dashboard uses) — a lease counts if ANY
 // of its flagged months falls inside the selected range.
-dashboardRoutes.get("/api/dashboard/financials/extended-grace", requireLogin, asyncHandler(async (req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/extended-grace", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (req, res) => {
   try {
     const cached = await getCachedMetric("extended_grace_late_payers", "portfolio");
     if (!cached || cached.value === null) {
@@ -427,7 +427,7 @@ dashboardRoutes.get("/api/dashboard/financials/extended-grace", requireLogin, as
 // lease, so a repeat offender (flagged in July, then September, then
 // January) shows up as one row listing every occurrence instead of
 // scattered across separate month-by-month views.
-dashboardRoutes.get("/api/dashboard/financials/extended-grace/list", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/extended-grace/list", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("extended_grace_late_payers", "portfolio");
     if (!cached || cached.value === null) {
@@ -457,7 +457,7 @@ dashboardRoutes.get("/api/dashboard/financials/extended-grace/list", requireLogi
 // other caller of fetchProperties() in this file already applies its own
 // `.filter((p) => p.IsActive === true)` before using the data (confirmed
 // by reading every call site), this route was the one that didn't.
-dashboardRoutes.get("/api/dashboard/properties", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/properties", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const properties = await fetchProperties();
     const activeProperties = properties.filter((p) => p.IsActive === true);
@@ -490,7 +490,7 @@ dashboardRoutes.get("/api/dashboard/properties", requireLogin, asyncHandler(asyn
 // with Jason this can't double-count against RentEngine's "Unknown"
 // bucket — a terminated property is never listed again, so RentEngine has
 // no record of it at all, not a mislabeled one.
-dashboardRoutes.get("/api/dashboard/property-health", requireLogin, asyncHandler(async (req, res) => {
+dashboardRoutes.get("/api/dashboard/property-health", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (req, res) => {
   try {
     const { from, to } = resolveDateRangeFromQuery(req.query.period);
     const [shared, excludedPropertyIds] = await Promise.all([
@@ -548,7 +548,7 @@ dashboardRoutes.get("/api/dashboard/property-health", requireLogin, asyncHandler
 // there's no history of past active/inactive flips to check it against).
 // Verified live: 2 doors lost (estimated) in the last 31 days, 26 in the
 // last 12 months — matches Oracle's numbers exactly.
-dashboardRoutes.get("/api/dashboard/doors", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/doors", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allProperties, rawLeases, owners, managedUnits] = await Promise.all([
       fetchProperties(),
@@ -658,7 +658,7 @@ dashboardRoutes.get("/api/dashboard/google-reviews", requireLogin, asyncHandler(
 // added" field — reuses the same ManagementAgreementStartDate signal
 // groupOwners already rolls up per real owner (earliestStart), same
 // pattern as Move-Ins' own period filter (moveInLeaseRows).
-dashboardRoutes.get("/api/dashboard/owners", requireLogin, asyncHandler(async (req, res) => {
+dashboardRoutes.get("/api/dashboard/owners", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (req, res) => {
   try {
     const owners = await fetchOwners();
     const activeGroups = groupOwners(owners).filter((g) => g.active);
@@ -692,7 +692,7 @@ dashboardRoutes.get("/api/dashboard/owners", requireLogin, asyncHandler(async (r
 // property is gone — but the properties actually LISTED here are
 // filtered to currently-active ones only, matching what the owner
 // genuinely still owns today.
-dashboardRoutes.get("/api/dashboard/owners/list", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/owners/list", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [owners, properties] = await Promise.all([fetchOwners(), fetchProperties()]);
     const activePropertyIds = new Set(properties.filter((p) => p.IsActive === true).map((p) => String(p.Id)));
@@ -741,7 +741,7 @@ dashboardRoutes.get("/api/dashboard/owners/list", requireLogin, asyncHandler(asy
 // cache-backed same as rent-collection — reads whatever the sync last
 // computed rather than running the Past-lease/transaction fetch live on
 // every page load.
-dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const activeLeases = await fetchActiveLeases();
     const baseSummary = summarizeRentAndDeposit(activeLeases);
@@ -795,7 +795,7 @@ dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit", requireLogin, 
 // Collection route was from doing this for every active lease on every
 // page load; this scope is far smaller and doesn't need the same
 // sync-job/cache treatment.
-dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const balances = await fetchOutstandingBalances();
     const delinquent = balances.filter((b) => b.balance > 0);
@@ -864,7 +864,7 @@ dashboardRoutes.get("/api/dashboard/financials/delinquency-aging", requireLogin,
 // yet (see renderFinancials in dashboard.js), and separately excludes the
 // in-progress month when building the 12-month CHART, which is meant to
 // keep showing only complete months, unchanged from before.
-dashboardRoutes.get("/api/dashboard/financials/rent-collection", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/rent-collection", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("rent_collection_extended", "portfolio");
     if (!cached || cached.value === null) {
@@ -919,7 +919,7 @@ dashboardRoutes.get("/api/dashboard/period-info", requireLogin, (req, res) => {
 // ============================================================================
 
 // Avg Rent/Lease drill-down.
-dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit/leases", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit/leases", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
     const rows = withPropertyAddress(rentLeaseRows(activeLeases), propertyAddressById(properties));
@@ -935,7 +935,7 @@ dashboardRoutes.get("/api/dashboard/financials/rent-and-deposit/leases", require
 // recompute — building this list requires a transaction fetch per
 // candidate lease, same rate-limit discipline as the rent-collection sync,
 // so it only ever runs during the scheduled/manual sync, never on page load.
-dashboardRoutes.get("/api/dashboard/financials/security-deposit-withheld/leases", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/financials/security-deposit-withheld/leases", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     const cached = await getCachedMetric("security_deposit_withheld", "portfolio");
     if (!cached || cached.value === null) {
@@ -957,7 +957,7 @@ dashboardRoutes.get("/api/dashboard/financials/security-deposit-withheld/leases"
 // CHANGED 2026-07-05: uses fetchActiveManagedUnits() (234 units, matches
 // the Total Units tile above) instead of fetchActiveResidentialUnits() —
 // see that route's comment for why.
-dashboardRoutes.get("/api/dashboard/units", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/units", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allUnits, activeLeases, properties, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
@@ -982,7 +982,7 @@ dashboardRoutes.get("/api/dashboard/units", requireLogin, asyncHandler(async (_r
 // CHANGED 2026-07-09: occupied now derived from Active-lease status
 // instead of Buildium's own IsUnitOccupied flag — see leaseRows.ts's
 // unitStatusRows comment for why (the flag lags real move-outs).
-dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allUnits, allLeases, properties, excludedPropertyIds] = await Promise.all([
       fetchActiveManagedUnits(),
@@ -1016,7 +1016,7 @@ dashboardRoutes.get("/api/dashboard/units/vacant", requireLogin, asyncHandler(as
 // with zero lease history on file is a genuine gap (no LeaseToDate to
 // measure from) and is excluded from the average rather than guessed,
 // same rule the Doors Lost estimate already follows.
-dashboardRoutes.get("/api/dashboard/avg-days-vacant", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/avg-days-vacant", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allUnits, allLeases, excludedPropertyIds] = await Promise.all([
       fetchActiveResidentialUnits(),
@@ -1032,7 +1032,7 @@ dashboardRoutes.get("/api/dashboard/avg-days-vacant", requireLogin, asyncHandler
   }
 }));
 
-dashboardRoutes.get("/api/dashboard/avg-days-vacant/units", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/avg-days-vacant/units", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allUnits, allLeases, properties, excludedPropertyIds] = await Promise.all([
       fetchActiveResidentialUnits(),
@@ -1049,7 +1049,7 @@ dashboardRoutes.get("/api/dashboard/avg-days-vacant/units", requireLogin, asyncH
 }));
 
 // Fixed-Term Leases / Month-to-Month drill-downs.
-dashboardRoutes.get("/api/dashboard/lease-mix/fixed-term", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/lease-mix/fixed-term", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
     res.json(withPropertyAddress(fixedTermLeaseRows(activeLeases), propertyAddressById(properties)));
@@ -1059,7 +1059,7 @@ dashboardRoutes.get("/api/dashboard/lease-mix/fixed-term", requireLogin, asyncHa
   }
 }));
 
-dashboardRoutes.get("/api/dashboard/lease-mix/month-to-month", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/lease-mix/month-to-month", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
     res.json(withPropertyAddress(monthToMonthLeaseRows(activeLeases), propertyAddressById(properties)));
@@ -1073,7 +1073,7 @@ dashboardRoutes.get("/api/dashboard/lease-mix/month-to-month", requireLogin, asy
 // Previously hardcoded to "Not connected yet" even though it's fully
 // computable from data already fetched elsewhere — same situation as Avg
 // Days Vacant above, just never wired up.
-dashboardRoutes.get("/api/dashboard/move-ins", requireLogin, asyncHandler(async (req, res) => {
+dashboardRoutes.get("/api/dashboard/move-ins", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (req, res) => {
   try {
     const { from, to } = resolveDateRangeFromQuery(req.query.period);
     const activeLeases = await fetchActiveLeases();
@@ -1089,7 +1089,7 @@ dashboardRoutes.get("/api/dashboard/move-ins", requireLogin, asyncHandler(async 
 // as LeadSimple — real, live Buildium data. See fetchPendingApplicants'
 // own comment for how "New + Undecided" was confirmed against the vendor's
 // real number.
-dashboardRoutes.get("/api/dashboard/apps-submitted", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/apps-submitted", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const applicants = await fetchPendingApplicants();
     res.json({ appsSubmitted: applicants.length });
@@ -1102,7 +1102,7 @@ dashboardRoutes.get("/api/dashboard/apps-submitted", requireLogin, asyncHandler(
 // Apps Submitted drill-down — ADDED 2026-07-12. Same applicant population
 // as the tile above; property address and unit number are resolved here
 // the same way every other drill-down on this dashboard already does.
-dashboardRoutes.get("/api/dashboard/apps-submitted/list", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/apps-submitted/list", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [applicants, properties, units] = await Promise.all([fetchPendingApplicants(), fetchProperties(), fetchAllUnits()]);
     const addressesByPropertyId = propertyAddressById(properties);
@@ -1127,7 +1127,7 @@ dashboardRoutes.get("/api/dashboard/apps-submitted/list", requireLogin, asyncHan
 // 5 years back. The per-unit /listing lookups are cheap here (only ~13
 // units are ever actually listed at once on this account), unlike
 // RentEngine's ~60-unit crawl elsewhere on this dashboard.
-dashboardRoutes.get("/api/dashboard/apps-per-move-in/list", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/apps-per-move-in/list", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allApplicants, allUnits, allLeases, properties, excludedPropertyIds, marketingProcessesResult] = await Promise.all([
       fetchAllApplicants(),
@@ -1193,7 +1193,7 @@ dashboardRoutes.get("/api/dashboard/apps-per-move-in/list", requireLogin, asyncH
   }
 }));
 
-dashboardRoutes.get("/api/dashboard/move-ins/leases", requireLogin, asyncHandler(async (req, res) => {
+dashboardRoutes.get("/api/dashboard/move-ins/leases", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (req, res) => {
   try {
     const { from, to } = resolveDateRangeFromQuery(req.query.period);
     const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
@@ -1205,7 +1205,7 @@ dashboardRoutes.get("/api/dashboard/move-ins/leases", requireLogin, asyncHandler
 }));
 
 // Evictions Pending drill-down.
-dashboardRoutes.get("/api/dashboard/evictions-pending", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/evictions-pending", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [activeLeases, properties] = await Promise.all([fetchActiveLeases(), fetchProperties()]);
     res.json(withPropertyAddress(evictionPendingLeaseRows(activeLeases), propertyAddressById(properties)));
@@ -1216,7 +1216,7 @@ dashboardRoutes.get("/api/dashboard/evictions-pending", requireLogin, asyncHandl
 }));
 
 // Avg Tenancy drill-down.
-dashboardRoutes.get("/api/dashboard/avg-tenancy/leases", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/avg-tenancy/leases", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [tenants, properties] = await Promise.all([fetchAllTenantsWithLeases(), fetchProperties()]);
     res.json(withPropertyAddress(buildTenantStayRows(tenants, new Date()), propertyAddressById(properties)));
@@ -1231,7 +1231,7 @@ dashboardRoutes.get("/api/dashboard/avg-tenancy/leases", requireLogin, asyncHand
 // to netDoorsRows (src/kpi/churn.ts) — see that function's comment for the
 // two bugs fixed there 2026-07-05 (missing future-date guard, and added/lost
 // using mismatched 90-day vs 12-month windows).
-dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allProperties, rawLeases, owners] = await Promise.all([
       fetchProperties(),
@@ -1258,7 +1258,7 @@ dashboardRoutes.get("/api/dashboard/net-doors/properties", requireLogin, asyncHa
 // itself (doorsAddedYTD) — see doorsAddedRows in churn.ts for why this is
 // scoped to YTD rather than the vendor's trailing-12-month daily-snapshot
 // approach.
-dashboardRoutes.get("/api/dashboard/doors-added/properties", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/doors-added/properties", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allProperties, allLeases, owners] = await Promise.all([fetchProperties(), fetchAllLeases(), fetchOwners()]);
     const activeProperties = allProperties.filter((p) => p.IsActive === true);
@@ -1277,7 +1277,7 @@ dashboardRoutes.get("/api/dashboard/doors-added/properties", requireLogin, async
 // Doors Lost drill-down — ADDED 2026-07-28, per Jason directly: same
 // year-to-date window as the Doors Lost/Churn tile's own doorsLostYTD /
 // churn badge, so the row count always matches what the tile shows.
-dashboardRoutes.get("/api/dashboard/doors-lost/properties", requireLogin, asyncHandler(async (_req, res) => {
+dashboardRoutes.get("/api/dashboard/doors-lost/properties", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     const [allProperties, rawLeases, owners] = await Promise.all([
       fetchProperties(),

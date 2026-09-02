@@ -8,7 +8,7 @@ import { getAllFinancialHistory } from "../db/financialHistory.js";
 import { getExcludedPropertyIds } from "../kpi/terminatedProperties.js";
 import { ACCOUNTING_BASIS } from "../buildium/financialHistorySync.js";
 import { logError } from "../lib/logger.js";
-import { requireLogin, requireAdmin } from "../auth/session.js";
+import { requireLogin, requirePermission } from "../auth/session.js";
 
 export const ceoViewRoutes = Router();
 
@@ -23,7 +23,7 @@ export const ceoViewRoutes = Router();
 // defaults to "this_quarter", unlike Dashboard/RentEngine's "this_month".
 const periodQuerySchema = periodEnumSchema.default("this_quarter");
 
-ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, asyncHandler(async (req, res) => {
+ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requirePermission("dashboard.ceo_view.view"), asyncHandler(async (req, res) => {
   const parsed = periodQuerySchema.safeParse(req.query.period);
   const period: PeriodKey = parsed.success ? parsed.data : "this_quarter";
   const snapshotLabel = periodToSnapshotLabel(period);
@@ -62,7 +62,7 @@ ceoViewRoutes.get("/api/ceo-view/roles", requireLogin, requireAdmin, asyncHandle
 // closed-out properties from the denominator (see
 // src/kpi/terminatedProperties.ts) — those units aren't earning anything
 // right now, so counting them here understated revenue per door.
-ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
+ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requirePermission("dashboard.ceo_view.view"), asyncHandler(async (_req, res) => {
   try {
     const [monthlyHistory, allUnits, excludedPropertyIds] = await Promise.all([
       getAllFinancialHistory(ACCOUNTING_BASIS),
@@ -106,7 +106,7 @@ ceoViewRoutes.get("/api/ceo-view/income", requireLogin, requireAdmin, asyncHandl
 // Buildium call already used for Reconciliation Accuracy (src/kpi/
 // bookkeeperMetrics.ts) — no new data source, just a different view of it.
 // Alphabetical, matching the confirmed vendor order used there.
-ceoViewRoutes.get("/api/ceo-view/account-balances", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
+ceoViewRoutes.get("/api/ceo-view/account-balances", requireLogin, requirePermission("dashboard.ceo_view.view"), asyncHandler(async (_req, res) => {
   try {
     const accounts = await fetchBankAccounts();
     const rows = accounts

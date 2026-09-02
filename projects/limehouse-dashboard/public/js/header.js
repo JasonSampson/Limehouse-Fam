@@ -68,9 +68,13 @@ function renderHeader(activeTab) {
   renderAdminOnlyTabs(activeTab);
 }
 
-// Team Performance and CEO View are Admin-only — Staff-role users should
-// not even see a disabled link to a page they can't open, so these are
-// appended only after /api/me confirms the role, not hidden via CSS.
+// Team Performance and CEO View each need their own specific LimeHQ
+// permission — someone without the link shouldn't even see a disabled link
+// to a page they can't open, so these are appended only after /api/me
+// confirms the person actually holds that page's key, not hidden via CSS.
+// CHANGED [today]: used to be one combined "role === admin" check gating
+// both links together; each now checks its own permission independently, so
+// someone granted only one of the two sees only that one link.
 // Manage Staff REMOVED 2026-07-19, per Jason directly — staff accounts and
 // access are now managed centrally in LimeHQ's own "Staff & Permissions"
 // screen instead of a separate one here.
@@ -79,16 +83,17 @@ async function renderAdminOnlyTabs(activeTab) {
     const me = await apiGet("/api/me");
     const homeLink = document.getElementById("limehq-home-link");
     if (homeLink && me.limehqUrl) homeLink.href = me.limehqUrl + "/launcher";
-    if (me.role !== "admin") return;
+    const permissions = me.permissions || [];
 
     const tabs = document.getElementById("app-tabs");
-    tabs.insertAdjacentHTML(
-      "beforeend",
-      `
-      <a href="/team-performance.html" class="${activeTab === "team" ? "active" : ""}">Team Performance</a>
-      <a href="/ceo-view.html" class="${activeTab === "ceo" ? "active" : ""}">CEO View</a>
-    `
-    );
+    let html = "";
+    if (permissions.includes("dashboard.team_performance.view")) {
+      html += `<a href="/team-performance.html" class="${activeTab === "team" ? "active" : ""}">Team Performance</a>`;
+    }
+    if (permissions.includes("dashboard.ceo_view.view")) {
+      html += `<a href="/ceo-view.html" class="${activeTab === "ceo" ? "active" : ""}">CEO View</a>`;
+    }
+    if (html) tabs.insertAdjacentHTML("beforeend", html);
   } catch (err) {
     // Not signed in (shouldn't happen — the server redirects to LimeHQ's
     // handoff login first) or /api/me failed; either way, just leave

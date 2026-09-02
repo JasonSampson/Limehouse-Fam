@@ -11,7 +11,7 @@ import { syncRoutes } from "./api/syncRoutes.js";
 import { rentEngineRoutes } from "./api/rentEngineRoutes.js";
 import { authRoutes } from "./api/authRoutes.js";
 import { getSessionUser } from "./auth/session.js";
-import { normalizePath, isGatedHtmlRequest, isAdminOnlyPage } from "./auth/staticPageGate.js";
+import { normalizePath, isGatedHtmlRequest, requiredPermissionForPage } from "./auth/staticPageGate.js";
 import { logInfo, logError } from "./lib/logger.js";
 import { startScheduledCacheRefresh } from "./jobs/scheduler.js";
 
@@ -73,9 +73,11 @@ app.use(async (req, res, next) => {
   }
 
   // Quieter than letting the page load and having its API calls fail with
-  // 403s — a Staff-role user who navigates straight to an Admin-only page
-  // just lands back on their own Dashboard instead of a broken page.
-  if (user.role !== "admin" && isAdminOnlyPage(effectivePath)) {
+  // 403s — someone who navigates straight to a page they don't hold the
+  // permission for just lands back on their own Dashboard instead of a
+  // broken page.
+  const requiredPermission = requiredPermissionForPage(effectivePath);
+  if (requiredPermission && !user.permissions.includes(requiredPermission)) {
     res.redirect("/index.html");
     return;
   }

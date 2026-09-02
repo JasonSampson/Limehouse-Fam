@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../lib/asyncHandler.js";
-import { requireLogin, requireAdmin } from "../auth/session.js";
+import { requireLogin, requirePermission } from "../auth/session.js";
 import { getScoredRoles } from "../db/kpiRepository.js";
 import { periodToSnapshotLabel, resolvePeriod, quarterLabelToDateRange, periodEnumSchema, type PeriodKey } from "../kpi/period.js";
 import { logError } from "../lib/logger.js";
@@ -77,7 +77,7 @@ const QUARTER_LABEL_PATTERN = /^\d{4}-Q[1-4]$/;
 // correctly lands on the REAL current quarter via periodToSnapshotLabel)
 // when no explicit quarter is given, so the page still defaults sensibly
 // on first load.
-teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requireAdmin, asyncHandler(async (req, res) => {
+teamPerformanceRoutes.get("/api/team-performance/roles", requireLogin, requirePermission("dashboard.team_performance.view"), asyncHandler(async (req, res) => {
   try {
     const quarterParam = req.query.quarter;
     let snapshotLabel: string;
@@ -191,7 +191,7 @@ const KPI_EXPLAIN_FORMULAS: Record<string, string> = {
 // no stored historical record set to read instead — but the date WINDOW
 // passed into each calculation is now at least the real quarter's bounds
 // instead of an unrelated one.
-teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requireAdmin, asyncHandler(async (req, res) => {
+teamPerformanceRoutes.get("/api/team-performance/kpi-explain/:kpiName", requireLogin, requirePermission("dashboard.team_performance.view"), asyncHandler(async (req, res) => {
   const kpiName = req.params.kpiName;
   const formula = KPI_EXPLAIN_FORMULAS[kpiName];
   if (!formula) {

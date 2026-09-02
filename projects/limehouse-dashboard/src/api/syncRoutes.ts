@@ -27,7 +27,7 @@ import {
 import { securityDepositWithheldRows } from "../kpi/leaseRows.js";
 import { syncCallActivityForPeriod } from "../rentengine/callActivitySync.js";
 import { logError, logInfo } from "../lib/logger.js";
-import { requireLogin, requireAdmin } from "../auth/session.js";
+import { requireLogin, requirePermission } from "../auth/session.js";
 import { syncFinancialHistory } from "../buildium/financialHistorySync.js";
 import { fetchLeaseRenewalProcesses } from "../leadsimple/client.js";
 import { findTerminatingCandidates, matchCandidatesToActiveProperties, isStillExcluded } from "../kpi/terminatedProperties.js";
@@ -191,7 +191,7 @@ syncRoutes.post("/api/sync/now", requireLogin, asyncHandler(async (_req, res) =>
 // in src/jobs/cacheRefreshJobs.ts so the automatic scheduler (scheduler.ts)
 // and this manual "sync now" button call the exact same implementation —
 // this route is now just the HTTP wrapper around it.
-syncRoutes.post("/api/sync/rent-collection", requireLogin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/rent-collection", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     await refreshRentCollectionCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -214,7 +214,7 @@ syncRoutes.post("/api/sync/rent-collection", requireLogin, asyncHandler(async (_
 // REFACTORED 2026-07-18: actual work moved to
 // refreshSecurityDepositWithheldCache in src/jobs/cacheRefreshJobs.ts — see
 // the rent-collection route above for why.
-syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     await refreshSecurityDepositWithheldCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -240,7 +240,7 @@ syncRoutes.post("/api/sync/security-deposit-withheld", requireLogin, asyncHandle
 // REFACTORED 2026-07-18: actual work moved to refreshRenewalRateCache in
 // src/jobs/cacheRefreshJobs.ts — see the rent-collection route above for
 // why.
-syncRoutes.post("/api/sync/renewal-rate", requireLogin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/renewal-rate", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   try {
     await refreshRenewalRateCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -254,7 +254,7 @@ syncRoutes.post("/api/sync/renewal-rate", requireLogin, asyncHandler(async (_req
 
 // Extended Grace (Financials section) — ADDED 2026-07-29, per Jason
 // directly. See src/kpi/extendedNoticeTracking.ts for the full derivation.
-syncRoutes.post("/api/sync/extended-grace", requireLogin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/extended-grace", requireLogin, requirePermission("dashboard.financials.view"), asyncHandler(async (_req, res) => {
   try {
     await refreshExtendedGraceCache();
     res.json({ ok: true, syncedAt: new Date().toISOString() });
@@ -284,7 +284,7 @@ syncRoutes.post("/api/sync/google-reviews", requireLogin, asyncHandler(async (_r
 // candidates LeadSimple identifies first (one Lease Renewal process fetch,
 // then per-property checks only for the handful still flagged), not run
 // across the whole 234-property portfolio.
-syncRoutes.post("/api/sync/terminated-properties", requireLogin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/terminated-properties", requireLogin, requirePermission("dashboard.occupancy.view"), asyncHandler(async (_req, res) => {
   if (!isLeadSimpleConnected()) {
     res.status(409).json({ error: "LeadSimple is not connected." });
     return;
@@ -383,7 +383,7 @@ syncRoutes.post("/api/sync/terminated-properties", requireLogin, asyncHandler(as
 // scheduler calls it unconditionally on a timer; this route still checks
 // both up front so a manual click gets an honest, specific 409 instead of
 // a silent no-op "success."
-syncRoutes.post("/api/sync/call-activity", requireLogin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/call-activity", requireLogin, requirePermission("dashboard.marketing_showings.view"), asyncHandler(async (_req, res) => {
   if (!isRentEngineConnected()) {
     res.status(409).json({ error: "RentEngine is not connected." });
     return;
@@ -423,7 +423,7 @@ syncRoutes.post("/api/sync/call-activity", requireLogin, asyncHandler(async (_re
 // team-performance-kpis route below, but it exists solely to feed CEO
 // View's Admin-only income charts, so its trigger having a lower bar than
 // the page it serves was still an inconsistency worth closing.
-syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/financial-history", requireLogin, requirePermission("dashboard.ceo_view.view"), asyncHandler(async (_req, res) => {
   const syncLogId = await startSyncRun("buildium", "financial_history_sync");
   try {
     const result = await syncFinancialHistory();
@@ -463,7 +463,7 @@ syncRoutes.post("/api/sync/financial-history", requireLogin, requireAdmin, async
 // route directly with their own valid session and read every other
 // staff member's current performance numbers, defeating the entire
 // Admin-only gate documented on the page routes themselves.
-syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, requireAdmin, asyncHandler(async (_req, res) => {
+syncRoutes.post("/api/sync/team-performance-kpis", requireLogin, requirePermission("dashboard.team_performance.view"), asyncHandler(async (_req, res) => {
   try {
     const summary = await runTeamPerformanceKpisSync();
     res.json({ ok: true, syncedAt: new Date().toISOString(), ...summary });

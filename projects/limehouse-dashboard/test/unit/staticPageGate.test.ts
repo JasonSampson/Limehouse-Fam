@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizePath, isGatedHtmlRequest, isAdminOnlyPage } from "../../src/auth/staticPageGate.js";
+import { normalizePath, isGatedHtmlRequest, requiredPermissionForPage } from "../../src/auth/staticPageGate.js";
 
 // Exercises the real gate-normalization logic from src/server.ts (extracted
 // into src/auth/staticPageGate.ts so it's importable) rather than a
@@ -44,20 +44,19 @@ describe("isGatedHtmlRequest", () => {
   });
 });
 
-describe("isAdminOnlyPage", () => {
-  it("recognizes both admin-only pages once normalized", () => {
-    for (const page of ["/team-performance.html", "/ceo-view.html"]) {
-      expect(isAdminOnlyPage(page)).toBe(true);
-    }
+describe("requiredPermissionForPage", () => {
+  it("maps each gated page to its own specific permission once normalized", () => {
+    expect(requiredPermissionForPage("/team-performance.html")).toBe("dashboard.team_performance.view");
+    expect(requiredPermissionForPage("/ceo-view.html")).toBe("dashboard.ceo_view.view");
   });
 
-  it("does not flag the shared dashboard as admin-only", () => {
-    expect(isAdminOnlyPage("/index.html")).toBe(false);
+  it("does not gate the shared dashboard", () => {
+    expect(requiredPermissionForPage("/index.html")).toBeNull();
   });
 });
 
 describe("end-to-end normalization (case + percent-encoding combined)", () => {
-  it("catches every known bypass variant of both admin pages", () => {
+  it("catches every known bypass variant of both gated pages", () => {
     const bypassAttempts = [
       "/ceo-view%2ehtml",
       "/CEO-VIEW%2EHTML",
@@ -69,7 +68,7 @@ describe("end-to-end normalization (case + percent-encoding combined)", () => {
       const normalized = normalizePath(attempt);
       expect(normalized).not.toBeNull();
       expect(isGatedHtmlRequest(normalized as string)).toBe(true);
-      expect(isAdminOnlyPage(normalized as string)).toBe(true);
+      expect(requiredPermissionForPage(normalized as string)).not.toBeNull();
     }
   });
 });

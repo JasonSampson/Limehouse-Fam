@@ -9,7 +9,7 @@ process.env.ENTRA_CLIENT_ID = "test-client";
 process.env.ENTRA_CLIENT_SECRET = "test-client-secret";
 process.env.ENTRA_REDIRECT_URI = "https://localhost:3100/auth/callback";
 
-const { issueSession, getSessionUser, requireLogin, requireAdmin, SESSION_COOKIE_NAME } = await import(
+const { issueSession, getSessionUser, requireLogin, requirePermission, SESSION_COOKIE_NAME } = await import(
   "../../src/auth/session.js"
 );
 
@@ -44,13 +44,13 @@ describe("getSessionUser", () => {
     expect(result).toBeNull();
   });
 
-  it("returns the decoded id/role for a token issued by issueSession", async () => {
+  it("returns the decoded id/permissions for a token issued by issueSession", async () => {
     const res = fakeRes();
-    await issueSession(res as any, { id: 42, role: "admin" });
+    await issueSession(res as any, { id: 42, permissions: ["dashboard.ceo_view.view"] });
     const token = res._cookies[SESSION_COOKIE_NAME];
 
     const result = await getSessionUser(fakeReqWithCookie(token));
-    expect(result).toEqual({ id: 42, role: "admin" });
+    expect(result).toEqual({ id: 42, permissions: ["dashboard.ceo_view.view"] });
   });
 });
 
@@ -68,7 +68,7 @@ describe("requireLogin", () => {
 
   it("attaches req.user and calls next for a valid session", async () => {
     const res = fakeRes();
-    await issueSession(res as any, { id: 7, role: "staff" });
+    await issueSession(res as any, { id: 7, permissions: ["dashboard.financials.view"] });
     const token = res._cookies[SESSION_COOKIE_NAME];
 
     const req = fakeReqWithCookie(token);
@@ -76,28 +76,28 @@ describe("requireLogin", () => {
     await requireLogin(req, res as any, next);
 
     expect(next).toHaveBeenCalled();
-    expect(req.user).toEqual({ id: 7, role: "staff" });
+    expect(req.user).toEqual({ id: 7, permissions: ["dashboard.financials.view"] });
   });
 });
 
-describe("requireAdmin", () => {
-  it("responds 403 and does not call next for a staff-role session", () => {
-    const req = { user: { id: 7, role: "staff" } } as any;
+describe("requirePermission", () => {
+  it("responds 403 and does not call next when the session lacks the key", () => {
+    const req = { user: { id: 7, permissions: ["dashboard.financials.view"] } } as any;
     const res = fakeRes();
     const next = vi.fn();
 
-    requireAdmin(req, res as any, next);
+    requirePermission("dashboard.ceo_view.view")(req, res as any, next);
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("calls next for an admin-role session", () => {
-    const req = { user: { id: 1, role: "admin" } } as any;
+  it("calls next when the session holds the key", () => {
+    const req = { user: { id: 1, permissions: ["dashboard.ceo_view.view"] } } as any;
     const res = fakeRes();
     const next = vi.fn();
 
-    requireAdmin(req, res as any, next);
+    requirePermission("dashboard.ceo_view.view")(req, res as any, next);
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();

@@ -9,9 +9,16 @@ import { loadEnv } from "../config/env.js";
 // indefinite" expectation from the old mechanism.
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
 
+// `permissions` is the real, live list of dashboard.* keys LimeHQ granted
+// this person at the moment they signed in — see src/api/authRoutes.ts's
+// /auth/limehq-callback, which copies it straight out of the LimeHQ handoff
+// token rather than looking anything up locally. There is no local "role"
+// anymore: LimeHQ's Roles/Staff & Permissions pages are the one place access
+// is set, and every gate in this app checks a specific key from this list
+// instead of a single admin/staff bucket.
 export interface StaffUser {
   id: number;
-  role: "admin" | "staff";
+  permissions: string[];
 }
 
 function getSecretKey(): Uint8Array {
@@ -20,7 +27,7 @@ function getSecretKey(): Uint8Array {
 }
 
 async function createSessionToken(user: StaffUser): Promise<string> {
-  return new SignJWT({ id: user.id, role: user.role })
+  return new SignJWT({ id: user.id, permissions: user.permissions })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
@@ -29,7 +36,10 @@ async function createSessionToken(user: StaffUser): Promise<string> {
 
 async function verifySessionToken(token: string): Promise<StaffUser> {
   const { payload } = await jwtVerify(token, getSecretKey());
-  return { id: payload.id as number, role: payload.role as "admin" | "staff" };
+  return {
+    id: payload.id as number,
+    permissions: Array.isArray(payload.permissions) ? (payload.permissions as string[]) : [],
+  };
 }
 
 export const SESSION_COOKIE_NAME = "lh_session";
@@ -80,11 +90,20 @@ export async function requireLogin(req: AuthedRequest, res: Response, next: Next
   next();
 }
 
-// Must run after requireLogin — relies on req.user already being set.
-export function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction): void {
-  if (req.user?.role !== "admin") {
-    res.status(403).json({ error: "Admin access required." });
-    return;
-  }
-  next();
+// Must run after requireLogin — relies on req.user already being set. Every
+// section of the dashboard (Financials, Occupancy & Doors, Marketing &
+// Showings, CEO View, Team Performance) is gated by its own specific
+// dashboard.* permission key, checked here directly against the list LimeHQ
+// granted at sign-in — see StaffUser above. Nobody is special-cased: the
+// Owner sees every section only because getEffectivePermissions() on the
+// LimeHQ side already returns every key for the Owner role, the same way it
+// does for any fully-permissioned account.
+export function requirePermission(key: string) {
+  return function (req: AuthedRequest, res: Response, next: NextFunction): void {
+    if (!req.user?.permissions.includes(key)) {
+      res.status(403).json({ error: "You don't have permission to view this." });
+      return;
+    }
+    next();
+  };
 }

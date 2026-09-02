@@ -134,6 +134,15 @@ export async function getEffectivePermissions(userId: number): Promise<string[]>
   return Array.from(effectiveKeys).sort();
 }
 
+// Used by the launcher tile and the /handoff gate for apps (like Dashboard)
+// whose access isn't one single permission but a family of them
+// ("dashboard.*") — the person should get in if they hold ANY permission in
+// that family, and the app itself decides what each specific one unlocks.
+export async function hasAnyPermissionWithPrefix(userId: number, prefix: string): Promise<boolean> {
+  const keys = await getEffectivePermissions(userId);
+  return keys.some((key) => key.startsWith(prefix));
+}
+
 // Any route that modifies or deletes a role_template must call this first.
 // Throws a 403 ApiError if the target role carries system_role_key = 'owner'.
 export function assertNotOwnerRole(systemRoleKey: string | null): void {

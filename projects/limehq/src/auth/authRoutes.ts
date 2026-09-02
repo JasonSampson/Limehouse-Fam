@@ -11,7 +11,7 @@ import {
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
 } from "./session.js";
-import { getUserWithRole, getEffectivePermissions, hasPermission } from "./permissions.js";
+import { getUserWithRole, getEffectivePermissions, hasPermission, hasAnyPermissionWithPrefix } from "./permissions.js";
 import { requireSession } from "./requireSession.js";
 import { createHandoffToken } from "./handoffToken.js";
 import { ApiError } from "../lib/apiError.js";
@@ -254,13 +254,22 @@ const KNOWN_APPS: Record<string, (env: ReturnType<typeof loadEnv>) => string | u
 // permission only hid their launcher tile — it never stopped them from
 // requesting /auth/handoff?app=<app> directly and getting a fully valid
 // login token anyway. Owner bypass needs no special-casing here:
-// hasPermission() already returns true unconditionally for
-// system_role_key === "owner".
+// hasPermission()/hasAnyPermissionWithPrefix() already return true
+// unconditionally for system_role_key === "owner".
 const APP_PERMISSION_KEYS: Record<string, string> = {
   late_rent_notices: "late_rent_notices.notices.view",
-  dashboard: "dashboard.financials.view",
   limona: "limona.chat.access",
 };
+
+// Dashboard doesn't gate on one fixed permission — it's six independent
+// dashboard.* keys (Financials, Occupancy, Marketing & Showings, Drilldowns,
+// CEO View, Team Performance), each unlocking its own section, set on the
+// Roles/Staff & Permissions pages like any other permission. Entry only
+// requires holding at least one of them; which sections actually render is
+// decided by Dashboard itself from the real granted list carried in the
+// handoff token below — see getEffectivePermissions' role-baseline +
+// personal-override merge for where that list comes from.
+const DASHBOARD_PERMISSION_PREFIX = "dashboard.";
 
 router.get("/handoff", requireSession, async (req, res, next) => {
   try {
@@ -278,12 +287,21 @@ router.get("/handoff", requireSession, async (req, res, next) => {
       throw new ApiError(503, `Target URL for '${app}' is not configured`);
     }
 
-    const allowed = await hasPermission(req.user.userId, APP_PERMISSION_KEYS[app]!);
-    if (!allowed) {
-      throw new ApiError(403, `You don't have access to ${app}.`);
+    let permissions: string[] = [];
+    if (app === "dashboard") {
+      const allEffective = await getEffectivePermissions(req.user.userId);
+      permissions = allEffective.filter((key) => key.startsWith(DASHBOARD_PERMISSION_PREFIX));
+      if (permissions.length === 0) {
+        throw new ApiError(403, `You don't have access to ${app}.`);
+      }
+    } else {
+      const allowed = await hasPermission(req.user.userId, APP_PERMISSION_KEYS[app]!);
+      if (!allowed) {
+        throw new ApiError(403, `You don't have access to ${app}.`);
+      }
     }
 
-    const token = await createHandoffToken(req.user.userId, req.user.email, req.user.displayName);
+    const token = await createHandoffToken(req.user.userId, req.user.email, req.user.displayName, permissions);
     // POST the token via a hidden form so it never appears in server logs or
     // the browser's URL bar (BLOCKER 4 — handoff token must not be a query param).
     // targetBase comes from our own env config; token is a JWT we just signed —

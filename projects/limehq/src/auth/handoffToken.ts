@@ -10,8 +10,18 @@ function getHandoffKey(): Uint8Array {
   return new TextEncoder().encode(loadEnv().HANDOFF_TOKEN_SECRET);
 }
 
-export async function createHandoffToken(userId: number, email: string, name: string): Promise<string> {
-  return new SignJWT({ userId, email, name })
+// `permissions` is scoped to whatever the target app actually needs — the
+// /handoff route passes the caller's real dashboard.* keys for app=dashboard
+// and an empty array for apps that don't consume per-permission access yet
+// (late_rent_notices, limona), so a token never carries more than its
+// destination app has any use for.
+export async function createHandoffToken(
+  userId: number,
+  email: string,
+  name: string,
+  permissions: string[] = [],
+): Promise<string> {
+  return new SignJWT({ userId, email, name, permissions })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${HANDOFF_TTL_SECONDS}s`)
@@ -20,7 +30,12 @@ export async function createHandoffToken(userId: number, email: string, name: st
 
 export async function verifyHandoffToken(
   token: string,
-): Promise<{ userId: number; email: string; name: string }> {
+): Promise<{ userId: number; email: string; name: string; permissions: string[] }> {
   const { payload } = await jwtVerify(token, getHandoffKey());
-  return { userId: payload.userId as number, email: payload.email as string, name: payload.name as string };
+  return {
+    userId: payload.userId as number,
+    email: payload.email as string,
+    name: payload.name as string,
+    permissions: Array.isArray(payload.permissions) ? (payload.permissions as string[]) : [],
+  };
 }

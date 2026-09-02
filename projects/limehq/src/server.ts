@@ -16,7 +16,7 @@ import { SESSION_COOKIE_NAME } from "./auth/session.js";
 import { accountRouter } from "./auth/accountRoutes.js";
 import { totpRouter } from "./auth/totpRoutes.js";
 import { recoveryRouter } from "./auth/recoveryRoutes.js";
-import { hasPermission } from "./auth/permissions.js";
+import { hasPermission, hasAnyPermissionWithPrefix } from "./auth/permissions.js";
 import { getAppPool } from "./db/pool.js";
 
 const env = loadEnv();
@@ -150,7 +150,7 @@ app.get(
         "SELECT display_name FROM users WHERE id = $1",
         [req.user.userId],
       ),
-      hasPermission(req.user.userId, "dashboard.financials.view"),
+      hasAnyPermissionWithPrefix(req.user.userId, "dashboard."),
       hasPermission(req.user.userId, "limona.chat.access"),
       hasPermission(req.user.userId, "late_rent_notices.notices.view"),
       hasPermission(req.user.userId, "limehq.staff_management.view"),

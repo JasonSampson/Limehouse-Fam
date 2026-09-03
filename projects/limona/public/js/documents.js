@@ -29,6 +29,8 @@ async function init() {
   // render()/renderCategorySection() below); the backend independently
   // rejects those actions for anyone without the permission regardless.
   window.canManageDocuments = me.user.permissions.includes("limona.documents.manage");
+  const uploadLink = document.getElementById("upload-new-link");
+  if (uploadLink && !window.canManageDocuments) uploadLink.style.display = "none";
 
   renderSidebar({ activePage: "/documents.html", user: me.user });
 

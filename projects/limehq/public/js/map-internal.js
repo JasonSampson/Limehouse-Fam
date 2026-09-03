@@ -18,6 +18,13 @@
     { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#2c6f9b" }] },
     { featureType: "landscape", elementType: "geometry", stylers: [{ color: "#eef3f7" }] },
     { featureType: "poi", elementType: "geometry", stylers: [{ color: "#dde8ea" }] },
+    // FIXED [today], per Jason directly: the styling above only ever
+    // recolored POI geometry — it never touched the icon/label layer, so
+    // every restaurant/business marker Google shows by default was still
+    // rendering on top, cluttering the map. This turns those off while
+    // leaving park shading (poi.park below) alone.
+    { featureType: "poi", elementType: "labels.icon", stylers: [{ visibility: "off" }] },
+    { featureType: "poi", elementType: "labels.text", stylers: [{ visibility: "off" }] },
     { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#d5e8d4" }] },
     { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
     { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#fafcfd" }] },
@@ -99,9 +106,14 @@
         ? `<div class="unit-detail-row">Lease: ${esc(fmtDate(u.leaseFrom) || "?")} – ${esc(fmtDate(u.leaseTo) || "open-ended")}</div>`
         : "";
 
+    // FIXED [today], per Jason directly: t.phone comes straight from
+    // Buildium already formatted with its own parentheses (e.g.
+    // "(757) 555-0100" — see src/map/mapQueries.ts, no formatting applied
+    // here or anywhere upstream), so wrapping it in a second pair produced
+    // "Name ((757) 555-0100)". It's shown as-is now, just space-separated.
     const tenantsLine = u.tenants && u.tenants.length
       ? `<div class="unit-detail-row">${u.tenants
-          .map((t) => esc(t.fullName) + (t.phone ? " (" + esc(t.phone) + ")" : ""))
+          .map((t) => esc(t.fullName) + (t.phone ? " " + esc(t.phone) : ""))
           .join(", ")}</div>`
       : !u.isVacant
         ? `<div class="unit-detail-row" style="color:#999">No tenant on file</div>`
@@ -315,11 +327,24 @@
       componentRestrictions: { country: "us" },
       fields: ["geometry"],
     });
+    // FIXED [today], per Jason directly: this used to only pan/zoom the map,
+    // landing on the general area with nothing marking the actual searched
+    // point. Google's default red pin (deliberately NOT the house icon
+    // property markers use below, so a search result is never mistaken for
+    // a tracked property) now drops right on it, and a tighter zoom (17,
+    // building-level) pinpoints it rather than just the neighborhood.
+    let searchMarker = null;
     autocomplete.addListener("place_changed", () => {
       const place = autocomplete.getPlace();
       if (place.geometry && place.geometry.location) {
         map.setCenter(place.geometry.location);
-        map.setZoom(15);
+        map.setZoom(17);
+        if (searchMarker) searchMarker.setMap(null);
+        searchMarker = new google.maps.Marker({
+          position: place.geometry.location,
+          map,
+          animation: google.maps.Animation.DROP,
+        });
       }
     });
 
@@ -359,17 +384,22 @@
         clearMarkers();
         json.properties.forEach((property) => {
           const flagged = Boolean(property.exclusion);
+          // CHANGED [today], per Jason directly: the plain green/gray circle
+          // is now the real LimeHousePM icon (public/images/map-pin-icon.png),
+          // same ~20px footprint the circle used (scale 8 + a 2px stroke).
+          // A flat icon image can't swap fill color the way the vector CIRCLE
+          // symbol did, so the flagged/excluded distinction is now carried by
+          // Marker's own `opacity` instead — full color for a tracked
+          // property, faded for one excluded from tracking.
           const marker = new google.maps.Marker({
             position: { lat: property.latitude, lng: property.longitude },
             map,
             title: property.addressLine1,
+            opacity: flagged ? 0.45 : 1,
             icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: flagged ? "#aaaaaa" : "#74b62e",
-              fillOpacity: 1,
-              strokeColor: "#ffffff",
-              strokeWeight: 2,
+              url: "/images/map-pin-icon.png",
+              scaledSize: new google.maps.Size(22, 21),
+              anchor: new google.maps.Point(11, 10.5),
             },
           });
           marker.addListener("click", () => openPopupFor(property, marker));

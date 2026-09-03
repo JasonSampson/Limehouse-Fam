@@ -6,8 +6,13 @@ import { createTeamKnowledgeEntry } from "../services/teamKnowledgeService.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
+// FIXED [today]: was a blanket router.use(requirePermission(...)) with no
+// path scoping, which intercepts every request reaching this router
+// regardless of whether it matches a route defined here — see
+// adminDashboardRoutes.ts's comment for the full explanation and the real
+// bug this caused. Applied per-route below instead.
 export const adminReportingRoutes = Router();
-adminReportingRoutes.use(requirePermission("limona.documents.manage"));
+const manage = requirePermission("limona.documents.manage");
 
 // Reasonable simple cap for an internal tool with no pagination UI asked
 // for — "last 100" matches the approved spec exactly.
@@ -22,7 +27,7 @@ const RECENT_QUESTIONS_LIMIT = 100;
 // if the asking account can't be matched (e.g. pre-migration history, or a
 // LimeHQ account since deleted); COALESCE falls back to email when a LimeHQ
 // account has no display_name set.
-adminReportingRoutes.get("/api/admin/reporting/recent-questions", asyncHandler(async (_req, res) => {
+adminReportingRoutes.get("/api/admin/reporting/recent-questions", manage, asyncHandler(async (_req, res) => {
   const result = await getPool().query(
     `
     SELECT cq.id, cq.question, cq.answered, cq.created_at,
@@ -40,7 +45,7 @@ adminReportingRoutes.get("/api/admin/reporting/recent-questions", asyncHandler(a
 // Removes a single question from the Recent Questions log — a real,
 // permanent delete of that one chat_queries row (same "actually delete"
 // behavior as Clear Log, just scoped to one row instead of every gap).
-adminReportingRoutes.delete("/api/admin/reporting/recent-questions/:id", asyncHandler(async (req, res) => {
+adminReportingRoutes.delete("/api/admin/reporting/recent-questions/:id", manage, asyncHandler(async (req, res) => {
   const result = await getPool().query(`DELETE FROM chat_queries WHERE id = $1 RETURNING id`, [req.params.id]);
   if (result.rows.length === 0) {
     res.status(404).json({ error: "Question not found." });
@@ -50,7 +55,7 @@ adminReportingRoutes.delete("/api/admin/reporting/recent-questions/:id", asyncHa
 }));
 
 // Knowledge gaps: questions Limona could not answer.
-adminReportingRoutes.get("/api/admin/reporting/knowledge-gaps", asyncHandler(async (_req, res) => {
+adminReportingRoutes.get("/api/admin/reporting/knowledge-gaps", manage, asyncHandler(async (_req, res) => {
   const result = await getPool().query(
     `
     SELECT cq.id, cq.question, cq.created_at, cq.draft_answer,
@@ -78,7 +83,7 @@ const answerSchema = z.object({
 // The question text is read back from the DB row rather than trusted from
 // the request body, so the saved Team Knowledge entry always matches what
 // was actually asked.
-adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/answer", asyncHandler(async (req, res) => {
+adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/answer", manage, asyncHandler(async (req, res) => {
   const parsed = answerSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -106,7 +111,7 @@ adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/answer", asyn
 // the row reverts to a plain, blank "Answer" action, same as a gap that
 // never got a draft. The gap itself stays open; only the suggestion goes
 // away.
-adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/reject-draft", asyncHandler(async (req, res) => {
+adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/reject-draft", manage, asyncHandler(async (req, res) => {
   const result = await getPool().query(
     `UPDATE chat_queries SET draft_answer = NULL WHERE id = $1 RETURNING id`,
     [req.params.id]
@@ -121,7 +126,7 @@ adminReportingRoutes.post("/api/admin/reporting/knowledge-gaps/:id/reject-draft"
 // "Clear Log" is a real, permanent delete of every currently-listed gap —
 // confirmed with Jason: matches the vendor tool exactly, used to clear out
 // test/irrelevant questions rather than ones still worth answering.
-adminReportingRoutes.delete("/api/admin/reporting/knowledge-gaps", asyncHandler(async (_req, res) => {
+adminReportingRoutes.delete("/api/admin/reporting/knowledge-gaps", manage, asyncHandler(async (_req, res) => {
   await getPool().query(`DELETE FROM chat_queries WHERE answered = false`);
   res.json({ ok: true });
 }));
@@ -140,7 +145,7 @@ const MOST_COMMON_LIMIT = 25;
 // queries is cheap and far simpler to get right than one giant window-
 // function query, matching this codebase's "simple over clever" convention
 // (see e.g. migration 0004's reasoning for skipping an ivfflat index).
-adminReportingRoutes.get("/api/admin/reporting/most-common-questions", asyncHandler(async (_req, res) => {
+adminReportingRoutes.get("/api/admin/reporting/most-common-questions", manage, asyncHandler(async (_req, res) => {
   const pool = getPool();
 
   const grouped = await pool.query(
@@ -235,7 +240,7 @@ const promoteCommonQuestionSchema = z.object({
 // search every time. Uses the most recent answer for that question (rather
 // than the first) since documents/policies may have been updated since
 // earlier asks.
-adminReportingRoutes.post("/api/admin/reporting/most-common-questions/promote", asyncHandler(async (req, res) => {
+adminReportingRoutes.post("/api/admin/reporting/most-common-questions/promote", manage, asyncHandler(async (req, res) => {
   const parsed = promoteCommonQuestionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -274,7 +279,7 @@ const removeCommonQuestionSchema = z.object({
 // (i.e. the whole group shown in that row). Scoped to answered=true only, so
 // this never touches an unrelated open Knowledge Gap that happens to share
 // the same wording — that's Clear Log's job, not this button's.
-adminReportingRoutes.delete("/api/admin/reporting/most-common-questions", asyncHandler(async (req, res) => {
+adminReportingRoutes.delete("/api/admin/reporting/most-common-questions", manage, asyncHandler(async (req, res) => {
   const parsed = removeCommonQuestionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });

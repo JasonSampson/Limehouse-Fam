@@ -115,6 +115,48 @@ describe("admin asset routes", () => {
     expect(res.status).toBe(401);
   });
 
+  // CHANGED [today], per Jason directly: Assets browsing is open to any
+  // Limona user, not just limona.documents.manage holders — the same real
+  // bug as Document Library (Lea, a plain-staff test run, couldn't see it).
+  // Uploading/editing/removing stays manage-only.
+  it("lets a plain staff account (chat access only) browse and download, but not upload/edit/remove", async () => {
+    const admin = await loginAsAdmin(app);
+    const uploadRes = await admin
+      .post("/api/admin/assets/upload")
+      .field("description", "Pricing calculator")
+      .field("category", "Calculators")
+      .attach("file", Buffer.from("spreadsheet bytes"), "pricing.xlsx");
+    expect(uploadRes.status).toBe(200);
+    const assetId = uploadRes.body.assetId;
+
+    const staff = await loginAsLimeHqUser(app, {
+      id: 2,
+      email: "staff@limehousepm.com",
+      displayName: "Staff Person",
+      permissions: ["limona.chat.access"],
+    });
+
+    const listRes = await staff.get("/api/admin/assets");
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.assets).toHaveLength(1);
+
+    const downloadRes = await staff.get(`/api/admin/assets/${assetId}/download`);
+    expect(downloadRes.status).toBe(200);
+
+    const uploadAttempt = await staff
+      .post("/api/admin/assets/upload")
+      .field("description", "Should be rejected")
+      .field("category", "Calculators")
+      .attach("file", Buffer.from("irrelevant"), "nope.xlsx");
+    expect(uploadAttempt.status).toBe(403);
+
+    const categoryAttempt = await staff.patch(`/api/admin/assets/${assetId}/category`).send({ category: "Other" });
+    expect(categoryAttempt.status).toBe(403);
+
+    const deleteAttempt = await staff.delete(`/api/admin/assets/${assetId}`);
+    expect(deleteAttempt.status).toBe(403);
+  });
+
   it("uploads, lists, downloads, and deletes an asset end-to-end", async () => {
     const agent = await loginAsAdmin(app);
 

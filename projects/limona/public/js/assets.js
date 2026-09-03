@@ -28,10 +28,15 @@ async function init() {
     return;
   }
   const me = await meRes.json();
-  if (!me.user.permissions.includes("limona.documents.manage")) {
-    window.location.href = "/chat.html";
-    return;
-  }
+  // CHANGED [today], per Jason directly: Assets is open to any signed-in
+  // Limona user now — the old redirect-to-chat gate here required
+  // limona.documents.manage just to BROWSE. canManageDocuments still
+  // controls the Upload card and the edit-in-place/Remove controls per row
+  // (see render()/renderCategorySection()/attachRowHandlers() below); the
+  // backend independently rejects those actions regardless.
+  window.canManageDocuments = me.user.permissions.includes("limona.documents.manage");
+  const uploadCard = document.getElementById("upload-asset-card");
+  if (uploadCard && !window.canManageDocuments) uploadCard.style.display = "none";
 
   renderSidebar({ activePage: "/assets.html", user: me.user });
 
@@ -103,7 +108,7 @@ function renderCategorySection(categoryName, assets) {
           <td data-label="Uploaded">${new Date(a.created_at).toLocaleDateString()}</td>
           <td class="actions-cell">
             <button class="secondary download-btn">Download</button>
-            <button class="danger remove-btn">Remove</button>
+            ${window.canManageDocuments ? `<button class="danger remove-btn">Remove</button>` : ""}
           </td>
         </tr>
       `
@@ -147,12 +152,17 @@ function attachRowHandlers(asset) {
   const row = document.querySelector(`tr[data-id="${id}"]`);
   if (!row) return;
 
-  attachDescriptionHandler(row.querySelector(".doc-description-cell"), asset);
-  attachCategoryHandler(row.querySelector(".doc-category-cell"), asset);
-
   row.querySelector(".download-btn").addEventListener("click", () => {
     window.location.href = `/api/admin/assets/${id}/download`;
   });
+
+  // View-only users (no limona.documents.manage) get a read-only row —
+  // same reasoning as documents.js's attachRowHandlers.
+  if (!window.canManageDocuments) return;
+
+  attachDescriptionHandler(row.querySelector(".doc-description-cell"), asset);
+  attachCategoryHandler(row.querySelector(".doc-category-cell"), asset);
+
   row.querySelector(".remove-btn").addEventListener("click", async () => {
     if (!confirm("Delete this asset? This cannot be undone.")) return;
     const res = await fetch(`/api/admin/assets/${id}`, { method: "DELETE" });

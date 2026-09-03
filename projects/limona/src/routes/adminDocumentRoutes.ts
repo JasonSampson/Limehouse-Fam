@@ -4,15 +4,22 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
-import { requirePermission } from "../auth/middleware.js";
+import { requireAuth, requirePermission } from "../auth/middleware.js";
 import { ingestDocument, absoluteOriginalPath } from "../rag/ingest.js";
 import { extToSupportedExt } from "../rag/extractText.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { upload } from "../lib/uploadConfig.js";
 
+// CHANGED [today], per Jason directly: browsing the Document Library is
+// open to anyone with Limona access at all (requireAuth) — every employee
+// should be able to find and read company documents through it. Only
+// actually changing something (upload, recategorize, edit, remove) still
+// needs limona.documents.manage, applied per-route below rather than
+// blanket at the router level like before.
 export const adminDocumentRoutes = Router();
-adminDocumentRoutes.use(requirePermission("limona.documents.manage"));
+adminDocumentRoutes.use(requireAuth);
+const manage = requirePermission("limona.documents.manage");
 
 adminDocumentRoutes.get("/api/admin/documents", asyncHandler(async (req, res) => {
   const category = typeof req.query.category === "string" && req.query.category !== "" ? req.query.category : undefined;
@@ -65,7 +72,7 @@ const SUPPORTED_EXTENSIONS_MESSAGE = "Only .pdf, .docx, .xlsx, .csv, .txt, and .
 // Single-file upload. Bulk upload (below) reuses this same ingest path per
 // file so there is exactly one place that knows how to go from bytes on
 // the wire to a ready, searchable document.
-adminDocumentRoutes.post("/api/admin/documents/upload", upload.single("file"), asyncHandler(async (req, res) => {
+adminDocumentRoutes.post("/api/admin/documents/upload", manage, upload.single("file"), asyncHandler(async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded." });
     return;
@@ -113,7 +120,7 @@ const bulkUploadFieldsSchema = z.object({
 // where a whole folder maps to one category at a time. Each file ingests
 // independently — one bad file (e.g. a corrupted PDF) doesn't fail the whole
 // batch.
-adminDocumentRoutes.post("/api/admin/documents/bulk-upload", upload.array("files", 100), asyncHandler(async (req, res) => {
+adminDocumentRoutes.post("/api/admin/documents/bulk-upload", manage, upload.array("files", 100), asyncHandler(async (req, res) => {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   if (files.length === 0) {
     res.status(400).json({ error: "No files uploaded." });
@@ -152,7 +159,7 @@ adminDocumentRoutes.post("/api/admin/documents/bulk-upload", upload.array("files
 
 const recategorizeSchema = z.object({ category: z.string().min(1, "A category is required.") });
 
-adminDocumentRoutes.patch("/api/admin/documents/:id/category", asyncHandler(async (req, res) => {
+adminDocumentRoutes.patch("/api/admin/documents/:id/category", manage, asyncHandler(async (req, res) => {
   const parsed = recategorizeSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -179,7 +186,7 @@ const documentCreatedAtSchema = z.object({
 // Modeled directly on the category-patch route above — same shape/error
 // handling, just a different column. Lets an admin set or clear (via null)
 // the "this document is dated ___" field after upload.
-adminDocumentRoutes.patch("/api/admin/documents/:id/document-created-at", asyncHandler(async (req, res) => {
+adminDocumentRoutes.patch("/api/admin/documents/:id/document-created-at", manage, asyncHandler(async (req, res) => {
   const parsed = documentCreatedAtSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -203,7 +210,7 @@ const descriptionSchema = z.object({ description: z.string() });
 
 // Modeled directly on the category-patch route above — same shape/error
 // handling, just a different column.
-adminDocumentRoutes.patch("/api/admin/documents/:id/description", asyncHandler(async (req, res) => {
+adminDocumentRoutes.patch("/api/admin/documents/:id/description", manage, asyncHandler(async (req, res) => {
   const parsed = descriptionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -224,7 +231,7 @@ adminDocumentRoutes.patch("/api/admin/documents/:id/description", asyncHandler(a
 // marking it superseded-with-no-replacement is simplest and consistent with
 // the "don't hard-delete automatically" rule already used for re-uploads.
 // The original file stays on disk untouched; nothing here deletes bytes.
-adminDocumentRoutes.delete("/api/admin/documents/:id", asyncHandler(async (req, res) => {
+adminDocumentRoutes.delete("/api/admin/documents/:id", manage, asyncHandler(async (req, res) => {
   const result = await getPool().query(
     "UPDATE documents SET status = 'superseded' WHERE id = $1 AND status = 'ready' RETURNING id",
     [req.params.id]
@@ -276,8 +283,9 @@ ${bodyHtml}
 }
 
 // Renders a document inline in the browser instead of forcing a download —
-// same requirePermission("limona.documents.manage") guard, same on-disk file
-// the /download route reads, but
+// a view route, same as GET /api/admin/documents and its download route,
+// open to anyone with Limona access rather than requiring manage. Same
+// on-disk file the /download route reads, but
 // branches on file_ext to decide how to render it since only pdf/txt/md can
 // be sent to the browser as-is.
 adminDocumentRoutes.get("/api/admin/documents/:id/preview", asyncHandler(async (req, res) => {

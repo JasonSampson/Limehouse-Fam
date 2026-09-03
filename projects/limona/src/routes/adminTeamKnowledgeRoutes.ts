@@ -7,10 +7,15 @@ import { createTeamKnowledgeEntry } from "../services/teamKnowledgeService.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
+// FIXED [today]: was a blanket router.use(requirePermission(...)) with no
+// path scoping, which intercepts every request reaching this router
+// regardless of whether it matches a route defined here — see
+// adminDashboardRoutes.ts's comment for the full explanation and the real
+// bug this caused. Applied per-route below instead.
 export const adminTeamKnowledgeRoutes = Router();
-adminTeamKnowledgeRoutes.use(requirePermission("limona.answers.contribute"));
+const contribute = requirePermission("limona.answers.contribute");
 
-adminTeamKnowledgeRoutes.get("/api/admin/team-knowledge", asyncHandler(async (_req, res) => {
+adminTeamKnowledgeRoutes.get("/api/admin/team-knowledge", contribute, asyncHandler(async (_req, res) => {
   const result = await getPool().query(
     `SELECT id, question, answer, created_at, updated_at, created_by_name
      FROM team_knowledge
@@ -27,7 +32,7 @@ const createSchema = z.object({
 // The question text is embedded with the SAME local model used for document
 // chunks (src/rag/embeddings.ts) so retrieve.ts can compare Team Knowledge
 // entries and document chunks on one common distance scale.
-adminTeamKnowledgeRoutes.post("/api/admin/team-knowledge", asyncHandler(async (req, res) => {
+adminTeamKnowledgeRoutes.post("/api/admin/team-knowledge", contribute, asyncHandler(async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -47,7 +52,7 @@ adminTeamKnowledgeRoutes.post("/api/admin/team-knowledge", asyncHandler(async (r
 // Re-embeds the question on edit (same as create) since retrieve.ts matches
 // staff questions against this stored embedding — an edited question with a
 // stale embedding would keep matching on its old wording.
-adminTeamKnowledgeRoutes.patch("/api/admin/team-knowledge/:id", asyncHandler(async (req, res) => {
+adminTeamKnowledgeRoutes.patch("/api/admin/team-knowledge/:id", contribute, asyncHandler(async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -74,7 +79,7 @@ adminTeamKnowledgeRoutes.patch("/api/admin/team-knowledge/:id", asyncHandler(asy
   }
 }));
 
-adminTeamKnowledgeRoutes.delete("/api/admin/team-knowledge/:id", asyncHandler(async (req, res) => {
+adminTeamKnowledgeRoutes.delete("/api/admin/team-knowledge/:id", contribute, asyncHandler(async (req, res) => {
   const result = await getPool().query("DELETE FROM team_knowledge WHERE id = $1 RETURNING id", [
     req.params.id,
   ]);

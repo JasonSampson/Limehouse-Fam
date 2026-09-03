@@ -4,14 +4,20 @@ import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 import { getPool } from "../db/pool.js";
-import { requirePermission } from "../auth/middleware.js";
+import { requireAuth, requirePermission } from "../auth/middleware.js";
 import { ingestAsset, absoluteAssetOriginalPath } from "../rag/assetIngest.js";
 import { logError } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { upload } from "../lib/uploadConfig.js";
 
+// CHANGED [today], per Jason directly: browsing Assets is open to anyone
+// with Limona access at all (requireAuth) — same reasoning as
+// adminDocumentRoutes.ts. Only actually changing something (upload,
+// recategorize, edit, remove) still needs limona.documents.manage, applied
+// per-route below.
 export const adminAssetRoutes = Router();
-adminAssetRoutes.use(requirePermission("limona.documents.manage"));
+adminAssetRoutes.use(requireAuth);
+const manage = requirePermission("limona.documents.manage");
 
 adminAssetRoutes.get("/api/admin/assets", asyncHandler(async (_req, res) => {
   const result = await getPool().query(
@@ -35,7 +41,7 @@ const uploadFieldsSchema = z.object({
   category: z.string().min(1, "A category is required."),
 });
 
-adminAssetRoutes.post("/api/admin/assets/upload", upload.single("file"), asyncHandler(async (req, res) => {
+adminAssetRoutes.post("/api/admin/assets/upload", manage, upload.single("file"), asyncHandler(async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded." });
     return;
@@ -87,7 +93,7 @@ const assetCategorySchema = z.object({ category: z.string().min(1, "A category i
 // Mirrors adminDocumentRoutes.ts's PATCH /:id/category exactly (same shape,
 // same error handling) — an asset must always belong to some category, same
 // as documents, so empty string is rejected here too.
-adminAssetRoutes.patch("/api/admin/assets/:id/category", asyncHandler(async (req, res) => {
+adminAssetRoutes.patch("/api/admin/assets/:id/category", manage, asyncHandler(async (req, res) => {
   const parsed = assetCategorySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -109,7 +115,7 @@ adminAssetRoutes.patch("/api/admin/assets/:id/category", asyncHandler(async (req
 // documents' equivalent route, so no .min(1) here.
 const assetDescriptionSchema = z.object({ description: z.string() });
 
-adminAssetRoutes.patch("/api/admin/assets/:id/description", asyncHandler(async (req, res) => {
+adminAssetRoutes.patch("/api/admin/assets/:id/description", manage, asyncHandler(async (req, res) => {
   const parsed = assetDescriptionSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input." });
@@ -132,7 +138,7 @@ adminAssetRoutes.patch("/api/admin/assets/:id/description", asyncHandler(async (
 // (matches the "nothing here deletes bytes" convention from documents) since
 // disk cleanup was never asked for and deleting the wrong file has real
 // downside with no corresponding benefit at this scale.
-adminAssetRoutes.delete("/api/admin/assets/:id", asyncHandler(async (req, res) => {
+adminAssetRoutes.delete("/api/admin/assets/:id", manage, asyncHandler(async (req, res) => {
   const result = await getPool().query("DELETE FROM assets WHERE id = $1 RETURNING id", [req.params.id]);
   if (result.rows.length === 0) {
     res.status(404).json({ error: "Asset not found." });
@@ -179,9 +185,10 @@ ${bodyHtml}
 </html>`;
 }
 
-// Renders an asset inline in the browser where it's safe to do so, same
-// requirePermission("limona.documents.manage") guard as everything else in
-// this file. Since assets accept
+// Renders an asset inline in the browser where it's safe to do so — a view
+// route, same as GET /api/admin/assets and its download route, open to
+// anyone with Limona access (requireAuth) rather than requiring manage.
+// Since assets accept
 // ANY file type on upload (no restriction — see upload route above), this
 // route is a real security surface: every branch below is an explicit,
 // named case, and anything not explicitly named falls through to a plain

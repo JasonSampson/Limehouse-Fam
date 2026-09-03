@@ -46,8 +46,12 @@ const NAV_SECTIONS = [
     label: "Knowledge Base",
     items: [
       { href: "/admin.html", label: "Upload Document", icon: "upload", requiredPermission: "limona.documents.manage" },
-      { href: "/documents.html", label: "Document Library", icon: "book", statKey: "documentsCount", requiredPermission: "limona.documents.manage" },
-      { href: "/assets.html", label: "Assets", icon: "download", statKey: "assetsCount", requiredPermission: "limona.documents.manage" },
+      // CHANGED [today], per Jason directly: Document Library and Assets are
+      // open to anyone with Limona access — only uploading/editing/removing
+      // (Upload Document above, and the manage-only controls within these
+      // two pages themselves) stays limona.documents.manage-gated.
+      { href: "/documents.html", label: "Document Library", icon: "book", statKey: "documentsCount" },
+      { href: "/assets.html", label: "Assets", icon: "download", statKey: "assetsCount" },
       // "Create New SOP" intentionally omitted — separate tool, out of scope
       // (confirmed with Jason).
       { href: "/team-knowledge.html", label: "Team Knowledge", icon: "diamond", statKey: "teamKnowledgeCount", requiredPermission: "limona.answers.contribute" },

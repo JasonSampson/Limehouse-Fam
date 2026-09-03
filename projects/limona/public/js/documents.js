@@ -22,10 +22,13 @@ async function init() {
     return;
   }
   const me = await meRes.json();
-  if (!me.user.permissions.includes("limona.documents.manage")) {
-    window.location.href = "/chat.html";
-    return;
-  }
+  // CHANGED [today], per Jason directly: Document Library is open to any
+  // signed-in Limona user now — the old redirect-to-chat gate here required
+  // limona.documents.manage just to BROWSE. canManage still controls
+  // whether the edit-in-place cells and Remove button render at all (see
+  // render()/renderCategorySection() below); the backend independently
+  // rejects those actions for anyone without the permission regardless.
+  window.canManageDocuments = me.user.permissions.includes("limona.documents.manage");
 
   renderSidebar({ activePage: "/documents.html", user: me.user });
 
@@ -90,7 +93,7 @@ function renderCategorySection(categoryName, docs) {
           <td class="doc-category-cell" data-label="Category">${renderCategoryDisplay(d)}</td>
           <td class="actions-cell">
             <button class="secondary download-btn">Download</button>
-            <button class="danger remove-btn">Remove</button>
+            ${window.canManageDocuments ? `<button class="danger remove-btn">Remove</button>` : ""}
           </td>
         </tr>
       `
@@ -150,13 +153,21 @@ function attachRowHandlers(doc) {
   const row = document.querySelector(`tr[data-id="${id}"]`);
   if (!row) return;
 
+  row.querySelector(".download-btn").addEventListener("click", () => {
+    window.location.href = `/api/admin/documents/${id}/download`;
+  });
+
+  // View-only users (no limona.documents.manage) get a read-only row: no
+  // click-to-edit cells, no Remove button (not rendered at all — see
+  // renderCategorySection). The backend independently rejects these
+  // actions regardless, but hiding them avoids a confusing "click, edit,
+  // then get a permission error" dead end.
+  if (!window.canManageDocuments) return;
+
   attachDescriptionHandler(row.querySelector(".doc-description-cell"), doc);
   attachDocCreatedHandler(row.querySelector(".doc-created-cell"), doc);
   attachCategoryHandler(row.querySelector(".doc-category-cell"), doc);
 
-  row.querySelector(".download-btn").addEventListener("click", () => {
-    window.location.href = `/api/admin/documents/${id}/download`;
-  });
   row.querySelector(".remove-btn").addEventListener("click", async () => {
     if (!confirm("Remove this document? It will stop appearing in chat answers, but the file is kept on disk.")) return;
     const res = await fetch(`/api/admin/documents/${id}`, { method: "DELETE" });

@@ -87,6 +87,48 @@ describe("admin document routes", () => {
     expect(res.status).toBe(401);
   });
 
+  // CHANGED [today], per Jason directly: Document Library browsing is open
+  // to any Limona user, not just limona.documents.manage holders — this was
+  // the real bug (Lea, a plain-staff test run, couldn't see it at all).
+  // Uploading/editing/removing stays manage-only.
+  it("lets a plain staff account (chat access only) browse and download, but not upload/edit/remove", async () => {
+    const admin = await loginAsAdmin(app);
+    const uploadRes = await admin
+      .post("/api/admin/documents/upload")
+      .field("category", "SOP")
+      .field("description", "Late rent notice procedure")
+      .attach("file", Buffer.from("Policy text, long enough to chunk.", "utf-8"), "policy.txt");
+    expect(uploadRes.status).toBe(200);
+    const docId = uploadRes.body.documentId;
+
+    const staff = await loginAsLimeHqUser(app, {
+      id: 2,
+      email: "staff@limehousepm.com",
+      displayName: "Staff Person",
+      permissions: ["limona.chat.access"],
+    });
+
+    const listRes = await staff.get("/api/admin/documents");
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.documents).toHaveLength(1);
+
+    const downloadRes = await staff.get(`/api/admin/documents/${docId}/download`);
+    expect(downloadRes.status).toBe(200);
+
+    const uploadAttempt = await staff
+      .post("/api/admin/documents/upload")
+      .field("category", "SOP")
+      .field("description", "Should be rejected")
+      .attach("file", Buffer.from("irrelevant", "utf-8"), "nope.txt");
+    expect(uploadAttempt.status).toBe(403);
+
+    const categoryAttempt = await staff.patch(`/api/admin/documents/${docId}/category`).send({ category: "Other" });
+    expect(categoryAttempt.status).toBe(403);
+
+    const deleteAttempt = await staff.delete(`/api/admin/documents/${docId}`);
+    expect(deleteAttempt.status).toBe(403);
+  });
+
   it("uploads a document with category/description/documentCreatedAt and lists it back as text fields", async () => {
     const agent = await loginAsAdmin(app);
 

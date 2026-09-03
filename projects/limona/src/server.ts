@@ -38,9 +38,14 @@ const publicDir = path.join(__dirname, "..", "public");
 app.use(express.static(publicDir));
 
 // authRoutes has no auth gate (it IS the login/invite flow). chatRoutes
-// gates with requireAuth, adminDocumentRoutes/adminDashboardRoutes and the
-// other admin routers gate with requireAdmin — each applied inside the
-// router itself (see those files).
+// gates with requireAuth. Every admin router below applies its own gate
+// PER-ROUTE, not via a blanket router.use() — a router-level .use() with no
+// path runs for every request that reaches it in this chain, not just ones
+// matching a route defined in that router, so it would silently intercept
+// requests meant for whichever router happens to be mounted after it (found
+// the hard way: adminDashboardRoutes' old blanket permission check was
+// 403-ing requests meant for adminAssetRoutes). See each router file's own
+// comment for the full story.
 app.use(authRoutes);
 app.use(chatRoutes);
 app.use(adminDocumentRoutes);

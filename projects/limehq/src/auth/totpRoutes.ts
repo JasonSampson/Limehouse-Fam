@@ -144,12 +144,25 @@ function page(title: string, bodyHtml: string): string {
 // ------------------------------------------------------------------ //
 // GET /account/totp/setup                                             //
 // ------------------------------------------------------------------ //
-// Always generates and stores a brand-new secret on GET — this is what
-// makes an abandoned/orphaned unconfirmed enrollment safe to walk away
-// from: reloading or re-entering this page overwrites whatever unconfirmed
-// secret was sitting there before. The secret is only ever regenerated
-// here (GET), never on a failed POST attempt below.
-
+// FIXED [today]: this used to generate and store a brand-new secret on
+// EVERY GET, unconditionally — the idea was that this makes an abandoned/
+// orphaned unconfirmed enrollment safe to walk away from (reloading this
+// page overwrites whatever unconfirmed secret was sitting there before, so
+// nothing lingers). In practice it meant a page reload, a second tab, or
+// browser back/forward AFTER scanning the QR code silently swapped the
+// stored secret out from under an authenticator app that had already
+// enrolled the old one — every code that app generates from then on checks
+// against a secret it was never given, and fails with no explanation. Real
+// case: Dana Sampson, 2026-09-02, reset by Jason via the admin "Reset 2FA"
+// action, then locked out of her own fresh enrollment this exact way.
+//
+// Now a secret is only generated once — the first GET after totp_secret is
+// null (a fresh account, or right after an admin reset clears it). Every
+// later GET (reload, second tab, back/forward) reuses that same unconfirmed
+// secret instead of rotating it, so the QR/manual code shown always matches
+// what POST will check against, until either it's confirmed
+// (totp_enabled_at gets set) or an admin resets it again (which nulls
+// totp_secret and starts this over legitimately).
 router.get("/account/totp/setup", requirePending2fa, async (req, res, next) => {
   try {
     const user = await fetchTotpUser(req.pending2fa!.userId);
@@ -164,16 +177,22 @@ router.get("/account/totp/setup", requirePending2fa, async (req, res, next) => {
       return;
     }
 
-    const secret = new OTPAuth.Secret();
-    await getAppPool().query(
-      `UPDATE users SET totp_secret = $1, updated_at = now() WHERE id = $2`,
-      [encryptSecret(secret.base32), user.id],
-    );
+    let base32Secret: string;
+    if (user.totp_secret) {
+      base32Secret = decryptSecret(user.totp_secret);
+    } else {
+      const secret = new OTPAuth.Secret();
+      base32Secret = secret.base32;
+      await getAppPool().query(
+        `UPDATE users SET totp_secret = $1, updated_at = now() WHERE id = $2`,
+        [encryptSecret(base32Secret), user.id],
+      );
+    }
 
-    const totp = buildTotp(user.email, secret.base32);
+    const totp = buildTotp(user.email, base32Secret);
     const qrDataUri = await qrcode.toDataURL(totp.toString());
 
-    res.send(page("Set Up Authenticator", setupForm(qrDataUri, secret.base32, null)));
+    res.send(page("Set Up Authenticator", setupForm(qrDataUri, base32Secret, null)));
   } catch (err) {
     next(err);
   }

@@ -187,6 +187,7 @@ export async function syncBuildiumData(
     );
     const leaseId = leaseUpsert.rows[0].id;
 
+    const currentTenantBuildiumIds: string[] = [];
     for (const tenant of lease.CurrentTenants ?? []) {
       if (!tenant.Email) {
         // A tenant with no email on file can't receive an email-only
@@ -194,13 +195,15 @@ export async function syncBuildiumData(
         // (which has lease context), not silently dropped here.
         continue;
       }
+      currentTenantBuildiumIds.push(String(tenant.Id));
       await jobPool.query(
         `INSERT INTO lease_tenants (
-           lease_id, buildium_tenant_id, source, full_name, email, is_primary, synced_at
-         ) VALUES ($1,$2,'buildium',$3,$4,false,$5)
+           lease_id, buildium_tenant_id, source, full_name, email, is_primary, is_active, synced_at
+         ) VALUES ($1,$2,'buildium',$3,$4,false,true,$5)
          ON CONFLICT (lease_id, buildium_tenant_id) DO UPDATE SET
            full_name = EXCLUDED.full_name,
            email = EXCLUDED.email,
+           is_active = true,
            synced_at = EXCLUDED.synced_at`,
         [
           leaseId,
@@ -211,6 +214,34 @@ export async function syncBuildiumData(
         ]
       );
     }
+
+    // Deactivation, same reasoning as properties above: a tenant who WAS
+    // active on this lease but is absent from this run's CurrentTenants has
+    // moved out / been dropped by a lease renewal since the last sync. Real
+    // incident this closes, 2026-09-04: a tenant removed from a lease months
+    // earlier was still being included as a notice recipient because the
+    // old UPSERT-only loop had no path to ever stop listing her. Never a
+    // DELETE — a tenant row already referenced by a past notice_recipients
+    // row (notice actually sent to them) cannot be deleted at all
+    // (notice_recipients_lease_tenant_id_fkey), and even one that was never
+    // sent to should keep its history rather than vanish silently.
+    const tenantsDeactivated = await jobPool.query<{ id: number; full_name: string }>(
+      `UPDATE lease_tenants
+         SET is_active = false
+       WHERE lease_id = $1
+         AND is_active = true
+         AND buildium_tenant_id != ALL($2::text[])
+       RETURNING id, full_name`,
+      [leaseId, currentTenantBuildiumIds]
+    );
+    if (tenantsDeactivated.rows.length > 0) {
+      logInfo("buildium sync: lease tenants deactivated (no longer current in Buildium)", {
+        leaseId,
+        count: tenantsDeactivated.rows.length,
+        tenantIds: tenantsDeactivated.rows.map((r) => r.id),
+      });
+    }
+
     leasesSynced += 1;
   }
 

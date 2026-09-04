@@ -514,12 +514,17 @@ export async function runDailyLatenessCheck(jobPool: Pool): Promise<DailyJobResu
       // no-transaction, best-effort-per-lease pattern.
       await insertNoticeLineItems(jobPool, noticeId, "draft", classifiedBalance.positiveLines);
 
-      // Recipients: every listed tenant on the lease gets a "to" entry
-      // (roommates/co-signers all receive the notice, not just one), plus
-      // the assigned PM as "cc". Email addresses are frozen here, at draft
-      // time, per notice_recipients.email_address design intent.
+      // Recipients: every CURRENTLY active tenant on the lease gets a "to"
+      // entry (roommates/co-signers all receive the notice, not just one),
+      // plus the assigned PM as "cc". Email addresses are frozen here, at
+      // draft time, per notice_recipients.email_address design intent.
+      // is_active FILTER ADDED 2026-09-04, per a real incident: a tenant
+      // removed from a lease months earlier was still pulled in here and
+      // drafted onto a real notice, because this query had no way to know
+      // she was no longer current — see src/buildium/sync.ts's tenant
+      // deactivation comment for the sync-side half of this fix.
       const tenants = await jobPool.query<{ id: number; email: string }>(
-        "SELECT id, email FROM lease_tenants WHERE lease_id = $1",
+        "SELECT id, email FROM lease_tenants WHERE lease_id = $1 AND is_active = true",
         [lease.id]
       );
       for (const tenant of tenants.rows) {
